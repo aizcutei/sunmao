@@ -1,0 +1,11 @@
+[package]
+name = "sunmao_gui_wgpu"
+version = "0.1.0"
+edition = "2021"
+description = "WGPU renderer backend for SunMao GUI"
+license = "MIT"
+
+[dependencies]
+sunmao_gui = { path = "../gui" }
+wgpu = "23"
+bytemuck = { version = "1.18", features = ["derive"] }

@@ -1,0 +1,11 @@
+[package]
+name = "sunmao_backend_clap"
+version = "0.1.0"
+edition = "2021"
+description = "CLAP backend adapter for SunMao"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+sunmao_core = { path = "../core" }
+clap_rs = { path = "../../clap_rs" }
+raw-window-handle = "0.6"

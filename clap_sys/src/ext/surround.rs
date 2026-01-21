@@ -1,0 +1,40 @@
+use crate::plugin::clap_plugin_t;
+use crate::host::clap_host_t;
+
+pub const CLAP_EXT_SURROUND: &str = "clap.surround/4\0";
+pub const CLAP_EXT_SURROUND_COMPAT: &str = "clap.surround.draft/4\0";
+pub const CLAP_PORT_SURROUND: &str = "surround\0";
+
+pub const CLAP_SURROUND_FL: u32 = 0;
+pub const CLAP_SURROUND_FR: u32 = 1;
+pub const CLAP_SURROUND_FC: u32 = 2;
+pub const CLAP_SURROUND_LFE: u32 = 3;
+pub const CLAP_SURROUND_BL: u32 = 4;
+pub const CLAP_SURROUND_BR: u32 = 5;
+pub const CLAP_SURROUND_FLC: u32 = 6;
+pub const CLAP_SURROUND_FRC: u32 = 7;
+pub const CLAP_SURROUND_BC: u32 = 8;
+pub const CLAP_SURROUND_SL: u32 = 9;
+pub const CLAP_SURROUND_SR: u32 = 10;
+pub const CLAP_SURROUND_TC: u32 = 11;
+pub const CLAP_SURROUND_TFL: u32 = 12;
+pub const CLAP_SURROUND_TFC: u32 = 13;
+pub const CLAP_SURROUND_TFR: u32 = 14;
+pub const CLAP_SURROUND_TBL: u32 = 15;
+pub const CLAP_SURROUND_TBC: u32 = 16;
+pub const CLAP_SURROUND_TBR: u32 = 17;
+pub const CLAP_SURROUND_TSL: u32 = 18;
+pub const CLAP_SURROUND_TSR: u32 = 19;
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct clap_plugin_surround_t {
+    pub is_channel_mask_supported: Option<unsafe extern "C" fn(plugin: *const clap_plugin_t, channel_mask: u64) -> bool>,
+    pub get_channel_map: Option<unsafe extern "C" fn(plugin: *const clap_plugin_t, is_input: bool, port_index: u32, channel_map: *mut u8, channel_map_capacity: u32) -> u32>,
+}
+
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct clap_host_surround_t {
+    pub changed: Option<unsafe extern "C" fn(host: *const clap_host_t)>,
+}

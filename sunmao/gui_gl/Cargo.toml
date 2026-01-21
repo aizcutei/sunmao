@@ -1,0 +1,11 @@
+[package]
+name = "sunmao_gui_gl"
+version = "0.1.0"
+edition = "2021"
+description = "OpenGL renderer backend for SunMao GUI"
+license = "MIT"
+
+[dependencies]
+sunmao_gui = { path = "../gui" }
+glow = "0.16"
+bytemuck = "1.18"

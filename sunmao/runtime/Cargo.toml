@@ -1,0 +1,21 @@
+[package]
+name = "sunmao_runtime"
+version = "0.1.0"
+edition = "2021"
+description = "Standalone runtime for SunMao plugins"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+system-capture = ["ruhear"]
+
+[dependencies]
+sunmao_core = { path = "../core" }
+cpal = "0.15"
+midir = "0.9"
+winit = "0.29"
+anyhow = "1.0"
+ringbuf = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+ruhear = { version = "0.1", optional = true }

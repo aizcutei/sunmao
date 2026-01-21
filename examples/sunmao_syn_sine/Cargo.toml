@@ -1,0 +1,17 @@
+[package]
+name = "sunmao_syn_sine"
+version = "0.1.0"
+edition = "2021"
+description = "Sine wave synth example using SunMao framework"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+sunmao = { path = "../../sunmao" }
+sunmao_core = { path = "../../sunmao/core" }
+sunmao_macros = { path = "../../sunmao/macros" }
+sunmao_backend_vst3 = { path = "../../sunmao/backend_vst3" }
+sunmao_backend_au = { path = "../../sunmao/backend_au" }
+sunmao_backend_clap = { path = "../../sunmao/backend_clap" }

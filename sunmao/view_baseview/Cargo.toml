@@ -1,0 +1,13 @@
+[package]
+name = "sunmao_view_baseview"
+version = "0.1.0"
+edition = "2021"
+description = "Baseview integration for SunMao plugin editors"
+license = "MIT"
+
+[dependencies]
+sunmao_core = { path = "../core" }
+sunmao_gui = { path = "../gui", features = ["gl"] }
+baseview = { path = "../../baseview", features = ["opengl"] }
+raw-window-handle = "0.6"
+keyboard-types = "0.6.1"

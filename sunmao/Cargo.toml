@@ -1,0 +1,20 @@
+[package]
+name = "sunmao"
+version = "0.1.0"
+edition = "2021"
+description = "Audio plugin framework for Rust"
+license = "MIT OR Apache-2.0"
+authors = ["aizcutei"]
+homepage = "https://aizcutei.github.io/sunmao"
+repository = "https://github.com/aizcutei/sunmao"
+
+[dependencies]
+sunmao_core = { path = "core" }
+sunmao_macros = { path = "macros" }
+sunmao_runtime = { path = "runtime", optional = true }
+sunmao_gui = { path = "gui", optional = true }
+
+[features]
+default = []
+standalone = ["dep:sunmao_runtime"]
+gui = ["dep:sunmao_gui"]

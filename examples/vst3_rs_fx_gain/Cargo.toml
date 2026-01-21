@@ -1,0 +1,11 @@
+[package]
+name = "vst3_rs_fx_gain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+vst3_rs = { path = "../../vst3_rs" }

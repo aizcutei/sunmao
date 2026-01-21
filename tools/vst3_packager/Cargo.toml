@@ -1,0 +1,8 @@
+[package]
+name = "vst3_packager"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }

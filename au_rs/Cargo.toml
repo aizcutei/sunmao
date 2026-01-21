@@ -1,0 +1,14 @@
+[package]
+name = "au_rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+au_sys = { path = "../au_sys" }
+objc = "0.2"
+glow = "0.13"
+bytemuck = "1.14"

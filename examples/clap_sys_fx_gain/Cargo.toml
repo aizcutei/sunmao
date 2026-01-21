@@ -1,0 +1,11 @@
+[package]
+name = "clap_sys_fx_gain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+clap_sys = { path = "../../clap_sys" }

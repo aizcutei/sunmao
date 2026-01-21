@@ -1,0 +1,14 @@
+[package]
+name = "clap_rs_fx_gain_gui_baseview"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+clap_rs = { path = "../../clap_rs" }
+baseview = { path = "../../baseview" }
+raw-window-handle = "0.6.2"
+softbuffer = "0.4.8"

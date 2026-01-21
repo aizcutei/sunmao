@@ -1,0 +1,16 @@
+[package]
+name = "au_rs_fx_gain_gui_wgpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+au_rs = { path = "../../au_rs" }
+objc = "0.2"
+wgpu = "28.0.0"
+pollster = "0.3"
+raw-window-handle = "0.6.2"
+bytemuck = { version = "1", features = ["derive"] }

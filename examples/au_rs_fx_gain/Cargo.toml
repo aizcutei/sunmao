@@ -1,0 +1,11 @@
+[package]
+name = "au_rs_fx_gain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+au_rs = { path = "../../au_rs" }

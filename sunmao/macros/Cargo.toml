@@ -1,0 +1,14 @@
+[package]
+name = "sunmao_macros"
+version = "0.1.0"
+edition = "2021"
+description = "Procedural macros for SunMao framework (derive Params, export)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2.0", features = ["full"] }
+quote = "1.0"
+proc-macro2 = "1.0"

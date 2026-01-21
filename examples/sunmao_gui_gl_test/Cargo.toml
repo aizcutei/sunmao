@@ -1,0 +1,12 @@
+[package]
+name = "sunmao_gui_gl_test"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "sunmao_gui_gl_test"
+path = "src/main.rs"
+
+[dependencies]
+sunmao_gui = { path = "../../sunmao/gui", features = ["gl"] }
+sunmao_gui_webview = { path = "../../sunmao/gui_webview" }

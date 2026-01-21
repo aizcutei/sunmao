@@ -1,0 +1,17 @@
+[package]
+name = "clap_sys_fx_gain_gui_baseview"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+clap_sys = { path = "../../clap_sys" }
+baseview = { path = "../../baseview" }
+raw-window-handle = "0.6.2"
+softbuffer = "0.4.8"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2.7"

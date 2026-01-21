@@ -1,0 +1,108 @@
+//! Audio Ports Extension for clap_rs
+
+use crate::plugin::Plugin;
+use crate::plugin_instance::PluginInstance;
+use clap_sys::ext::audio_ports::{
+    clap_plugin_audio_ports_t, clap_audio_port_info_t, 
+    CLAP_AUDIO_PORT_IS_MAIN, CLAP_PORT_STEREO, CLAP_EXT_AUDIO_PORTS   
+};
+use clap_sys::id::CLAP_INVALID_ID;
+use clap_sys::plugin::clap_plugin_t;
+use std::ffi::c_char;
+
+/// Audio port configuration info
+#[derive(Clone, Debug)]
+pub struct AudioPortInfo {
+    pub id: u32,
+    pub name: String,
+    pub channel_count: u32,
+    pub is_main: bool,
+    pub is_input: bool,
+}
+
+fn write_cstr_to_array(dst: &mut [c_char], bytes: &[u8]) {
+    dst.fill(0);
+    let max = dst.len().saturating_sub(1);
+    let len = bytes.len().min(max);
+    for i in 0..len {
+        dst[i] = bytes[i] as c_char;
+    }
+}
+
+pub(crate) unsafe extern "C" fn audio_ports_count<P: Plugin>(
+    plugin: *const clap_plugin_t, 
+    is_input: bool
+) -> u32 {
+    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
+    instance.audio_ports_cache.iter().filter(|p| p.is_input == is_input).count() as u32
+}
+
+pub(crate) unsafe extern "C" fn audio_ports_get<P: Plugin>(
+    plugin: *const clap_plugin_t,
+    index: u32,
+    is_input: bool,
+    info: *mut clap_audio_port_info_t,
+) -> bool {
+    if info.is_null() { return false; }
+    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
+    let ports: Vec<_> = instance.audio_ports_cache.iter().filter(|p| p.is_input == is_input).collect();
+    if (index as usize) >= ports.len() { return false; }
+    let port = &ports[index as usize];
+    let info = unsafe { &mut *info };
+    info.id = port.id;
+    write_cstr_to_array(&mut info.name, port.name.as_bytes());
+    info.flags = if port.is_main { CLAP_AUDIO_PORT_IS_MAIN } else { 0 };
+    info.channel_count = port.channel_count;
+    info.port_type = CLAP_PORT_STEREO.as_ptr() as *const c_char;
+    info.in_place_pair = CLAP_INVALID_ID;
+    true
+}
+
+/// Create audio ports extension struct
+pub(crate) fn create_audio_ports_ext<P: Plugin>() -> clap_plugin_audio_ports_t {
+    clap_plugin_audio_ports_t {
+        count: Some(audio_ports_count::<P>),
+        get: Some(audio_ports_get::<P>),
+    }
+}
+
+// ======= GUI Plugin Support =======
+
+use crate::plugin_instance::PluginInstanceWithGui;
+use crate::ext::gui::GuiHandler;
+
+pub(crate) unsafe extern "C" fn audio_ports_count_gui<P: Plugin + GuiHandler>(
+    plugin: *const clap_plugin_t, 
+    is_input: bool
+) -> u32 {
+    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
+    instance.audio_ports_cache.iter().filter(|p| p.is_input == is_input).count() as u32
+}
+
+pub(crate) unsafe extern "C" fn audio_ports_get_gui<P: Plugin + GuiHandler>(
+    plugin: *const clap_plugin_t,
+    index: u32,
+    is_input: bool,
+    info: *mut clap_audio_port_info_t,
+) -> bool {
+    if info.is_null() { return false; }
+    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
+    let ports: Vec<_> = instance.audio_ports_cache.iter().filter(|p| p.is_input == is_input).collect();
+    if (index as usize) >= ports.len() { return false; }
+    let port = &ports[index as usize];
+    let info = unsafe { &mut *info };
+    info.id = port.id;
+    write_cstr_to_array(&mut info.name, port.name.as_bytes());
+    info.flags = if port.is_main { CLAP_AUDIO_PORT_IS_MAIN } else { 0 };
+    info.channel_count = port.channel_count;
+    info.port_type = CLAP_PORT_STEREO.as_ptr() as *const c_char;
+    info.in_place_pair = CLAP_INVALID_ID;
+    true
+}
+
+pub(crate) fn create_audio_ports_ext_gui<P: Plugin + GuiHandler>() -> clap_plugin_audio_ports_t {
+    clap_plugin_audio_ports_t {
+        count: Some(audio_ports_count_gui::<P>),
+        get: Some(audio_ports_get_gui::<P>),
+    }
+}

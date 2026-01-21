@@ -1,0 +1,11 @@
+[package]
+name = "sunmao_backend_vst3"
+version = "0.1.0"
+edition = "2021"
+description = "VST3 backend adapter for SunMao"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+sunmao_core = { path = "../core" }
+vst3_rs = { path = "../../vst3_rs" }
+raw-window-handle = "0.6"

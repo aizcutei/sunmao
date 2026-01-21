@@ -1,0 +1,13 @@
+[package]
+name = "sunmao_backend_au"
+version = "0.1.0"
+edition = "2021"
+description = "Audio Unit backend adapter for SunMao (macOS only)"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+sunmao_core = { path = "../core" }
+au_rs = { path = "../../au_rs" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# macOS specific dependencies if any

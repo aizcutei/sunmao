@@ -1,0 +1,20 @@
+[package]
+name = "sunmao_gui"
+version = "0.1.0"
+edition = "2021"
+description = "Renderer-agnostic GUI abstraction for SunMao audio plugins"
+license = "MIT"
+
+[dependencies]
+sunmao_core = { path = "../core" }
+glow = { version = "0.16", optional = true }
+wgpu = { version = "23", optional = true }
+bytemuck = { version = "1.18", features = ["derive"], optional = true }
+serde = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }
+
+[features]
+default = ["gl"]
+gl = ["glow", "bytemuck"]
+wgpu = ["dep:wgpu", "bytemuck"]
+webview = ["serde", "serde_json"]

@@ -1,0 +1,11 @@
+[package]
+name = "vst3_sys_syn_sine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+vst3_sys = { path = "../../vst3_sys" }

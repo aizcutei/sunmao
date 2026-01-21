@@ -1,0 +1,14 @@
+[package]
+name = "clap_rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+clap_sys = { path = "../clap_sys" }
+log = "0.4"
+bitflags = "2.4"
+raw-window-handle = "0.6.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"

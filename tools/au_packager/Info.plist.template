@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>English</string>
+  <key>CFBundleExecutable</key>
+  <string>{{EXECUTABLE_NAME}}</string>
+  <key>CFBundleIdentifier</key>
+  <string>{{BUNDLE_ID}}</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>{{BUNDLE_NAME}}</string>
+  <key>CFBundlePackageType</key>
+  <string>BNDL</string>
+  <key>CFBundleSignature</key>
+  <string>????</string>
+  <key>CFBundleVersion</key>
+  <string>{{BUNDLE_VERSION}}</string>
+  <key>AudioComponents</key>
+  <array>
+    <dict>
+      <key>name</key>
+      <string>{{COMPONENT_NAME}}</string>
+      <key>type</key>
+      <string>{{COMPONENT_TYPE}}</string>
+      <key>subtype</key>
+      <string>{{COMPONENT_SUBTYPE}}</string>
+      <key>manufacturer</key>
+      <string>{{COMPONENT_MANUFACTURER}}</string>
+      <key>version</key>
+      <integer>{{VERSION_NUMBER}}</integer>
+      <key>factoryFunction</key>
+      <string>{{FACTORY_FUNCTION}}</string>
+      <key>sandboxSafe</key>
+      {{SANDBOX_SAFE}}
+    </dict>
+  </array>
+</dict>
+</plist>
