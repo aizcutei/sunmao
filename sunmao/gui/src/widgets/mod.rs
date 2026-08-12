@@ -6,15 +6,15 @@
 //! - Button: Toggle or momentary button
 //! - Label: Text display
 
-mod knob;
-mod slider;
 mod button;
+mod knob;
 mod label;
+mod slider;
 
-pub use knob::Knob;
-pub use slider::{Slider, Orientation};
 pub use button::{Button, ButtonType};
+pub use knob::Knob;
 pub use label::Label;
+pub use slider::{Orientation, Slider};
 
 use std::sync::atomic::{AtomicU64, Ordering};
 

@@ -6,11 +6,17 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib"]
 
+[features]
+default = []
+au = ["dep:sunmao_backend_au"]
+
 [dependencies]
 sunmao_core = { path = "../../sunmao/core" }
 sunmao_macros = { path = "../../sunmao/macros" }
-sunmao_gui = { path = "../../sunmao/gui", features = ["gl", "webview"] }
-sunmao_view_baseview = { path = "../../sunmao/view_baseview" }
+sunmao_gui = { path = "../../sunmao/gui", default-features = false }
+sunmao_view_baseview = { path = "../../sunmao/view_baseview", default-features = false, features = ["webview"] }
 sunmao_backend_vst3 = { path = "../../sunmao/backend_vst3" }
-sunmao_backend_au = { path = "../../sunmao/backend_au" }
 sunmao_backend_clap = { path = "../../sunmao/backend_clap" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+sunmao_backend_au = { path = "../../sunmao/backend_au", optional = true }

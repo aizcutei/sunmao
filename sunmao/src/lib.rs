@@ -30,16 +30,22 @@ pub use sunmao_core::*;
 // Re-export macros
 pub use sunmao_macros::*;
 
+/// Format adapters used by the unified export macro.
+pub use sunmao_backend_clap as backend_clap;
+pub use sunmao_backend_vst3 as backend_vst3;
+
 #[cfg(feature = "standalone")]
 pub use sunmao_runtime;
 
 /// Common imports for SunMao plugins.
 pub mod prelude {
-    pub use sunmao_core::plugin::{SunmaoPlugin, ProcessStatus, ProcessContext};
-    pub use sunmao_core::params::{Params, FloatParam, IntParam, BoolParam};
-    pub use sunmao_core::audio::AudioBuffer;
-    pub use sunmao_core::events::{EventQueue, Event, MidiMessage};
-    pub use sunmao_core::metadata::{Vst3Info, AuInfo, ClapInfo};
-    pub use sunmao_macros::{Params, sunmao_export};
     pub use std::sync::Arc;
+    pub use sunmao_core::audio::AudioBuffer;
+    pub use sunmao_core::events::{Event, EventQueue, MidiMessage, ParamChange};
+    pub use sunmao_core::metadata::{AuInfo, ClapInfo, Vst3Info, Vst3SpeakerLayout};
+    pub use sunmao_core::params::{
+        stable_param_id, BoolParam, FloatParam, IntParam, ParamDescriptor, ParamKind, Params,
+    };
+    pub use sunmao_core::plugin::{ProcessContext, ProcessStatus, SunmaoPlugin};
+    pub use sunmao_macros::{sunmao_export, Params};
 }

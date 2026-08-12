@@ -1,7 +1,7 @@
 //! IPlugView and IPlugFrame interfaces
 
-use std::ffi::c_void;
 use crate::base::types::*;
+use std::ffi::c_void;
 
 // =============================================================================
 // ViewRect
@@ -19,11 +19,20 @@ pub struct ViewRect {
 
 impl ViewRect {
     pub fn new(left: int32, top: int32, right: int32, bottom: int32) -> Self {
-        Self { left, top, right, bottom }
+        Self {
+            left,
+            top,
+            right,
+            bottom,
+        }
     }
-    
-    pub fn width(&self) -> int32 { self.right - self.left }
-    pub fn height(&self) -> int32 { self.bottom - self.top }
+
+    pub fn width(&self) -> int32 {
+        self.right - self.left
+    }
+    pub fn height(&self) -> int32 {
+        self.bottom - self.top
+    }
 }
 
 /// Platform UI type strings
@@ -40,18 +49,34 @@ pub const kPlatformTypeX11EmbedWindowID: &[u8] = b"X11EmbedWindowID\0";
 #[repr(C)]
 pub struct IPlugViewVtbl {
     pub unknown: IUnknownVtbl,
-    pub is_platform_type_supported: unsafe extern "system" fn(this: *mut c_void, type_: FIDString) -> tresult,
-    pub attached: unsafe extern "system" fn(this: *mut c_void, parent: *mut c_void, type_: FIDString) -> tresult,
+    pub is_platform_type_supported:
+        unsafe extern "system" fn(this: *mut c_void, type_: FIDString) -> tresult,
+    pub attached: unsafe extern "system" fn(
+        this: *mut c_void,
+        parent: *mut c_void,
+        type_: FIDString,
+    ) -> tresult,
     pub removed: unsafe extern "system" fn(this: *mut c_void) -> tresult,
     pub on_wheel: unsafe extern "system" fn(this: *mut c_void, distance: f32) -> tresult,
-    pub on_key_down: unsafe extern "system" fn(this: *mut c_void, key: char16, key_code: int16, modifiers: int16) -> tresult,
-    pub on_key_up: unsafe extern "system" fn(this: *mut c_void, key: char16, key_code: int16, modifiers: int16) -> tresult,
+    pub on_key_down: unsafe extern "system" fn(
+        this: *mut c_void,
+        key: char16,
+        key_code: int16,
+        modifiers: int16,
+    ) -> tresult,
+    pub on_key_up: unsafe extern "system" fn(
+        this: *mut c_void,
+        key: char16,
+        key_code: int16,
+        modifiers: int16,
+    ) -> tresult,
     pub get_size: unsafe extern "system" fn(this: *mut c_void, size: *mut ViewRect) -> tresult,
     pub on_size: unsafe extern "system" fn(this: *mut c_void, new_size: *mut ViewRect) -> tresult,
     pub on_focus: unsafe extern "system" fn(this: *mut c_void, state: TBool) -> tresult,
     pub set_frame: unsafe extern "system" fn(this: *mut c_void, frame: *mut c_void) -> tresult,
     pub can_resize: unsafe extern "system" fn(this: *mut c_void) -> tresult,
-    pub check_size_constraint: unsafe extern "system" fn(this: *mut c_void, rect: *mut ViewRect) -> tresult,
+    pub check_size_constraint:
+        unsafe extern "system" fn(this: *mut c_void, rect: *mut ViewRect) -> tresult,
 }
 
 // =============================================================================
@@ -62,5 +87,9 @@ pub struct IPlugViewVtbl {
 #[repr(C)]
 pub struct IPlugFrameVtbl {
     pub unknown: IUnknownVtbl,
-    pub resize_view: unsafe extern "system" fn(this: *mut c_void, view: *mut c_void, new_size: *mut ViewRect) -> tresult,
+    pub resize_view: unsafe extern "system" fn(
+        this: *mut c_void,
+        view: *mut c_void,
+        new_size: *mut ViewRect,
+    ) -> tresult,
 }

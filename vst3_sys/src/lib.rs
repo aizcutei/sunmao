@@ -13,30 +13,31 @@
 #![allow(dead_code)]
 
 pub mod base;
-pub mod vst;
 pub mod gui;
+pub mod vst;
 
 // Re-export commonly used items at crate root
-pub use base::types::*;
-pub use base::ipluginbase::*;
 pub use base::ibstream::*;
 pub use base::iid as base_iid;
+pub use base::ipluginbase::*;
+pub use base::types::*;
 
-pub use vst::types::*;
-pub use vst::icomponent::*;
 pub use vst::iaudioprocessor::*;
-pub use vst::ievents::*;
-pub use vst::iparameters::*;
+pub use vst::icomponent::*;
 pub use vst::ieditcontroller::*;
-pub use vst::processcontext::*;
+pub use vst::ievents::*;
 pub use vst::iid as vst_iid;
+pub use vst::iparameters::*;
+pub use vst::ivstmessage::*;
+pub use vst::processcontext::*;
+pub use vst::types::*;
 
-pub use gui::iplugview::*;
 pub use gui::iid as gui_iid;
+pub use gui::iplugview::*;
 
 // Unified IID module for convenience
 pub mod iid {
     pub use crate::base::iid::*;
-    pub use crate::vst::iid::*;
     pub use crate::gui::iid::*;
+    pub use crate::vst::iid::*;
 }

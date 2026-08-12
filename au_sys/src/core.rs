@@ -73,7 +73,12 @@ pub trait AuPlugin: Send {
 
     fn reset(&mut self) {}
 
-    fn process(&mut self, inputs: Option<BufferList<'_>>, outputs: &mut BufferList<'_>, frames: usize);
+    fn process(
+        &mut self,
+        inputs: Option<BufferList<'_>>,
+        outputs: &mut BufferList<'_>,
+        frames: usize,
+    );
 
     fn parameters(&self) -> &'static [ParameterInfo];
 

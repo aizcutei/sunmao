@@ -5,9 +5,19 @@ edition = "2021"
 description = "Baseview integration for SunMao plugin editors"
 license = "MIT"
 
+[features]
+default = ["gl"]
+gl = ["sunmao_gui/gl", "baseview/opengl"]
+wgpu = ["sunmao_gui/wgpu", "dep:wgpu", "dep:pollster"]
+webview = ["baseview/webview"]
+
 [dependencies]
 sunmao_core = { path = "../core" }
-sunmao_gui = { path = "../gui", features = ["gl"] }
-baseview = { path = "../../baseview", features = ["opengl"] }
+sunmao_gui = { path = "../gui", default-features = false }
+baseview = { path = "../../baseview", default-features = false }
 raw-window-handle = "0.6"
 keyboard-types = "0.6.1"
+
+# wgpu dependencies (optional)
+wgpu = { version = "23", optional = true }
+pollster = { version = "0.4", optional = true }

@@ -1,5 +1,5 @@
-use crate::plugin::clap_plugin_t;
 use crate::host::clap_host_t;
+use crate::plugin::clap_plugin_t;
 
 pub const CLAP_EXT_VOICE_INFO: &str = "clap.voice-info\0";
 
@@ -16,7 +16,9 @@ pub struct clap_voice_info_t {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct clap_plugin_voice_info_t {
-    pub get: Option<unsafe extern "C" fn(plugin: *const clap_plugin_t, info: *mut clap_voice_info_t) -> bool>,
+    pub get: Option<
+        unsafe extern "C" fn(plugin: *const clap_plugin_t, info: *mut clap_voice_info_t) -> bool,
+    >,
 }
 
 #[repr(C)]

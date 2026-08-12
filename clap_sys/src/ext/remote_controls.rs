@@ -1,6 +1,6 @@
-use crate::plugin::clap_plugin_t;
 use crate::host::clap_host_t;
 use crate::id::clap_id;
+use crate::plugin::clap_plugin_t;
 use crate::string_sizes::CLAP_NAME_SIZE;
 use std::ffi::c_char;
 
@@ -23,7 +23,13 @@ pub struct clap_remote_controls_page_t {
 #[derive(Debug, Copy, Clone)]
 pub struct clap_plugin_remote_controls_t {
     pub count: Option<unsafe extern "C" fn(plugin: *const clap_plugin_t) -> u32>,
-    pub get: Option<unsafe extern "C" fn(plugin: *const clap_plugin_t, page_index: u32, page: *mut clap_remote_controls_page_t) -> bool>,
+    pub get: Option<
+        unsafe extern "C" fn(
+            plugin: *const clap_plugin_t,
+            page_index: u32,
+            page: *mut clap_remote_controls_page_t,
+        ) -> bool,
+    >,
 }
 
 #[repr(C)]

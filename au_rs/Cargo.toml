@@ -8,7 +8,8 @@ license.workspace = true
 crate-type = ["rlib"]
 
 [dependencies]
-au_sys = { path = "../au_sys" }
+au_sys = { path = "../au_sys", default-features = false }
+au_cocoa_stubs = { path = "../au_cocoa_stubs" }
 objc = "0.2"
 glow = "0.13"
 bytemuck = "1.14"

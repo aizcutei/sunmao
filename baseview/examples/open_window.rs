@@ -32,13 +32,17 @@ struct WrappedWindow {
 }
 
 impl raw_window_handle::HasWindowHandle for WrappedWindow {
-    fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(self.raw_window_handle) })
     }
 }
 
 impl raw_window_handle::HasDisplayHandle for WrappedWindow {
-    fn display_handle(&self) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(self.raw_display_handle) })
     }
 }
@@ -66,9 +70,10 @@ impl WindowHandler for OpenWindowExample {
                 let new_size = info.physical_size();
                 self.current_size = new_size;
 
-                if let (Some(width), Some(height)) =
-                    (NonZeroU32::new(new_size.width), NonZeroU32::new(new_size.height))
-                {
+                if let (Some(width), Some(height)) = (
+                    NonZeroU32::new(new_size.width),
+                    NonZeroU32::new(new_size.height),
+                ) {
                     self.surface.resize(width, height).unwrap();
                     self.damaged = true;
                 }
@@ -83,15 +88,11 @@ impl WindowHandler for OpenWindowExample {
 }
 
 fn main() {
-    let window_open_options = baseview::WindowOpenOptions {
-        title: "baseview".into(),
-        size: baseview::Size::new(512.0, 512.0),
-        scale: WindowScalePolicy::SystemScaleFactor,
-
-        // TODO: Add an example that uses the OpenGL context
-        #[cfg(feature = "opengl")]
-        gl_config: None,
-    };
+    let window_open_options = baseview::WindowOpenOptions::new(
+        "baseview",
+        baseview::Size::new(512.0, 512.0),
+        WindowScalePolicy::SystemScaleFactor,
+    );
 
     let (mut tx, rx) = RingBuffer::new(128);
 
@@ -104,21 +105,23 @@ fn main() {
     });
 
     Window::open_blocking(window_open_options, |window| {
-        use raw_window_handle::{HasWindowHandle, HasDisplayHandle};
-        
+        use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+
         // Extract raw handles from baseview window
         let raw_window = window.window_handle().unwrap().as_raw();
         let raw_display = window.display_handle().unwrap().as_raw();
-        
+
         // Create wrapped window for softbuffer (needs owned reference)
         let wrapped = Rc::new(WrappedWindow {
             raw_window_handle: raw_window,
             raw_display_handle: raw_display,
         });
-        
+
         let ctx = softbuffer::Context::new(wrapped.clone()).unwrap();
         let mut surface = softbuffer::Surface::new(&ctx, wrapped.clone()).unwrap();
-        surface.resize(NonZeroU32::new(512).unwrap(), NonZeroU32::new(512).unwrap()).unwrap();
+        surface
+            .resize(NonZeroU32::new(512).unwrap(), NonZeroU32::new(512).unwrap())
+            .unwrap();
 
         OpenWindowExample {
             _ctx: ctx,

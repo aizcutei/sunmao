@@ -43,7 +43,8 @@ struct GainProcessorObj {
 #[repr(C)]
 struct ComponentVtbl {
     // IUnknown
-    query_interface: unsafe extern "system" fn(*mut c_void, *const TUID, *mut *mut c_void) -> tresult,
+    query_interface:
+        unsafe extern "system" fn(*mut c_void, *const TUID, *mut *mut c_void) -> tresult,
     add_ref: unsafe extern "system" fn(*mut c_void) -> uint32,
     release: unsafe extern "system" fn(*mut c_void) -> uint32,
     // IPluginBase
@@ -53,9 +54,17 @@ struct ComponentVtbl {
     get_controller_class_id: unsafe extern "system" fn(*mut c_void, *mut TUID) -> tresult,
     set_io_mode: unsafe extern "system" fn(*mut c_void, IoMode) -> tresult,
     get_bus_count: unsafe extern "system" fn(*mut c_void, MediaType, BusDirection) -> int32,
-    get_bus_info: unsafe extern "system" fn(*mut c_void, MediaType, BusDirection, int32, *mut BusInfo) -> tresult,
-    get_routing_info: unsafe extern "system" fn(*mut c_void, *mut RoutingInfo, *mut RoutingInfo) -> tresult,
-    activate_bus: unsafe extern "system" fn(*mut c_void, MediaType, BusDirection, int32, TBool) -> tresult,
+    get_bus_info: unsafe extern "system" fn(
+        *mut c_void,
+        MediaType,
+        BusDirection,
+        int32,
+        *mut BusInfo,
+    ) -> tresult,
+    get_routing_info:
+        unsafe extern "system" fn(*mut c_void, *mut RoutingInfo, *mut RoutingInfo) -> tresult,
+    activate_bus:
+        unsafe extern "system" fn(*mut c_void, MediaType, BusDirection, int32, TBool) -> tresult,
     set_active: unsafe extern "system" fn(*mut c_void, TBool) -> tresult,
     set_state: unsafe extern "system" fn(*mut c_void, *mut c_void) -> tresult,
     get_state: unsafe extern "system" fn(*mut c_void, *mut c_void) -> tresult,
@@ -65,12 +74,24 @@ struct ComponentVtbl {
 #[repr(C)]
 struct AudioProcessorVtbl {
     // IUnknown
-    query_interface: unsafe extern "system" fn(*mut c_void, *const TUID, *mut *mut c_void) -> tresult,
+    query_interface:
+        unsafe extern "system" fn(*mut c_void, *const TUID, *mut *mut c_void) -> tresult,
     add_ref: unsafe extern "system" fn(*mut c_void) -> uint32,
     release: unsafe extern "system" fn(*mut c_void) -> uint32,
     // IAudioProcessor
-    set_bus_arrangements: unsafe extern "system" fn(*mut c_void, *mut SpeakerArrangement, int32, *mut SpeakerArrangement, int32) -> tresult,
-    get_bus_arrangement: unsafe extern "system" fn(*mut c_void, BusDirection, int32, *mut SpeakerArrangement) -> tresult,
+    set_bus_arrangements: unsafe extern "system" fn(
+        *mut c_void,
+        *mut SpeakerArrangement,
+        int32,
+        *mut SpeakerArrangement,
+        int32,
+    ) -> tresult,
+    get_bus_arrangement: unsafe extern "system" fn(
+        *mut c_void,
+        BusDirection,
+        int32,
+        *mut SpeakerArrangement,
+    ) -> tresult,
     can_process_sample_size: unsafe extern "system" fn(*mut c_void, int32) -> tresult,
     get_latency_samples: unsafe extern "system" fn(*mut c_void) -> uint32,
     setup_processing: unsafe extern "system" fn(*mut c_void, *mut ProcessSetup) -> tresult,
@@ -123,12 +144,12 @@ impl GainProcessorObj {
         });
         Box::into_raw(obj)
     }
-    
+
     // Get the base object from component interface pointer
     unsafe fn from_component(this: *mut c_void) -> *mut Self {
         this as *mut Self
     }
-    
+
     // Get the base object from audio interface pointer (offset by 1 pointer)
     unsafe fn from_audio(this: *mut c_void) -> *mut Self {
         (this as *mut u8).sub(std::mem::size_of::<*const c_void>()) as *mut Self
@@ -143,7 +164,7 @@ unsafe extern "system" fn component_query_interface(
 ) -> tresult {
     let iid = &*iid;
     let base = GainProcessorObj::from_component(this);
-    
+
     if iid_equal(iid, &iid::IUnknown)
         || iid_equal(iid, &base_iid::IPluginBase)
         || iid_equal(iid, &vst_iid::IComponent)
@@ -152,14 +173,14 @@ unsafe extern "system" fn component_query_interface(
         *obj = this; // Return component interface pointer
         return kResultOk;
     }
-    
+
     if iid_equal(iid, &vst_iid::IAudioProcessor) {
         component_add_ref(this);
         // Return audio interface pointer (offset into object)
         *obj = &(*base).vtbl_audio as *const _ as *mut c_void;
         return kResultOk;
     }
-    
+
     *obj = std::ptr::null_mut();
     kNoInterface
 }
@@ -186,19 +207,22 @@ unsafe extern "system" fn audio_query_interface(
 ) -> tresult {
     let iid = &*iid;
     let base = GainProcessorObj::from_audio(this);
-    
-    if iid_equal(iid, &iid::IUnknown) || iid_equal(iid, &vst_iid::IAudioProcessor) {
+
+    if iid_equal(iid, &vst_iid::IAudioProcessor) {
         audio_add_ref(this);
         *obj = this;
         return kResultOk;
     }
-    
-    if iid_equal(iid, &base_iid::IPluginBase) || iid_equal(iid, &vst_iid::IComponent) {
+
+    if iid_equal(iid, &iid::IUnknown)
+        || iid_equal(iid, &base_iid::IPluginBase)
+        || iid_equal(iid, &vst_iid::IComponent)
+    {
         audio_add_ref(this);
         *obj = base as *mut c_void; // Return component interface pointer
         return kResultOk;
     }
-    
+
     *obj = std::ptr::null_mut();
     kNoInterface
 }
@@ -238,7 +262,10 @@ unsafe extern "system" fn audio_get_bus_arrangement(
     kResultOk
 }
 
-unsafe extern "system" fn audio_can_process_sample_size(_this: *mut c_void, symbolic_sample_size: int32) -> tresult {
+unsafe extern "system" fn audio_can_process_sample_size(
+    _this: *mut c_void,
+    symbolic_sample_size: int32,
+) -> tresult {
     if symbolic_sample_size == SymbolicSampleSizes::kSample32 {
         kResultOk
     } else {
@@ -250,7 +277,10 @@ unsafe extern "system" fn audio_get_latency_samples(_this: *mut c_void) -> uint3
     0
 }
 
-unsafe extern "system" fn audio_setup_processing(this: *mut c_void, setup: *mut ProcessSetup) -> tresult {
+unsafe extern "system" fn audio_setup_processing(
+    this: *mut c_void,
+    setup: *mut ProcessSetup,
+) -> tresult {
     let obj = GainProcessorObj::from_audio(this);
     (*obj).sample_rate = (*setup).sample_rate;
     kResultOk
@@ -265,18 +295,18 @@ unsafe extern "system" fn audio_set_processing(this: *mut c_void, state: TBool) 
 unsafe extern "system" fn audio_process(this: *mut c_void, data: *mut ProcessData) -> tresult {
     let obj = GainProcessorObj::from_audio(this);
     let data = &*data;
-    
+
     if data.num_samples == 0 {
         return kResultOk;
     }
-    
+
     // Read parameter changes from host
     if !data.input_parameter_changes.is_null() {
         // input_parameter_changes is IParameterChanges*
         let param_changes = data.input_parameter_changes;
         // Get vtable pointer at start of object
         let vtbl = *(param_changes as *const *const IParameterChangesVtbl);
-        
+
         let num_params = ((*vtbl).get_parameter_count)(param_changes);
         for i in 0..num_params {
             let queue = ((*vtbl).get_parameter_data)(param_changes, i);
@@ -284,14 +314,20 @@ unsafe extern "system" fn audio_process(this: *mut c_void, data: *mut ProcessDat
                 // queue is IParamValueQueue*
                 let queue_vtbl = *(queue as *const *const IParamValueQueueVtbl);
                 let param_id = ((*queue_vtbl).get_parameter_id)(queue);
-                
+
                 if param_id == PARAM_GAIN {
                     let num_points = ((*queue_vtbl).get_point_count)(queue);
                     if num_points > 0 {
                         let mut sample_offset: int32 = 0;
                         let mut value: ParamValue = 0.0;
                         // Get the last point (most recent value)
-                        if ((*queue_vtbl).get_point)(queue, num_points - 1, &mut sample_offset, &mut value) == kResultOk {
+                        if ((*queue_vtbl).get_point)(
+                            queue,
+                            num_points - 1,
+                            &mut sample_offset,
+                            &mut value,
+                        ) == kResultOk
+                        {
                             (*obj).gain = value as f32;
                         }
                     }
@@ -299,27 +335,31 @@ unsafe extern "system" fn audio_process(this: *mut c_void, data: *mut ProcessDat
             }
         }
     }
-    
+
     let gain = (*obj).gain;
-    
+
     // Process audio
-    if !data.inputs.is_null() && !data.outputs.is_null() && data.num_inputs > 0 && data.num_outputs > 0 {
+    if !data.inputs.is_null()
+        && !data.outputs.is_null()
+        && data.num_inputs > 0
+        && data.num_outputs > 0
+    {
         let inputs = &*data.inputs;
         let outputs = &mut *data.outputs;
-        
+
         let num_channels = inputs.num_channels.min(outputs.num_channels) as usize;
         let num_samples = data.num_samples as usize;
-        
+
         for ch in 0..num_channels {
             let input = *(inputs.buffers as *const *const f32).add(ch);
             let output = *(outputs.buffers as *const *mut f32).add(ch);
-            
+
             for i in 0..num_samples {
                 *output.add(i) = *input.add(i) * gain;
             }
         }
     }
-    
+
     kResultOk
 }
 
@@ -327,7 +367,10 @@ unsafe extern "system" fn audio_get_tail_samples(_this: *mut c_void) -> uint32 {
     kNoTail
 }
 
-unsafe extern "system" fn processor_initialize(_this: *mut c_void, _context: *mut c_void) -> tresult {
+unsafe extern "system" fn processor_initialize(
+    _this: *mut c_void,
+    _context: *mut c_void,
+) -> tresult {
     kResultOk
 }
 
@@ -335,7 +378,10 @@ unsafe extern "system" fn processor_terminate(_this: *mut c_void) -> tresult {
     kResultOk
 }
 
-unsafe extern "system" fn processor_get_controller_class_id(_this: *mut c_void, class_id: *mut TUID) -> tresult {
+unsafe extern "system" fn processor_get_controller_class_id(
+    _this: *mut c_void,
+    class_id: *mut TUID,
+) -> tresult {
     *class_id = CID_CONTROLLER;
     kResultOk
 }
@@ -344,7 +390,11 @@ unsafe extern "system" fn processor_set_io_mode(_this: *mut c_void, _mode: IoMod
     kResultOk
 }
 
-unsafe extern "system" fn processor_get_bus_count(_this: *mut c_void, media_type: MediaType, dir: BusDirection) -> int32 {
+unsafe extern "system" fn processor_get_bus_count(
+    _this: *mut c_void,
+    media_type: MediaType,
+    dir: BusDirection,
+) -> int32 {
     if media_type == MediaTypes::kAudio {
         if dir == BusDirections::kInput || dir == BusDirections::kOutput {
             return 1;
@@ -363,17 +413,21 @@ unsafe extern "system" fn processor_get_bus_info(
     if media_type != MediaTypes::kAudio || index != 0 {
         return kInvalidArgument;
     }
-    
+
     let bus = &mut *bus;
     bus.media_type = MediaTypes::kAudio;
     bus.direction = dir;
     bus.channel_count = 2;
     bus.bus_type = BusTypes::kMain;
     bus.flags = BusFlags::kDefaultActive;
-    
-    let name = if dir == BusDirections::kInput { "Input" } else { "Output" };
+
+    let name = if dir == BusDirections::kInput {
+        "Input"
+    } else {
+        "Output"
+    };
     str16cpy_safe(&mut bus.name, name);
-    
+
     kResultOk
 }
 
@@ -423,7 +477,8 @@ struct GainControllerObj {
 #[repr(C)]
 struct GainControllerVtbl {
     // IUnknown
-    query_interface: unsafe extern "system" fn(*mut c_void, *const TUID, *mut *mut c_void) -> tresult,
+    query_interface:
+        unsafe extern "system" fn(*mut c_void, *const TUID, *mut *mut c_void) -> tresult,
     add_ref: unsafe extern "system" fn(*mut c_void) -> uint32,
     release: unsafe extern "system" fn(*mut c_void) -> uint32,
     // IPluginBase
@@ -434,11 +489,16 @@ struct GainControllerVtbl {
     set_state: unsafe extern "system" fn(*mut c_void, *mut c_void) -> tresult,
     get_state: unsafe extern "system" fn(*mut c_void, *mut c_void) -> tresult,
     get_parameter_count: unsafe extern "system" fn(*mut c_void) -> int32,
-    get_parameter_info: unsafe extern "system" fn(*mut c_void, int32, *mut ParameterInfo) -> tresult,
-    get_param_string_by_value: unsafe extern "system" fn(*mut c_void, ParamID, ParamValue, *mut String128) -> tresult,
-    get_param_value_by_string: unsafe extern "system" fn(*mut c_void, ParamID, *const TChar, *mut ParamValue) -> tresult,
-    normalized_param_to_plain: unsafe extern "system" fn(*mut c_void, ParamID, ParamValue) -> ParamValue,
-    plain_param_to_normalized: unsafe extern "system" fn(*mut c_void, ParamID, ParamValue) -> ParamValue,
+    get_parameter_info:
+        unsafe extern "system" fn(*mut c_void, int32, *mut ParameterInfo) -> tresult,
+    get_param_string_by_value:
+        unsafe extern "system" fn(*mut c_void, ParamID, ParamValue, *mut String128) -> tresult,
+    get_param_value_by_string:
+        unsafe extern "system" fn(*mut c_void, ParamID, *const TChar, *mut ParamValue) -> tresult,
+    normalized_param_to_plain:
+        unsafe extern "system" fn(*mut c_void, ParamID, ParamValue) -> ParamValue,
+    plain_param_to_normalized:
+        unsafe extern "system" fn(*mut c_void, ParamID, ParamValue) -> ParamValue,
     get_param_normalized: unsafe extern "system" fn(*mut c_void, ParamID) -> ParamValue,
     set_param_normalized: unsafe extern "system" fn(*mut c_void, ParamID, ParamValue) -> tresult,
     set_component_handler: unsafe extern "system" fn(*mut c_void, *mut c_void) -> tresult,
@@ -483,9 +543,9 @@ unsafe extern "system" fn controller_query_interface(
     obj: *mut *mut c_void,
 ) -> tresult {
     let iid = &*iid;
-    if iid_equal(iid, &iid::IUnknown) 
-        || iid_equal(iid, &base_iid::IPluginBase) 
-        || iid_equal(iid, &vst_iid::IEditController) 
+    if iid_equal(iid, &iid::IUnknown)
+        || iid_equal(iid, &base_iid::IPluginBase)
+        || iid_equal(iid, &vst_iid::IEditController)
     {
         controller_add_ref(this);
         *obj = this;
@@ -509,7 +569,10 @@ unsafe extern "system" fn controller_release(this: *mut c_void) -> uint32 {
     count as uint32
 }
 
-unsafe extern "system" fn controller_initialize(_this: *mut c_void, _context: *mut c_void) -> tresult {
+unsafe extern "system" fn controller_initialize(
+    _this: *mut c_void,
+    _context: *mut c_void,
+) -> tresult {
     kResultOk
 }
 
@@ -517,7 +580,10 @@ unsafe extern "system" fn controller_terminate(_this: *mut c_void) -> tresult {
     kResultOk
 }
 
-unsafe extern "system" fn controller_set_component_state(_this: *mut c_void, _state: *mut c_void) -> tresult {
+unsafe extern "system" fn controller_set_component_state(
+    _this: *mut c_void,
+    _state: *mut c_void,
+) -> tresult {
     kResultOk
 }
 
@@ -533,7 +599,11 @@ unsafe extern "system" fn controller_get_parameter_count(_this: *mut c_void) -> 
     1
 }
 
-unsafe extern "system" fn controller_get_parameter_info(_this: *mut c_void, param_index: int32, info: *mut ParameterInfo) -> tresult {
+unsafe extern "system" fn controller_get_parameter_info(
+    _this: *mut c_void,
+    param_index: int32,
+    info: *mut ParameterInfo,
+) -> tresult {
     if param_index != 0 {
         return kInvalidArgument;
     }
@@ -590,22 +660,35 @@ unsafe extern "system" fn controller_plain_param_to_normalized(
     plain_value / 100.0
 }
 
-unsafe extern "system" fn controller_get_param_normalized(this: *mut c_void, _id: ParamID) -> ParamValue {
+unsafe extern "system" fn controller_get_param_normalized(
+    this: *mut c_void,
+    _id: ParamID,
+) -> ParamValue {
     let obj = this as *mut GainControllerObj;
     (*obj).gain_value
 }
 
-unsafe extern "system" fn controller_set_param_normalized(this: *mut c_void, _id: ParamID, value: ParamValue) -> tresult {
+unsafe extern "system" fn controller_set_param_normalized(
+    this: *mut c_void,
+    _id: ParamID,
+    value: ParamValue,
+) -> tresult {
     let obj = this as *mut GainControllerObj;
     (*obj).gain_value = value;
     kResultOk
 }
 
-unsafe extern "system" fn controller_set_component_handler(_this: *mut c_void, _handler: *mut c_void) -> tresult {
+unsafe extern "system" fn controller_set_component_handler(
+    _this: *mut c_void,
+    _handler: *mut c_void,
+) -> tresult {
     kResultOk
 }
 
-unsafe extern "system" fn controller_create_view(_this: *mut c_void, _name: FIDString) -> *mut c_void {
+unsafe extern "system" fn controller_create_view(
+    _this: *mut c_void,
+    _name: FIDString,
+) -> *mut c_void {
     std::ptr::null_mut()
 }
 
@@ -623,18 +706,21 @@ struct PluginFactoryObj {
 #[repr(C)]
 struct PluginFactoryVtbl {
     // IUnknown
-    query_interface: unsafe extern "system" fn(*mut c_void, *const TUID, *mut *mut c_void) -> tresult,
+    query_interface:
+        unsafe extern "system" fn(*mut c_void, *const TUID, *mut *mut c_void) -> tresult,
     add_ref: unsafe extern "system" fn(*mut c_void) -> uint32,
     release: unsafe extern "system" fn(*mut c_void) -> uint32,
     // IPluginFactory
     get_factory_info: unsafe extern "system" fn(*mut c_void, *mut PFactoryInfoData) -> tresult,
     count_classes: unsafe extern "system" fn(*mut c_void) -> int32,
     get_class_info: unsafe extern "system" fn(*mut c_void, int32, *mut PClassInfoData) -> tresult,
-    create_instance: unsafe extern "system" fn(*mut c_void, FIDString, FIDString, *mut *mut c_void) -> tresult,
+    create_instance:
+        unsafe extern "system" fn(*mut c_void, FIDString, FIDString, *mut *mut c_void) -> tresult,
     // IPluginFactory2
     get_class_info2: unsafe extern "system" fn(*mut c_void, int32, *mut PClassInfo2Data) -> tresult,
     // IPluginFactory3
-    get_class_info_unicode: unsafe extern "system" fn(*mut c_void, int32, *mut PClassInfoWData) -> tresult,
+    get_class_info_unicode:
+        unsafe extern "system" fn(*mut c_void, int32, *mut PClassInfoWData) -> tresult,
     set_host_context: unsafe extern "system" fn(*mut c_void, *mut c_void) -> tresult,
 }
 
@@ -657,7 +743,7 @@ unsafe extern "system" fn factory_query_interface(
     obj: *mut *mut c_void,
 ) -> tresult {
     let iid = &*iid;
-    
+
     if iid_equal(iid, &iid::IUnknown)
         || iid_equal(iid, &base_iid::IPluginFactory)
         || iid_equal(iid, &base_iid::IPluginFactory2)
@@ -667,7 +753,7 @@ unsafe extern "system" fn factory_query_interface(
         *obj = this;
         return kResultOk;
     }
-    
+
     *obj = std::ptr::null_mut();
     kNoInterface
 }
@@ -680,11 +766,14 @@ unsafe extern "system" fn factory_add_ref(this: *mut c_void) -> uint32 {
 unsafe extern "system" fn factory_release(this: *mut c_void) -> uint32 {
     let obj = this as *mut PluginFactoryObj;
     let count = (*obj).ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
-    // Factory is static, don't deallocate
+    // The singleton keeps its initial reference for the module lifetime.
     count as uint32
 }
 
-unsafe extern "system" fn factory_get_factory_info(_this: *mut c_void, info: *mut PFactoryInfoData) -> tresult {
+unsafe extern "system" fn factory_get_factory_info(
+    _this: *mut c_void,
+    info: *mut PFactoryInfoData,
+) -> tresult {
     let info = &mut *info;
     strcpy_safe(&mut info.vendor, b"aizcutei\0");
     strcpy_safe(&mut info.url, b"https://aizcutei.github.io/sunmao\0");
@@ -697,7 +786,11 @@ unsafe extern "system" fn factory_count_classes(_this: *mut c_void) -> int32 {
     2 // Processor + Controller
 }
 
-unsafe extern "system" fn factory_get_class_info(_this: *mut c_void, index: int32, info: *mut PClassInfoData) -> tresult {
+unsafe extern "system" fn factory_get_class_info(
+    _this: *mut c_void,
+    index: int32,
+    info: *mut PClassInfoData,
+) -> tresult {
     let info = &mut *info;
     match index {
         0 => {
@@ -717,7 +810,11 @@ unsafe extern "system" fn factory_get_class_info(_this: *mut c_void, index: int3
     kResultOk
 }
 
-unsafe extern "system" fn factory_get_class_info2(_this: *mut c_void, index: int32, info: *mut PClassInfo2Data) -> tresult {
+unsafe extern "system" fn factory_get_class_info2(
+    _this: *mut c_void,
+    index: int32,
+    info: *mut PClassInfo2Data,
+) -> tresult {
     let info = &mut *info;
     match index {
         0 => {
@@ -750,32 +847,48 @@ unsafe extern "system" fn factory_get_class_info2(_this: *mut c_void, index: int
 unsafe extern "system" fn factory_create_instance(
     _this: *mut c_void,
     cid: FIDString,
-    _iid: FIDString,
+    requested_iid: FIDString,
     obj: *mut *mut c_void,
 ) -> tresult {
+    if obj.is_null() {
+        return kInvalidArgument;
+    }
+    *obj = std::ptr::null_mut();
+    if cid.is_null() || requested_iid.is_null() {
+        return kInvalidArgument;
+    }
+
     let cid_bytes = std::slice::from_raw_parts(cid as *const i8, 16);
-    
     let mut cid_arr: TUID = [0; 16];
     cid_arr.copy_from_slice(cid_bytes);
-    
-    if iid_equal(&cid_arr, &CID_PROCESSOR) {
-        *obj = GainProcessorObj::new() as *mut c_void;
-        return kResultOk;
+
+    let instance = if iid_equal(&cid_arr, &CID_PROCESSOR) {
+        GainProcessorObj::new() as *mut c_void
+    } else if iid_equal(&cid_arr, &CID_CONTROLLER) {
+        GainControllerObj::new() as *mut c_void
+    } else {
+        return kNoInterface;
+    };
+
+    let unknown = *(instance as *const *const IUnknownVtbl);
+    let result = ((*unknown).query_interface)(instance, requested_iid as *const TUID, obj);
+    ((*unknown).release)(instance);
+    if result == kResultOk && !(*obj).is_null() {
+        kResultOk
+    } else {
+        *obj = std::ptr::null_mut();
+        if result == kResultOk {
+            kNoInterface
+        } else {
+            result
+        }
     }
-    
-    if iid_equal(&cid_arr, &CID_CONTROLLER) {
-        *obj = GainControllerObj::new() as *mut c_void;
-        return kResultOk;
-    }
-    
-    *obj = std::ptr::null_mut();
-    kNoInterface
 }
 
 unsafe extern "system" fn factory_get_class_info_unicode(
-    _this: *mut c_void, 
-    index: int32, 
-    info: *mut PClassInfoWData
+    _this: *mut c_void,
+    index: int32,
+    info: *mut PClassInfoWData,
 ) -> tresult {
     let info = &mut *info;
     match index {
@@ -806,7 +919,10 @@ unsafe extern "system" fn factory_get_class_info_unicode(
     kResultOk
 }
 
-unsafe extern "system" fn factory_set_host_context(_this: *mut c_void, _context: *mut c_void) -> tresult {
+unsafe extern "system" fn factory_set_host_context(
+    _this: *mut c_void,
+    _context: *mut c_void,
+) -> tresult {
     kResultOk
 }
 
@@ -825,13 +941,17 @@ static FACTORY: OnceLock<SendSyncPtr> = OnceLock::new();
 
 #[unsafe(no_mangle)]
 pub extern "C" fn GetPluginFactory() -> *mut c_void {
-    FACTORY.get_or_init(|| {
-        let factory = Box::new(PluginFactoryObj {
-            vtbl: &FACTORY_VTBL,
-            ref_count: AtomicI32::new(1),
-        });
-        SendSyncPtr(Box::into_raw(factory))
-    }).0 as *mut c_void
+    let factory = FACTORY
+        .get_or_init(|| {
+            let factory = Box::new(PluginFactoryObj {
+                vtbl: &FACTORY_VTBL,
+                ref_count: AtomicI32::new(1),
+            });
+            SendSyncPtr(Box::into_raw(factory))
+        })
+        .0 as *mut c_void;
+    unsafe { factory_add_ref(factory) };
+    factory
 }
 
 // macOS bundle entry points
@@ -871,4 +991,68 @@ pub extern "C" fn InitDll() -> bool {
 #[unsafe(no_mangle)]
 pub extern "C" fn ExitDll() -> bool {
     true
+}
+
+#[cfg(test)]
+#[path = "../../realtime_test_support.rs"]
+mod realtime_test_support;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_vst3_effect_callback_does_not_allocate() {
+        unsafe {
+            let processor = GainProcessorObj::new();
+            let audio = &mut (*processor).vtbl_audio as *mut _ as *mut c_void;
+            (*processor).gain = 0.25;
+
+            let input_left = [1.0_f32; 16];
+            let input_right = [0.5_f32; 16];
+            let mut output_left = [0.0_f32; 16];
+            let mut output_right = [0.0_f32; 16];
+            let mut input_channels = [
+                input_left.as_ptr() as *mut c_void,
+                input_right.as_ptr() as *mut c_void,
+            ];
+            let mut output_channels = [
+                output_left.as_mut_ptr() as *mut c_void,
+                output_right.as_mut_ptr() as *mut c_void,
+            ];
+            let mut input = AudioBusBuffers {
+                num_channels: 2,
+                silence_flags: 0,
+                buffers: input_channels.as_mut_ptr(),
+            };
+            let mut output = AudioBusBuffers {
+                num_channels: 2,
+                silence_flags: 0,
+                buffers: output_channels.as_mut_ptr(),
+            };
+            let mut data = ProcessData {
+                process_mode: 0,
+                symbolic_sample_size: SymbolicSampleSizes::kSample32,
+                num_samples: 16,
+                num_inputs: 1,
+                num_outputs: 1,
+                inputs: &mut input,
+                outputs: &mut output,
+                input_parameter_changes: std::ptr::null_mut(),
+                output_parameter_changes: std::ptr::null_mut(),
+                input_events: std::ptr::null_mut(),
+                output_events: std::ptr::null_mut(),
+                process_context: std::ptr::null_mut(),
+            };
+
+            let (status, allocator_calls) =
+                realtime_test_support::count_allocator_calls(|| audio_process(audio, &mut data));
+            assert_eq!(status, kResultOk);
+            assert_eq!(allocator_calls, 0);
+            assert_eq!(output_left, [0.25; 16]);
+            assert_eq!(output_right, [0.125; 16]);
+
+            component_release(processor as *mut c_void);
+        }
+    }
 }

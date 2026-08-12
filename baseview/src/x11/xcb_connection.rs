@@ -98,7 +98,9 @@ impl XcbConnection {
 
     #[inline]
     pub fn get_scaling(&self) -> Result<f64, Box<dyn Error>> {
-        Ok(self.get_scaling_xft()?.unwrap_or(self.get_scaling_screen_dimensions()))
+        Ok(self
+            .get_scaling_xft()?
+            .unwrap_or(self.get_scaling_screen_dimensions()))
     }
 
     #[inline]

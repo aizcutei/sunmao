@@ -7,21 +7,29 @@
 extern crate proc_macro;
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
-use syn::{parse_macro_input, DeriveInput, Expr, Ident, Lit, Meta};
+use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::token::Comma;
+use syn::{parse_macro_input, DeriveInput, Expr, Ident, Lit, Meta, Token, Type};
 
-/// Derives the `Params` trait for a parameter struct and (on macOS) generates AU param metadata.
+/// Derives the `Params` trait for a parameter struct. Add the helper attribute
+/// `#[sunmao_au]` when the consuming crate also wants the AU parameter-list
+/// implementation; keeping that opt-in explicit prevents AU dependencies from
+/// entering CLAP/VST3-only artifacts.
 ///
 /// Supported field types: `FloatParam`, `IntParam`, `BoolParam`.
 ///
 /// Optional attributes:
 /// - `#[id = "gain"]` overrides the parameter id (defaults to field name)
 /// - `#[unit = "LinearGain"]` sets AU unit (defaults to `Generic`)
-#[proc_macro_derive(Params, attributes(id, unit, name, nested, persist))]
+#[proc_macro_derive(Params, attributes(id, unit, name, nested, persist, sunmao_au))]
 pub fn derive_params(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
+    let generate_au = input
+        .attrs
+        .iter()
+        .any(|attr| attr.path().is_ident("sunmao_au"));
     let data = match &input.data {
         syn::Data::Struct(data) => data,
         _ => {
@@ -41,8 +49,10 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
     };
 
     let mut ids = Vec::new();
+    let mut numeric_id_exprs = Vec::new();
     let mut get_arms = Vec::new();
     let mut set_arms = Vec::new();
+    let mut descriptor_exprs = Vec::new();
     let mut au_param_exprs = Vec::new();
 
     for (index, field) in fields.iter().enumerate() {
@@ -70,7 +80,9 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                     }
                 }
                 Meta::List(list) if list.path.is_ident("param") => {
-                    if let Ok(nested) = list.parse_args_with(Punctuated::<Meta, Comma>::parse_terminated) {
+                    if let Ok(nested) =
+                        list.parse_args_with(Punctuated::<Meta, Comma>::parse_terminated)
+                    {
                         for meta in nested {
                             if let Meta::NameValue(nv) = meta {
                                 if nv.path.is_ident("id") {
@@ -98,15 +110,31 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
         let id_str = id_value.unwrap_or_else(|| ident.to_string());
         let id_lit = syn::LitStr::new(&id_str, ident.span());
         ids.push(quote! { #id_lit });
+        numeric_id_exprs.push(quote! { sunmao_core::params::stable_param_id(#id_lit) });
 
         match type_ident.as_str() {
             "FloatParam" => {
                 get_arms.push(quote! { #id_lit => Some(self.#ident.get_normalized()) });
                 set_arms.push(quote! { #id_lit => self.#ident.set_normalized(value) });
-                let unit_ident = syn::Ident::new(
-                    unit_value.as_deref().unwrap_or("Generic"),
-                    ident.span(),
-                );
+                descriptor_exprs.push(quote! {
+                    sunmao_core::params::ParamDescriptor {
+                        id: #id_lit,
+                        numeric_id: sunmao_core::params::stable_param_id(#id_lit),
+                        name: self.#ident.name,
+                        default_normalized: {
+                            let range = self.#ident.max - self.#ident.min;
+                            if range.abs() <= f32::EPSILON {
+                                0.0
+                            } else {
+                                ((self.#ident.default - self.#ident.min) / range).clamp(0.0, 1.0)
+                            }
+                        },
+                        step_count: 0,
+                        kind: sunmao_core::params::ParamKind::Float,
+                    }
+                });
+                let unit_ident =
+                    syn::Ident::new(unit_value.as_deref().unwrap_or("Generic"), ident.span());
                 let index_lit = index as u32;
                 au_param_exprs.push(quote! {
                     sunmao_backend_au::ParameterInfo {
@@ -120,29 +148,29 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                 });
             }
             "IntParam" => {
-                get_arms.push(quote! {
-                    #id_lit => {
-                        let min = self.#ident.min as f32;
-                        let max = self.#ident.max as f32;
-                        if (max - min).abs() <= f32::EPSILON {
-                            Some(0.0)
-                        } else {
-                            Some((self.#ident.get() as f32 - min) / (max - min))
-                        }
+                get_arms.push(quote! { #id_lit => Some(self.#ident.get_normalized()) });
+                set_arms.push(quote! { #id_lit => self.#ident.set_normalized(value) });
+                descriptor_exprs.push(quote! {
+                    sunmao_core::params::ParamDescriptor {
+                        id: #id_lit,
+                        numeric_id: sunmao_core::params::stable_param_id(#id_lit),
+                        name: self.#ident.name,
+                        default_normalized: {
+                            let min = self.#ident.min as f32;
+                            let max = self.#ident.max as f32;
+                            if (max - min).abs() <= f32::EPSILON {
+                                0.0
+                            } else {
+                                ((self.#ident.default as f32 - min) / (max - min)).clamp(0.0, 1.0)
+                            }
+                        },
+                        step_count: (self.#ident.max as i64 - self.#ident.min as i64)
+                            .clamp(0, u32::MAX as i64) as u32,
+                        kind: sunmao_core::params::ParamKind::Int,
                     }
                 });
-                set_arms.push(quote! {
-                    #id_lit => {
-                        let min = self.#ident.min as f32;
-                        let max = self.#ident.max as f32;
-                        let scaled = min + value.clamp(0.0, 1.0) * (max - min);
-                        self.#ident.set(scaled.round() as i32);
-                    }
-                });
-                let unit_ident = syn::Ident::new(
-                    unit_value.as_deref().unwrap_or("Generic"),
-                    ident.span(),
-                );
+                let unit_ident =
+                    syn::Ident::new(unit_value.as_deref().unwrap_or("Generic"), ident.span());
                 let index_lit = index as u32;
                 au_param_exprs.push(quote! {
                     sunmao_backend_au::ParameterInfo {
@@ -156,12 +184,20 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                 });
             }
             "BoolParam" => {
-                get_arms.push(quote! { #id_lit => Some(if self.#ident.get() { 1.0 } else { 0.0 }) });
-                set_arms.push(quote! { #id_lit => self.#ident.set(value >= 0.5) });
-                let unit_ident = syn::Ident::new(
-                    unit_value.as_deref().unwrap_or("Generic"),
-                    ident.span(),
-                );
+                get_arms.push(quote! { #id_lit => Some(self.#ident.get_normalized()) });
+                set_arms.push(quote! { #id_lit => self.#ident.set_normalized(value) });
+                descriptor_exprs.push(quote! {
+                    sunmao_core::params::ParamDescriptor {
+                        id: #id_lit,
+                        numeric_id: sunmao_core::params::stable_param_id(#id_lit),
+                        name: self.#ident.name,
+                        default_normalized: if self.#ident.default { 1.0 } else { 0.0 },
+                        step_count: 1,
+                        kind: sunmao_core::params::ParamKind::Bool,
+                    }
+                });
+                let unit_ident =
+                    syn::Ident::new(unit_value.as_deref().unwrap_or("Generic"), ident.span());
                 let index_lit = index as u32;
                 au_param_exprs.push(quote! {
                     sunmao_backend_au::ParameterInfo {
@@ -185,7 +221,40 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
         }
     }
 
+    let au_impl = if generate_au {
+        quote! {
+            #[cfg(target_os = "macos")]
+            impl sunmao_backend_au::SunmaoAuParamList for #name {
+                fn au_params() -> &'static [sunmao_backend_au::ParameterInfo] {
+                    use std::sync::OnceLock;
+                    static PARAMS: OnceLock<Vec<sunmao_backend_au::ParameterInfo>> = OnceLock::new();
+                    PARAMS.get_or_init(|| {
+                        let params = #name::default();
+                        vec![#(#au_param_exprs),*]
+                    }).as_slice()
+                }
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     let expanded = quote! {
+        const _: () = {
+            const NUMERIC_IDS: &[u32] = &[#(#numeric_id_exprs),*];
+            let mut left = 0;
+            while left < NUMERIC_IDS.len() {
+                let mut right = left + 1;
+                while right < NUMERIC_IDS.len() {
+                    if NUMERIC_IDS[left] == NUMERIC_IDS[right] {
+                        panic!("Params contains duplicate or colliding numeric parameter IDs");
+                    }
+                    right += 1;
+                }
+                left += 1;
+            }
+        };
+
         impl sunmao_core::params::Params for #name {
             fn ids() -> &'static [&'static str] {
                 static IDS: &[&str] = &[#(#ids),*];
@@ -205,64 +274,73 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                     _ => {}
                 }
             }
-        }
 
-        #[cfg(target_os = "macos")]
-        impl sunmao_backend_au::SunmaoAuParamList for #name {
-            fn au_params() -> &'static [sunmao_backend_au::ParameterInfo] {
-                use std::sync::OnceLock;
-                static PARAMS: OnceLock<Vec<sunmao_backend_au::ParameterInfo>> = OnceLock::new();
-                PARAMS.get_or_init(|| {
-                    let params = #name::default();
-                    vec![#(#au_param_exprs),*]
-                }).as_slice()
+            fn descriptors(&self) -> Vec<sunmao_core::params::ParamDescriptor> {
+                vec![#(#descriptor_exprs),*]
             }
         }
+
+        #au_impl
     };
 
     TokenStream::from(expanded)
 }
 
-/// Generates plugin entry points for the specified formats.
+/// Generates VST3 and CLAP entry points from one plugin type.
 ///
 /// Usage:
 /// ```ignore
 /// sunmao_export!(MyPlugin);
-/// // Or specify formats:
-/// sunmao_export!(MyPlugin, Vst3, Clap);
+/// sunmao_export!(MyGuiPlugin, gui);
 /// ```
+struct ExportInput {
+    plugin_type: Type,
+    with_gui: bool,
+}
+
+impl Parse for ExportInput {
+    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
+        let plugin_type = input.parse()?;
+        let with_gui = if input.is_empty() {
+            false
+        } else {
+            input.parse::<Token![,]>()?;
+            let option: Ident = input.parse()?;
+            if option != "gui" {
+                return Err(syn::Error::new(option.span(), "expected `gui`"));
+            }
+            true
+        };
+        if !input.is_empty() {
+            return Err(input.error("unexpected tokens after export option"));
+        }
+        Ok(Self {
+            plugin_type,
+            with_gui,
+        })
+    }
+}
+
 #[proc_macro]
 pub fn sunmao_export(input: TokenStream) -> TokenStream {
-    let plugin_name = parse_macro_input!(input as Ident);
+    let ExportInput {
+        plugin_type,
+        with_gui,
+    } = parse_macro_input!(input as ExportInput);
 
-    // Generate entry points for all formats
-    let expanded = quote! {
-        // VST3 entry point
-        #[cfg(feature = "vst3")]
-        #[no_mangle]
-        pub extern "system" fn GetPluginFactory() -> *mut ::std::ffi::c_void {
-            sunmao_backend_vst3::create_factory::<#plugin_name>()
+    let expanded = if with_gui {
+        quote! {
+            ::sunmao::backend_vst3::export_vst3_plugin_with_gui!(
+                ::sunmao::backend_vst3::SunmaoVst3Wrapper<#plugin_type>
+            );
+            ::sunmao::backend_clap::export_sunmao_clap_plugin_with_gui!(#plugin_type);
         }
-
-        // CLAP entry point
-        #[cfg(feature = "clap")]
-        #[no_mangle]
-        pub static clap_entry: sunmao_backend_clap::ClapEntry = 
-            sunmao_backend_clap::make_entry::<#plugin_name>();
-
-        // AU entry point (macOS only)
-        #[cfg(all(feature = "au", target_os = "macos"))]
-        #[no_mangle]
-        pub extern "C" fn RustAUFactory(
-            desc: *mut ::std::ffi::c_void
-        ) -> *mut ::std::ffi::c_void {
-            sunmao_backend_au::create_instance::<#plugin_name>(desc)
-        }
-
-        // Standalone main
-        #[cfg(feature = "standalone")]
-        fn main() -> Result<(), Box<dyn std::error::Error>> {
-            sunmao_runtime::run_standalone::<#plugin_name>()
+    } else {
+        quote! {
+            ::sunmao::backend_vst3::export_vst3_plugin!(
+                ::sunmao::backend_vst3::SunmaoVst3Wrapper<#plugin_type>
+            );
+            ::sunmao::backend_clap::export_sunmao_clap_plugin!(#plugin_type);
         }
     };
 

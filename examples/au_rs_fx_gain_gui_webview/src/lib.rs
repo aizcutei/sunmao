@@ -1,11 +1,11 @@
 //! AU RS Fx Gain with WKWebView GUI
-//! 
+//!
 //! A gain effect with an HTML/CSS/JS slider rendered in WKWebView.
 //! Demonstrates bidirectional JS-Rust communication for parameter control.
 
 use au_rs::{
-    export_au_plugin, for_each_channel, fourcc, BufferList, ParameterInfo, ParameterUnit, Plugin,
-    PluginInfo,
+    BufferList, ParameterInfo, ParameterUnit, Plugin, PluginInfo, export_au_plugin,
+    for_each_channel, fourcc,
 };
 
 const PARAM_GAIN: u32 = 0;
@@ -65,10 +65,10 @@ mod gui {
     use std::ffi::c_void;
 
     use au_rs::{
+        NSPoint, NSRect, NSSize, get_parameter_local,
         gui::webview::{self, MessageCallback},
-        gui::{view_bounds, GuiConfig, GuiHandler, set_needs_display},
-        get_parameter_local, set_parameter_local,
-        NSRect, NSSize, NSPoint,
+        gui::{GuiConfig, GuiHandler, set_needs_display, view_bounds},
+        set_parameter_local,
     };
     use objc::runtime::Object;
 
@@ -101,7 +101,8 @@ mod gui {
                 if !WEBVIEW_GUI.is_null() {
                     let gui = &mut *WEBVIEW_GUI;
                     if !gui.audio_unit.is_null() {
-                        let _ = set_parameter_local(gui.audio_unit, PARAM_GAIN, gain.clamp(0.0, 2.0));
+                        let _ =
+                            set_parameter_local(gui.audio_unit, PARAM_GAIN, gain.clamp(0.0, 2.0));
                     }
                 }
             }
@@ -111,17 +112,17 @@ mod gui {
     impl GuiHandler for WebViewGui {
         fn init(&mut self, view: *mut Object, size: NSSize, audio_unit: *mut c_void) {
             self.audio_unit = audio_unit;
-            
+
             // Store self pointer for callback
             unsafe {
                 WEBVIEW_GUI = self as *mut WebViewGui;
             }
-            
+
             let frame = NSRect {
                 origin: NSPoint { x: 0.0, y: 0.0 },
                 size,
             };
-            
+
             // Create webview with message handler
             let web = webview::create_wkwebview_with_handler(
                 view,
@@ -130,11 +131,11 @@ mod gui {
                 on_js_message as MessageCallback,
                 std::ptr::null_mut(),
             );
-            
+
             // Load our HTML slider
             webview::load_html(web, SLIDER_HTML);
             self.webview = web;
-            
+
             // Update slider with current gain value after a short delay
             if !audio_unit.is_null() {
                 if let Ok(gain) = get_parameter_local(audio_unit, PARAM_GAIN) {
@@ -164,6 +165,10 @@ mod gui {
         view_class: "RustAUCocoaViewWry",
         view_superclass: "NSView",
         description: "Rust AU WKWebView",
+        preferred_size: Some(NSSize {
+            width: 400.0,
+            height: 120.0,
+        }),
     };
 }
 

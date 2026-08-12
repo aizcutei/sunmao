@@ -78,7 +78,9 @@ impl GlContext {
     ///
     /// Use [Self::get_fb_config_and_visual] to create both of these things.
     pub unsafe fn create(
-        window: c_ulong, display: *mut xlib::_XDisplay, config: FbConfig,
+        window: c_ulong,
+        display: *mut xlib::_XDisplay,
+        config: FbConfig,
     ) -> Result<GlContext, GlError> {
         if display.is_null() {
             return Err(GlError::InvalidWindowHandle);
@@ -89,7 +91,9 @@ impl GlContext {
             let glXCreateContextAttribsARB: GlXCreateContextAttribsARB = {
                 let addr = get_proc_address("glXCreateContextAttribsARB");
                 if addr.is_null() {
-                    return Err(GlError::CreationFailed(CreationFailedError::GetProcAddressFailed));
+                    return Err(GlError::CreationFailed(
+                        CreationFailedError::GetProcAddressFailed,
+                    ));
                 } else {
                     #[allow(clippy::missing_transmute_annotations)]
                     std::mem::transmute(addr)
@@ -100,7 +104,9 @@ impl GlContext {
             let glXSwapIntervalEXT: GlXSwapIntervalEXT = {
                 let addr = get_proc_address("glXSwapIntervalEXT");
                 if addr.is_null() {
-                    return Err(GlError::CreationFailed(CreationFailedError::GetProcAddressFailed));
+                    return Err(GlError::CreationFailed(
+                        CreationFailedError::GetProcAddressFailed,
+                    ));
                 } else {
                     #[allow(clippy::missing_transmute_annotations)]
                     std::mem::transmute(addr)
@@ -133,13 +139,17 @@ impl GlContext {
             error_handler.check()?;
 
             if context.is_null() {
-                return Err(GlError::CreationFailed(CreationFailedError::ContextCreationFailed));
+                return Err(GlError::CreationFailed(
+                    CreationFailedError::ContextCreationFailed,
+                ));
             }
 
             let res = glx::glXMakeCurrent(display, window, context);
             error_handler.check()?;
             if res == 0 {
-                return Err(GlError::CreationFailed(CreationFailedError::MakeCurrentFailed));
+                return Err(GlError::CreationFailed(
+                    CreationFailedError::MakeCurrentFailed,
+                ));
             }
 
             glXSwapIntervalEXT(display, window, config.gl_config.vsync as i32);
@@ -147,10 +157,16 @@ impl GlContext {
 
             if glx::glXMakeCurrent(display, 0, std::ptr::null_mut()) == 0 {
                 error_handler.check()?;
-                return Err(GlError::CreationFailed(CreationFailedError::MakeCurrentFailed));
+                return Err(GlError::CreationFailed(
+                    CreationFailedError::MakeCurrentFailed,
+                ));
             }
 
-            Ok(GlContext { window, display, context })
+            Ok(GlContext {
+                window,
+                display,
+                context,
+            })
         })
     }
 
@@ -158,7 +174,8 @@ impl GlContext {
     /// This needs to be passed to [Self::create] along with a handle to a window that was created
     /// using the visual also returned from this function.
     pub unsafe fn get_fb_config_and_visual(
-        display: *mut xlib::_XDisplay, config: GlConfig,
+        display: *mut xlib::_XDisplay,
+        config: GlConfig,
     ) -> Result<(FbConfig, WindowConfig), GlError> {
         errors::XErrorHandler::handle(display, |error_handler| {
             let screen = xlib::XDefaultScreen(display);
@@ -188,7 +205,9 @@ impl GlContext {
 
             error_handler.check()?;
             if n_configs <= 0 || fb_config.is_null() {
-                return Err(GlError::CreationFailed(CreationFailedError::InvalidFBConfig));
+                return Err(GlError::CreationFailed(
+                    CreationFailedError::InvalidFBConfig,
+                ));
             }
 
             // Now that we have a matching framebuffer config, we need to know which visual matches
@@ -200,8 +219,14 @@ impl GlContext {
             }
 
             Ok((
-                FbConfig { fb_config, gl_config: config },
-                WindowConfig { depth: (*visual).depth as u8, visual: (*visual).visualid as u32 },
+                FbConfig {
+                    fb_config,
+                    gl_config: config,
+                },
+                WindowConfig {
+                    depth: (*visual).depth as u8,
+                    visual: (*visual).visualid as u32,
+                },
             ))
         })
     }

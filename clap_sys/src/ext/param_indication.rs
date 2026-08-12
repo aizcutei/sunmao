@@ -1,6 +1,6 @@
-use crate::plugin::clap_plugin_t;
-use crate::id::clap_id;
 use crate::color::clap_color_t;
+use crate::id::clap_id;
+use crate::plugin::clap_plugin_t;
 use std::ffi::c_char;
 
 pub const CLAP_EXT_PARAM_INDICATION: &str = "clap.param-indication/4\0";
@@ -15,6 +15,22 @@ pub const CLAP_PARAM_INDICATION_AUTOMATION_OVERRIDING: u32 = 4;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct clap_plugin_param_indication_t {
-    pub set_mapping: Option<unsafe extern "C" fn(plugin: *const clap_plugin_t, param_id: clap_id, has_mapping: bool, color: *const clap_color_t, label: *const c_char, description: *const c_char)>,
-    pub set_automation: Option<unsafe extern "C" fn(plugin: *const clap_plugin_t, param_id: clap_id, automation_state: u32, color: *const clap_color_t)>,
+    pub set_mapping: Option<
+        unsafe extern "C" fn(
+            plugin: *const clap_plugin_t,
+            param_id: clap_id,
+            has_mapping: bool,
+            color: *const clap_color_t,
+            label: *const c_char,
+            description: *const c_char,
+        ),
+    >,
+    pub set_automation: Option<
+        unsafe extern "C" fn(
+            plugin: *const clap_plugin_t,
+            param_id: clap_id,
+            automation_state: u32,
+            color: *const clap_color_t,
+        ),
+    >,
 }

@@ -1,10 +1,10 @@
 //! Button widget - toggle or momentary button.
 
-use crate::{
-    GuiContext, Widget, WidgetId, WidgetState, Rect,
-    Event, MouseButton, Color, Fill, Stroke, TextAlign,
-};
 use super::next_widget_id;
+use crate::{
+    Color, Event, Fill, GuiContext, MouseButton, Rect, Stroke, TextAlign, Widget, WidgetId,
+    WidgetState,
+};
 
 /// Button behavior type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,45 +47,58 @@ impl Button {
             font_size: 13.0,
         }
     }
-    
+
     pub fn toggle(label: &str) -> Self {
         Self {
             button_type: ButtonType::Toggle,
             ..Self::new(label)
         }
     }
-    
+
     pub fn with_bounds(mut self, bounds: Rect) -> Self {
         self.bounds = bounds;
         self
     }
-    
+
     pub fn is_on(&self) -> bool {
         self.is_on
     }
-    
+
     pub fn set_on(&mut self, on: bool) {
         self.is_on = on;
     }
 }
 
 impl Widget for Button {
-    fn id(&self) -> WidgetId { self.id }
-    fn bounds(&self) -> Rect { self.bounds }
-    fn set_bounds(&mut self, bounds: Rect) { self.bounds = bounds; }
-    fn state(&self) -> WidgetState { self.state }
-    
+    fn id(&self) -> WidgetId {
+        self.id
+    }
+    fn bounds(&self) -> Rect {
+        self.bounds
+    }
+    fn set_bounds(&mut self, bounds: Rect) {
+        self.bounds = bounds;
+    }
+    fn state(&self) -> WidgetState {
+        self.state
+    }
+
     fn handle_event(&mut self, event: &Event) -> bool {
         match event {
             Event::MouseMove { x, y, .. } => {
                 self.state.hovered = self.bounds.contains(*x, *y);
                 false
             }
-            
-            Event::MouseDown { x, y, button: MouseButton::Left, .. } => {
+
+            Event::MouseDown {
+                x,
+                y,
+                button: MouseButton::Left,
+                ..
+            } => {
                 if self.bounds.contains(*x, *y) {
                     self.state.pressed = true;
-                    
+
                     match self.button_type {
                         ButtonType::Toggle => {
                             self.is_on = !self.is_on;
@@ -94,29 +107,32 @@ impl Widget for Button {
                             self.is_on = true;
                         }
                     }
-                    
+
                     return true;
                 }
                 false
             }
-            
-            Event::MouseUp { button: MouseButton::Left, .. } => {
+
+            Event::MouseUp {
+                button: MouseButton::Left,
+                ..
+            } => {
                 if self.state.pressed {
                     self.state.pressed = false;
-                    
+
                     if self.button_type == ButtonType::Momentary {
                         self.is_on = false;
                     }
-                    
+
                     return true;
                 }
                 false
             }
-            
+
             _ => false,
         }
     }
-    
+
     fn draw(&self, ctx: &mut dyn GuiContext) {
         let bg_color = if self.is_on || self.state.pressed {
             self.on_color
@@ -125,23 +141,27 @@ impl Widget for Button {
         } else {
             self.off_color
         };
-        
+
         // Background
         ctx.fill_rounded_rect(
-            self.bounds.x, self.bounds.y,
-            self.bounds.width, self.bounds.height,
+            self.bounds.x,
+            self.bounds.y,
+            self.bounds.width,
+            self.bounds.height,
             self.corner_radius,
             Fill::Solid(bg_color),
         );
-        
+
         // Border
         ctx.stroke_rounded_rect(
-            self.bounds.x, self.bounds.y,
-            self.bounds.width, self.bounds.height,
+            self.bounds.x,
+            self.bounds.y,
+            self.bounds.width,
+            self.bounds.height,
             self.corner_radius,
             Stroke::new(Color::rgb(0.4, 0.4, 0.45), 1.0),
         );
-        
+
         // Label
         ctx.draw_text(
             &self.label,

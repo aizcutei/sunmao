@@ -99,7 +99,9 @@ fn deinit_keyboard_hook(hwnd: HWNDWrapper) {
 }
 
 unsafe extern "system" fn keyboard_hook_callback(
-    n_code: c_int, wparam: WPARAM, lparam: LPARAM,
+    n_code: c_int,
+    wparam: WPARAM,
+    lparam: LPARAM,
 ) -> isize {
     let msg = lparam as *mut MSG;
 
@@ -132,7 +134,12 @@ unsafe fn offer_message_to_baseview(msg: *mut MSG) -> bool {
     }
 
     // check if this is one of our windows. if so, intercept it
-    if HOOK_STATE.read().unwrap().open_windows.contains(&HWNDWrapper(msg.hwnd)) {
+    if HOOK_STATE
+        .read()
+        .unwrap()
+        .open_windows
+        .contains(&HWNDWrapper(msg.hwnd))
+    {
         let _ = wnd_proc(msg.hwnd, msg.message, msg.wParam, msg.lParam);
 
         return true;

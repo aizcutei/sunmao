@@ -76,7 +76,7 @@ mod gui {
         gui::{
             GuiConfig, GuiHandler, flush_context, make_current_context, open_gl_context,
             set_best_resolution, set_needs_display, set_pixel_format, update_open_gl_view,
-            view_bounds, view_backing_bounds,
+            view_backing_bounds, view_bounds,
         },
         set_parameter_local,
     };
@@ -150,7 +150,7 @@ mod gui {
             ];
             set_pixel_format(view, &attrs);
             set_best_resolution(view, true);
-            
+
             // Get initial gain
             if !audio_unit.is_null() {
                 if let Ok(value) = get_parameter_local(audio_unit, PARAM_GAIN) {
@@ -162,7 +162,7 @@ mod gui {
         fn draw(&mut self, view: *mut Object, _audio_unit: *mut c_void, _rect: NSRect) {
             let ctx = open_gl_context(view);
             make_current_context(ctx);
-            
+
             if self.ctx.is_none() {
                 self.ctx = Some(glow_safe::GlowCtx::new());
             }
@@ -175,13 +175,13 @@ mod gui {
                     }
                 }
             }
-            
+
             if let Some(gl) = self.ctx.as_ref() {
                 // Always clear background
                 let bounds: NSRect = view_backing_bounds(view);
                 let width = bounds.size.width.max(1.0) as i32;
                 let height = bounds.size.height.max(1.0) as i32;
-    
+
                 gl.viewport(0, 0, width, height);
                 // Vibrant dark blue background
                 gl.clear_color(0.12, 0.12, 0.18, 1.0);
@@ -189,21 +189,21 @@ mod gui {
 
                 if let Some(resources) = self.gl.as_ref() {
                     let aspect = width as f32 / height as f32;
-        
+
                     gl.enable(glow_safe::BLEND);
                     gl.blend_func(glow_safe::SRC_ALPHA, glow_safe::ONE_MINUS_SRC_ALPHA);
-        
+
                     gl.use_program(Some(resources.program));
-                    
+
                     let normalized_gain = (self.gain / 2.0).clamp(0.0, 1.0);
-                    
+
                     gl.uniform1f(resources.gain_uniform.as_ref(), normalized_gain);
                     gl.uniform1f(resources.aspect_uniform.as_ref(), aspect);
-                    
+
                     gl.bind_vertex_array(Some(resources.vao));
                     gl.draw_arrays(glow_safe::TRIANGLES, 0, 6);
                 }
-                
+
                 gl.flush();
                 flush_context(ctx);
             }
@@ -273,6 +273,10 @@ mod gui {
             view_class: "RustGainGuiView",
             view_superclass: "NSOpenGLView",
             description: "Rust Gain (OpenGL)",
+            preferred_size: Some(NSSize {
+                width: 400.0,
+                height: 100.0,
+            }),
         }
     }
 
@@ -282,7 +286,7 @@ mod gui {
         let aspect_uniform = gl.get_uniform_location(program, "u_aspect");
         let vao = gl.create_vertex_array();
         let vbo = gl.create_buffer();
-        
+
         // Full screen quad
         #[rustfmt::skip]
         let vertices: [f32; 12] = [
@@ -380,28 +384,32 @@ void main() {
         gl.attach_shader(program, fragment_shader);
         gl.bind_attrib_location(program, 0, "position");
         gl.link_program(program);
-        
+
         if !gl.get_program_link_status(program) {
             let log = gl.get_program_info_log(program);
             return Err(format!("Program link error: {}", log));
         }
-        
+
         gl.delete_shader(vertex_shader);
         gl.delete_shader(fragment_shader);
 
         Ok(program)
     }
 
-    fn compile_shader(gl: &glow_safe::GlowCtx, kind: u32, source: &[u8]) -> Result<glow_safe::Shader, String> {
+    fn compile_shader(
+        gl: &glow_safe::GlowCtx,
+        kind: u32,
+        source: &[u8],
+    ) -> Result<glow_safe::Shader, String> {
         let shader = gl.create_shader(kind);
         gl.shader_source(shader, std::str::from_utf8(source).unwrap_or_default());
         gl.compile_shader(shader);
-        
+
         if !gl.get_shader_compile_status(shader) {
             let log = gl.get_shader_info_log(shader);
             return Err(format!("Shader compile error: {}", log));
         }
-        
+
         Ok(shader)
     }
 }
@@ -424,6 +432,7 @@ mod gui {
             view_class: "RustGainGuiView",
             view_superclass: "NSView",
             description: "Rust Gain (OpenGL)",
+            preferred_size: None,
         }
     }
 }

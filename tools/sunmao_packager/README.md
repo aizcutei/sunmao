@@ -7,9 +7,11 @@ A unified command-line tool for packaging audio plugins (AudioUnit, VST3, CLAP) 
 - **Cross-Platform Support**: Handles platform-specific bundle structures for macOS, Windows, and Linux.
 - **Unified Interface**: Single binary to package all formats.
 - **AU Support (macOS)**: Generates `.component` bundles, creates `Info.plist` with required keys, and supports code signing.
-- **VST3 Support**: Creates `.vst3` bundles with correct architecture folders (`MacOS`, `x86_64-win`, `x86_64-linux`).
-- **CLAP Support**: Creates `.clap` bundles on macOS and single-file/folder structures on other platforms according to spec.
+- **VST3 Support**: Creates `.vst3` bundles with the standard platform and architecture layout.
+- **CLAP Support**: Creates `.clap` bundles on macOS and single-file modules on Windows and Linux.
 - **Code Signing**: Built-in support for macOS code signing (`codesign`).
+- **Input Validation**: Rejects missing/non-file inputs, wrong native module formats or architectures, malformed metadata, and unusable output paths before replacing an existing plugin.
+- **Staged Publication**: Builds and signs beside the destination, then publishes the completed plugin while retaining the previous output if staging fails.
 
 ## Usage
 
@@ -64,6 +66,8 @@ cargo run -p sunmao_packager -- clap \
 
 ## Platform Details
 
-- **macOS**: All formats (AU, VST3, CLAP) are packaged as Bundles (`.component`, `.vst3`, `.clap`) containing `Contents/MacOS`, `Resources`, `Info.plist`, etc.
-- **Windows**: VST3 is packaged as `MyPlugin.vst3/Contents/x86_64-win/MyPlugin.vst3`. CLAP is typically a single `.clap` file (DLL).
-- **Linux**: VST3 is packaged as `MyPlugin.vst3/Contents/x86_64-linux/MyPlugin.so`. CLAP is typically a single `.clap` file (SO).
+- **macOS**: All formats are bundles. The module is extensionless and named after the bundle, for example `MyPlugin.vst3/Contents/MacOS/MyPlugin`.
+- **Windows**: VST3 modules use `Contents/x86-win`, `Contents/x86_64-win`, or `Contents/arm_64-win` and are named `MyPlugin.vst3`. CLAP is a single `MyPlugin.clap` file.
+- **Linux**: VST3 modules use `Contents/i386-linux`, `Contents/x86_64-linux`, `Contents/aarch64-linux`, or `Contents/riscv64-linux` and are named `MyPlugin.so`. CLAP is a single `MyPlugin.clap` file.
+
+The packager validates a single native architecture but does not merge multiple binaries into a macOS universal binary or a multi-architecture VST3 bundle. Code signing remains macOS-only and uses the existing ad-hoc identity; Windows Authenticode, Linux package signing, notarization, and installer generation are outside its scope.

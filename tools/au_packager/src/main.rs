@@ -147,7 +147,7 @@ fn package_component(args: &Args) -> Result<(), String> {
 
     let plist = render_plist(args, &executable_name)?;
     fs::write(contents_dir.join("Info.plist"), plist).map_err(|err| err.to_string())?;
-    
+
     // Write PkgInfo file for proper bundle recognition
     fs::write(contents_dir.join("PkgInfo"), "BNDL????").map_err(|err| err.to_string())?;
 

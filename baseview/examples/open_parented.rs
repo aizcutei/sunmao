@@ -12,13 +12,17 @@ struct WrappedWindow {
 }
 
 impl HasWindowHandle for WrappedWindow {
-    fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
         unsafe { Ok(raw_window_handle::WindowHandle::borrow_raw(self.window)) }
     }
 }
 
 impl HasDisplayHandle for WrappedWindow {
-    fn display_handle(&self) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         unsafe { Ok(raw_window_handle::DisplayHandle::borrow_raw(self.display)) }
     }
 }
@@ -43,17 +47,15 @@ impl ParentWindowHandler {
 
         let ctx = softbuffer::Context::new(wrapped.clone()).unwrap();
         let mut surface = softbuffer::Surface::new(&ctx, wrapped.clone()).unwrap();
-        surface.resize(NonZeroU32::new(512).unwrap(), NonZeroU32::new(512).unwrap()).unwrap();
+        surface
+            .resize(NonZeroU32::new(512).unwrap(), NonZeroU32::new(512).unwrap())
+            .unwrap();
 
-        let window_open_options = baseview::WindowOpenOptions {
-            title: "baseview child".into(),
-            size: baseview::Size::new(256.0, 256.0),
-            scale: WindowScalePolicy::SystemScaleFactor,
-
-            // TODO: Add an example that uses the OpenGL context
-            #[cfg(feature = "opengl")]
-            gl_config: None,
-        };
+        let window_open_options = baseview::WindowOpenOptions::new(
+            "baseview child",
+            baseview::Size::new(256.0, 256.0),
+            WindowScalePolicy::SystemScaleFactor,
+        );
         let child_window =
             Window::open_parented(window, window_open_options, ChildWindowHandler::new);
 
@@ -85,9 +87,10 @@ impl WindowHandler for ParentWindowHandler {
                 let new_size = info.physical_size();
                 self.current_size = new_size;
 
-                if let (Some(width), Some(height)) =
-                    (NonZeroU32::new(new_size.width), NonZeroU32::new(new_size.height))
-                {
+                if let (Some(width), Some(height)) = (
+                    NonZeroU32::new(new_size.width),
+                    NonZeroU32::new(new_size.height),
+                ) {
                     self.surface.resize(width, height).unwrap();
                     self.damaged = true;
                 }
@@ -119,10 +122,17 @@ impl ChildWindowHandler {
 
         let ctx = softbuffer::Context::new(wrapped.clone()).unwrap();
         let mut surface = softbuffer::Surface::new(&ctx, wrapped.clone()).unwrap();
-        surface.resize(NonZeroU32::new(512).unwrap(), NonZeroU32::new(512).unwrap()).unwrap();
+        surface
+            .resize(NonZeroU32::new(512).unwrap(), NonZeroU32::new(512).unwrap())
+            .unwrap();
 
         // TODO: no way to query physical size initially?
-        Self { _ctx: ctx, surface, current_size: PhySize::new(256, 256), damaged: true }
+        Self {
+            _ctx: ctx,
+            surface,
+            current_size: PhySize::new(256, 256),
+            damaged: true,
+        }
     }
 }
 
@@ -143,9 +153,10 @@ impl WindowHandler for ChildWindowHandler {
                 let new_size = info.physical_size();
                 self.current_size = new_size;
 
-                if let (Some(width), Some(height)) =
-                    (NonZeroU32::new(new_size.width), NonZeroU32::new(new_size.height))
-                {
+                if let (Some(width), Some(height)) = (
+                    NonZeroU32::new(new_size.width),
+                    NonZeroU32::new(new_size.height),
+                ) {
                     self.surface.resize(width, height).unwrap();
                     self.damaged = true;
                 }
@@ -160,15 +171,11 @@ impl WindowHandler for ChildWindowHandler {
 }
 
 fn main() {
-    let window_open_options = baseview::WindowOpenOptions {
-        title: "baseview".into(),
-        size: baseview::Size::new(512.0, 512.0),
-        scale: WindowScalePolicy::SystemScaleFactor,
-
-        // TODO: Add an example that uses the OpenGL context
-        #[cfg(feature = "opengl")]
-        gl_config: None,
-    };
+    let window_open_options = baseview::WindowOpenOptions::new(
+        "baseview",
+        baseview::Size::new(512.0, 512.0),
+        WindowScalePolicy::SystemScaleFactor,
+    );
 
     Window::open_blocking(window_open_options, ParentWindowHandler::new);
 }

@@ -4,10 +4,12 @@ version = "0.1.0"
 edition = "2021"
 description = "Standalone runtime for SunMao plugins"
 license = "MIT OR Apache-2.0"
+build = "build.rs"
 
 [features]
 default = []
-system-capture = ["ruhear"]
+# Final macOS applications must build with MACOSX_DEPLOYMENT_TARGET=13.0 or newer.
+system-capture = ["dep:ruhear", "dep:screencapturekit"]
 
 [dependencies]
 sunmao_core = { path = "../core" }
@@ -19,3 +21,5 @@ ringbuf = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ruhear = { version = "0.1", optional = true }
+# ruhear 0.1.1 uses the builder API removed by screencapturekit 1.5.
+screencapturekit = { version = "=1.4.2", optional = true }

@@ -156,12 +156,22 @@ pub struct clap_event_midi2_t {
 pub struct clap_input_events_t {
     pub ctx: *mut c_void,
     pub size: Option<unsafe extern "C" fn(list: *const clap_input_events_t) -> u32>,
-    pub get: Option<unsafe extern "C" fn(list: *const clap_input_events_t, index: u32) -> *const clap_event_header_t>,
+    pub get: Option<
+        unsafe extern "C" fn(
+            list: *const clap_input_events_t,
+            index: u32,
+        ) -> *const clap_event_header_t,
+    >,
 }
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct clap_output_events_t {
     pub ctx: *mut c_void,
-    pub try_push: Option<unsafe extern "C" fn(list: *const clap_output_events_t, event: *const clap_event_header_t) -> bool>,
+    pub try_push: Option<
+        unsafe extern "C" fn(
+            list: *const clap_output_events_t,
+            event: *const clap_event_header_t,
+        ) -> bool,
+    >,
 }

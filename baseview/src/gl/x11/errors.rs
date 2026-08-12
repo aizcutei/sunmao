@@ -43,12 +43,14 @@ impl<'a> XErrorHandler<'a> {
     /// The given display pointer *must* be and remain valid for the duration of this function, as
     /// well as for the duration of the given `handler` closure.
     pub unsafe fn handle<T, F: FnOnce(&mut XErrorHandler) -> T>(
-        display: *mut xlib::Display, handler: F,
+        display: *mut xlib::Display,
+        handler: F,
     ) -> T {
         /// # Safety
         /// The given display and error pointers *must* be valid for the duration of this function.
         unsafe extern "C" fn error_handler(
-            _dpy: *mut xlib::Display, err: *mut xlib::XErrorEvent,
+            _dpy: *mut xlib::Display,
+            err: *mut xlib::XErrorEvent,
         ) -> i32 {
             // SAFETY: the error pointer should be safe to access
             let err = &*err;
@@ -159,7 +161,11 @@ impl Debug for XLibError {
 
 impl Display for XLibError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "XLib error: {} (error code {})", &self.display_name, self.error_code)
+        write!(
+            f,
+            "XLib error: {} (error code {})",
+            &self.display_name, self.error_code
+        )
     }
 }
 

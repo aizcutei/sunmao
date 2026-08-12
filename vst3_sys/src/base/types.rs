@@ -116,32 +116,98 @@ pub fn str16cpy_safe(dst: &mut String128, src: &str) {
 // TUID Macro
 // =============================================================================
 
-/// Creates a TUID from 4 u32 values (non-COM byte order for macOS/Linux)
+#[doc(hidden)]
+pub const fn make_tuid_for_layout(
+    l1: u32,
+    l2: u32,
+    l3: u32,
+    l4: u32,
+    com_compatible: bool,
+) -> TUID {
+    if com_compatible {
+        [
+            (l1 & 0xFF) as i8,
+            ((l1 >> 8) & 0xFF) as i8,
+            ((l1 >> 16) & 0xFF) as i8,
+            ((l1 >> 24) & 0xFF) as i8,
+            ((l2 >> 16) & 0xFF) as i8,
+            ((l2 >> 24) & 0xFF) as i8,
+            (l2 & 0xFF) as i8,
+            ((l2 >> 8) & 0xFF) as i8,
+            ((l3 >> 24) & 0xFF) as i8,
+            ((l3 >> 16) & 0xFF) as i8,
+            ((l3 >> 8) & 0xFF) as i8,
+            (l3 & 0xFF) as i8,
+            ((l4 >> 24) & 0xFF) as i8,
+            ((l4 >> 16) & 0xFF) as i8,
+            ((l4 >> 8) & 0xFF) as i8,
+            (l4 & 0xFF) as i8,
+        ]
+    } else {
+        [
+            ((l1 >> 24) & 0xFF) as i8,
+            ((l1 >> 16) & 0xFF) as i8,
+            ((l1 >> 8) & 0xFF) as i8,
+            (l1 & 0xFF) as i8,
+            ((l2 >> 24) & 0xFF) as i8,
+            ((l2 >> 16) & 0xFF) as i8,
+            ((l2 >> 8) & 0xFF) as i8,
+            (l2 & 0xFF) as i8,
+            ((l3 >> 24) & 0xFF) as i8,
+            ((l3 >> 16) & 0xFF) as i8,
+            ((l3 >> 8) & 0xFF) as i8,
+            (l3 & 0xFF) as i8,
+            ((l4 >> 24) & 0xFF) as i8,
+            ((l4 >> 16) & 0xFF) as i8,
+            ((l4 >> 8) & 0xFF) as i8,
+            (l4 & 0xFF) as i8,
+        ]
+    }
+}
+
+#[doc(hidden)]
+pub const fn make_tuid(l1: u32, l2: u32, l3: u32, l4: u32) -> TUID {
+    make_tuid_for_layout(l1, l2, l3, l4, cfg!(target_os = "windows"))
+}
+
+/// Creates a VST3 TUID, using COM GUID memory layout on Windows.
 #[macro_export]
 macro_rules! uid {
-    ($l1:expr, $l2:expr, $l3:expr, $l4:expr) => {{
-        const fn make_uid(l1: u32, l2: u32, l3: u32, l4: u32) -> [i8; 16] {
+    ($l1:expr, $l2:expr, $l3:expr, $l4:expr) => {
+        $crate::base::types::make_tuid($l1 as u32, $l2 as u32, $l3 as u32, $l4 as u32)
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vst3_uid_layout_matches_native_and_com_golden_bytes() {
+        let native =
+            make_tuid_for_layout(0xE831_FF31, 0xF2D5_4301, 0x928E_BBEE, 0x2569_7802, false);
+        assert_eq!(
+            native.map(|byte| byte as u8),
             [
-                ((l1 >> 24) & 0xFF) as i8,
-                ((l1 >> 16) & 0xFF) as i8,
-                ((l1 >> 8) & 0xFF) as i8,
-                (l1 & 0xFF) as i8,
-                ((l2 >> 24) & 0xFF) as i8,
-                ((l2 >> 16) & 0xFF) as i8,
-                ((l2 >> 8) & 0xFF) as i8,
-                (l2 & 0xFF) as i8,
-                ((l3 >> 24) & 0xFF) as i8,
-                ((l3 >> 16) & 0xFF) as i8,
-                ((l3 >> 8) & 0xFF) as i8,
-                (l3 & 0xFF) as i8,
-                ((l4 >> 24) & 0xFF) as i8,
-                ((l4 >> 16) & 0xFF) as i8,
-                ((l4 >> 8) & 0xFF) as i8,
-                (l4 & 0xFF) as i8,
+                0xE8, 0x31, 0xFF, 0x31, 0xF2, 0xD5, 0x43, 0x01, 0x92, 0x8E, 0xBB, 0xEE, 0x25, 0x69,
+                0x78, 0x02,
             ]
-        }
-        make_uid($l1 as u32, $l2 as u32, $l3 as u32, $l4 as u32)
-    }};
+        );
+
+        let com = make_tuid_for_layout(0xE831_FF31, 0xF2D5_4301, 0x928E_BBEE, 0x2569_7802, true);
+        assert_eq!(
+            com.map(|byte| byte as u8),
+            [
+                0x31, 0xFF, 0x31, 0xE8, 0xD5, 0xF2, 0x01, 0x43, 0x92, 0x8E, 0xBB, 0xEE, 0x25, 0x69,
+                0x78, 0x02,
+            ]
+        );
+
+        #[cfg(target_os = "windows")]
+        assert_eq!(crate::vst::iid::IComponent, com);
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(crate::vst::iid::IComponent, native);
+    }
 }
 
 // =============================================================================
@@ -151,8 +217,11 @@ macro_rules! uid {
 /// FUnknown vtable - the base interface for all COM objects
 #[repr(C)]
 pub struct IUnknownVtbl {
-    pub query_interface:
-        unsafe extern "system" fn(this: *mut c_void, iid: *const TUID, obj: *mut *mut c_void) -> tresult,
+    pub query_interface: unsafe extern "system" fn(
+        this: *mut c_void,
+        iid: *const TUID,
+        obj: *mut *mut c_void,
+    ) -> tresult,
     pub add_ref: unsafe extern "system" fn(this: *mut c_void) -> uint32,
     pub release: unsafe extern "system" fn(this: *mut c_void) -> uint32,
 }

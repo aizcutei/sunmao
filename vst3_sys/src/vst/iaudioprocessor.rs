@@ -1,8 +1,8 @@
 //! IAudioProcessor interface
 
-use std::ffi::c_void;
 use crate::base::types::*;
 use crate::vst::types::*;
+use std::ffi::c_void;
 
 // =============================================================================
 // Structs
@@ -61,9 +61,11 @@ pub struct IAudioProcessorVtbl {
         index: int32,
         arr: *mut SpeakerArrangement,
     ) -> tresult,
-    pub can_process_sample_size: unsafe extern "system" fn(this: *mut c_void, symbolic_sample_size: int32) -> tresult,
+    pub can_process_sample_size:
+        unsafe extern "system" fn(this: *mut c_void, symbolic_sample_size: int32) -> tresult,
     pub get_latency_samples: unsafe extern "system" fn(this: *mut c_void) -> uint32,
-    pub setup_processing: unsafe extern "system" fn(this: *mut c_void, setup: *mut ProcessSetup) -> tresult,
+    pub setup_processing:
+        unsafe extern "system" fn(this: *mut c_void, setup: *mut ProcessSetup) -> tresult,
     pub set_processing: unsafe extern "system" fn(this: *mut c_void, state: TBool) -> tresult,
     pub process: unsafe extern "system" fn(this: *mut c_void, data: *mut ProcessData) -> tresult,
     pub get_tail_samples: unsafe extern "system" fn(this: *mut c_void) -> uint32,

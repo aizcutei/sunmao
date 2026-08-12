@@ -1,6 +1,6 @@
-use crate::plugin::clap_plugin_t;
 use crate::host::clap_host_t;
 use crate::id::clap_id;
+use crate::plugin::clap_plugin_t;
 use std::ffi::{c_char, c_void};
 
 pub const CLAP_EXT_CONTEXT_MENU: &str = "clap.context-menu/1\0";
@@ -60,22 +60,65 @@ pub struct clap_context_menu_submenu_t {
 #[derive(Debug, Copy, Clone)]
 pub struct clap_context_menu_builder_t {
     pub ctx: *mut c_void,
-    pub add_item: Option<unsafe extern "C" fn(builder: *const clap_context_menu_builder_t, item_kind: clap_context_menu_item_kind_t, item_data: *const c_void) -> bool>,
-    pub supports: Option<unsafe extern "C" fn(builder: *const clap_context_menu_builder_t, item_kind: clap_context_menu_item_kind_t) -> bool>,
+    pub add_item: Option<
+        unsafe extern "C" fn(
+            builder: *const clap_context_menu_builder_t,
+            item_kind: clap_context_menu_item_kind_t,
+            item_data: *const c_void,
+        ) -> bool,
+    >,
+    pub supports: Option<
+        unsafe extern "C" fn(
+            builder: *const clap_context_menu_builder_t,
+            item_kind: clap_context_menu_item_kind_t,
+        ) -> bool,
+    >,
 }
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct clap_plugin_context_menu_t {
-    pub populate: Option<unsafe extern "C" fn(plugin: *const clap_plugin_t, target: *const clap_context_menu_target_t, builder: *const clap_context_menu_builder_t) -> bool>,
-    pub perform: Option<unsafe extern "C" fn(plugin: *const clap_plugin_t, target: *const clap_context_menu_target_t, action_id: clap_id) -> bool>,
+    pub populate: Option<
+        unsafe extern "C" fn(
+            plugin: *const clap_plugin_t,
+            target: *const clap_context_menu_target_t,
+            builder: *const clap_context_menu_builder_t,
+        ) -> bool,
+    >,
+    pub perform: Option<
+        unsafe extern "C" fn(
+            plugin: *const clap_plugin_t,
+            target: *const clap_context_menu_target_t,
+            action_id: clap_id,
+        ) -> bool,
+    >,
 }
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct clap_host_context_menu_t {
-    pub populate: Option<unsafe extern "C" fn(host: *const clap_host_t, target: *const clap_context_menu_target_t, builder: *const clap_context_menu_builder_t) -> bool>,
-    pub perform: Option<unsafe extern "C" fn(host: *const clap_host_t, target: *const clap_context_menu_target_t, action_id: clap_id) -> bool>,
+    pub populate: Option<
+        unsafe extern "C" fn(
+            host: *const clap_host_t,
+            target: *const clap_context_menu_target_t,
+            builder: *const clap_context_menu_builder_t,
+        ) -> bool,
+    >,
+    pub perform: Option<
+        unsafe extern "C" fn(
+            host: *const clap_host_t,
+            target: *const clap_context_menu_target_t,
+            action_id: clap_id,
+        ) -> bool,
+    >,
     pub can_popup: Option<unsafe extern "C" fn(host: *const clap_host_t) -> bool>,
-    pub popup: Option<unsafe extern "C" fn(host: *const clap_host_t, target: *const clap_context_menu_target_t, screen_index: i32, x: i32, y: i32) -> bool>,
+    pub popup: Option<
+        unsafe extern "C" fn(
+            host: *const clap_host_t,
+            target: *const clap_context_menu_target_t,
+            screen_index: i32,
+            x: i32,
+            y: i32,
+        ) -> bool,
+    >,
 }

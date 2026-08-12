@@ -1,14 +1,14 @@
 //! Render Extension for clap_rs
-//! 
+//!
 //! Switch between realtime and offline rendering modes.
 
 use crate::plugin::Plugin;
 use crate::plugin_instance::PluginInstance;
-use clap_sys::plugin::clap_plugin_t;
 use clap_sys::ext::render::{
-    clap_plugin_render_t, clap_plugin_render_mode,
-    CLAP_EXT_RENDER, CLAP_RENDER_REALTIME, CLAP_RENDER_OFFLINE
+    CLAP_EXT_RENDER, CLAP_RENDER_OFFLINE, CLAP_RENDER_REALTIME, clap_plugin_render_mode,
+    clap_plugin_render_t,
 };
+use clap_sys::plugin::clap_plugin_t;
 
 /// Rendering mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,15 +41,19 @@ pub(crate) unsafe extern "C" fn render_has_hard_realtime_requirement<P: Plugin>(
     plugin: *const clap_plugin_t,
 ) -> bool {
     let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
-    instance.plugin.has_hard_realtime_requirement()
+    unsafe { instance.controller() }.has_hard_realtime_requirement()
 }
 
 pub(crate) unsafe extern "C" fn render_set<P: Plugin>(
     plugin: *const clap_plugin_t,
     mode: clap_plugin_render_mode,
 ) -> bool {
-    let instance = unsafe { &mut *((*plugin).plugin_data as *mut PluginInstance<P>) };
-    instance.plugin.set_render_mode(RenderMode::from(mode))
+    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
+    let updated = unsafe { instance.controller_mut() }.set_render_mode(RenderMode::from(mode));
+    if updated {
+        unsafe { instance.refresh_tail_cache() };
+    }
+    updated
 }
 
 /// Create render extension struct
@@ -62,22 +66,26 @@ pub(crate) fn create_render_ext<P: Plugin>() -> clap_plugin_render_t {
 
 // ======= GUI Plugin Support =======
 
-use crate::plugin_instance::PluginInstanceWithGui;
 use crate::ext::gui::GuiHandler;
+use crate::plugin_instance::PluginInstanceWithGui;
 
 pub(crate) unsafe extern "C" fn render_has_hard_realtime_requirement_gui<P: Plugin + GuiHandler>(
     plugin: *const clap_plugin_t,
 ) -> bool {
     let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
-    instance.plugin.has_hard_realtime_requirement()
+    unsafe { instance.controller() }.has_hard_realtime_requirement()
 }
 
 pub(crate) unsafe extern "C" fn render_set_gui<P: Plugin + GuiHandler>(
     plugin: *const clap_plugin_t,
     mode: clap_plugin_render_mode,
 ) -> bool {
-    let instance = unsafe { &mut *((*plugin).plugin_data as *mut PluginInstanceWithGui<P>) };
-    instance.plugin.set_render_mode(RenderMode::from(mode))
+    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
+    let updated = unsafe { instance.controller_mut() }.set_render_mode(RenderMode::from(mode));
+    if updated {
+        unsafe { instance.refresh_tail_cache() };
+    }
+    updated
 }
 
 pub(crate) fn create_render_ext_gui<P: Plugin + GuiHandler>() -> clap_plugin_render_t {
@@ -86,5 +94,3 @@ pub(crate) fn create_render_ext_gui<P: Plugin + GuiHandler>() -> clap_plugin_ren
         set: Some(render_set_gui::<P>),
     }
 }
-
-

@@ -1,14 +1,16 @@
-pub mod plugin;
-pub mod plugin_instance;
 pub mod entry;
 pub mod events;
-pub mod process;
 pub mod ext;
 pub mod gui;
+pub mod plugin;
+pub mod plugin_instance;
+pub mod process;
 
-pub use plugin::{Plugin, PluginInfo, HostHandle, CLAP_VERSION, CLAP_PROCESS_CONTINUE};
-pub use ext::{AudioPortInfo, NotePortInfo, ParameterInfo};
 pub use entry::PluginEntry;
+pub use ext::{AudioPortInfo, NotePortInfo, ParameterInfo};
+pub use plugin::{
+    AudioProcessor, CLAP_PROCESS_CONTINUE, CLAP_VERSION, HostHandle, Plugin, PluginInfo,
+};
 
 /// Re-export clap_sys for macro and type compatibility
 /// Users don't need to add clap_sys as a dependency

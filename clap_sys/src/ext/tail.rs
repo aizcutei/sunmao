@@ -1,5 +1,5 @@
-use crate::plugin::clap_plugin_t;
 use crate::host::clap_host_t;
+use crate::plugin::clap_plugin_t;
 
 pub const CLAP_EXT_TAIL: &str = "clap.tail\0";
 

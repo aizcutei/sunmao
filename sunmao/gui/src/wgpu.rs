@@ -113,6 +113,16 @@ impl WgpuContext {
         self.height = height;
     }
 
+    /// Get a reference to the wgpu device
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    /// Get a reference to the wgpu queue
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+
     /// Set the scale factor
     pub fn set_scale(&mut self, scale: f32) {
         self.scale = scale;
@@ -123,15 +133,21 @@ impl WgpuContext {
         self.vertices.clear();
     }
 
-    /// End the frame and render
+    /// End the frame and render over a transparent clear color.
     pub fn end_frame(&mut self, view: &wgpu::TextureView) {
-        let vertex_buffer = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("SunMao GUI Vertex Buffer"),
-                contents: bytemuck::cast_slice(&self.vertices),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
+        self.end_frame_with_clear(view, Color::TRANSPARENT);
+    }
+
+    /// End the frame and render over the configured clear color.
+    pub fn end_frame_with_clear(&mut self, view: &wgpu::TextureView, clear_color: Color) {
+        let vertex_buffer = (!self.vertices.is_empty()).then(|| {
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("SunMao GUI Vertex Buffer"),
+                    contents: bytemuck::cast_slice(&self.vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                })
+        });
 
         let mut encoder = self
             .device
@@ -146,7 +162,7 @@ impl WgpuContext {
                     view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        load: wgpu::LoadOp::Clear(to_wgpu_color(clear_color)),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -155,9 +171,11 @@ impl WgpuContext {
                 occlusion_query_set: None,
             });
 
-            render_pass.set_pipeline(&self.pipeline);
-            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-            render_pass.draw(0..self.vertices.len() as u32, 0..1);
+            if let Some(vertex_buffer) = &vertex_buffer {
+                render_pass.set_pipeline(&self.pipeline);
+                render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                render_pass.draw(0..self.vertices.len() as u32, 0..1);
+            }
         }
 
         self.queue.submit(Some(encoder.finish()));
@@ -179,6 +197,29 @@ impl WgpuContext {
 
     fn set_color(&mut self, color: Color) {
         self.current_color = color;
+    }
+}
+
+fn to_wgpu_color(color: Color) -> wgpu::Color {
+    wgpu::Color {
+        r: color.r as f64,
+        g: color.g as f64,
+        b: color.b as f64,
+        a: color.a as f64,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clear_color_preserves_rgba_components() {
+        let color = to_wgpu_color(Color::rgba(0.1, 0.2, 0.3, 0.4));
+        assert_eq!(color.r, 0.1_f32 as f64);
+        assert_eq!(color.g, 0.2_f32 as f64);
+        assert_eq!(color.b, 0.3_f32 as f64);
+        assert_eq!(color.a, 0.4_f32 as f64);
     }
 }
 

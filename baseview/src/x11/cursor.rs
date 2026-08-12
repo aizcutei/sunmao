@@ -19,7 +19,9 @@ fn create_empty_cursor(conn: &XCBConnection, screen: usize) -> Result<Cursor, Bo
 }
 
 fn load_cursor(
-    conn: &XCBConnection, cursor_handle: &CursorHandle, name: &str,
+    conn: &XCBConnection,
+    cursor_handle: &CursorHandle,
+    name: &str,
 ) -> Result<Option<Cursor>, Box<dyn Error>> {
     let cursor = cursor_handle.load_cursor(conn, name)?;
     if cursor != x11rb::NONE {
@@ -30,7 +32,9 @@ fn load_cursor(
 }
 
 fn load_first_existing_cursor(
-    conn: &XCBConnection, cursor_handle: &CursorHandle, names: &[&str],
+    conn: &XCBConnection,
+    cursor_handle: &CursorHandle,
+    names: &[&str],
 ) -> Result<Option<Cursor>, Box<dyn Error>> {
     for name in names {
         let cursor = load_cursor(conn, cursor_handle, name)?;
@@ -43,7 +47,10 @@ fn load_first_existing_cursor(
 }
 
 pub(super) fn get_xcursor(
-    conn: &XCBConnection, screen: usize, cursor_handle: &CursorHandle, cursor: MouseCursor,
+    conn: &XCBConnection,
+    screen: usize,
+    cursor_handle: &CursorHandle,
+    cursor: MouseCursor,
 ) -> Result<Cursor, Box<dyn Error>> {
     let load = |name: &str| load_cursor(conn, cursor_handle, name);
     let loadn = |names: &[&str]| load_first_existing_cursor(conn, cursor_handle, names);

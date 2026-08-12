@@ -25,7 +25,7 @@ impl Layer {
     }
 
     /// Creates a Layer from a raw pointer.
-    /// 
+    ///
     /// # Safety
     /// The pointer must be a valid CALayer or null.
     pub fn from_ptr(ptr: *mut Object) -> Self {
@@ -57,7 +57,8 @@ impl Layer {
             return;
         }
         unsafe {
-            let ns_color: *mut Object = msg_send![class!(NSColor), colorWithSRGBRed: r green: g blue: b alpha: a];
+            let ns_color: *mut Object =
+                msg_send![class!(NSColor), colorWithSRGBRed: r green: g blue: b alpha: a];
             let cg_color: *mut Object = msg_send![ns_color, CGColor];
             let _: () = msg_send![self.0, setBackgroundColor: cg_color];
         }
@@ -128,12 +129,21 @@ pub fn get_view_layer(view: *mut Object) -> Layer {
 // Internal CGRect types for objc messaging
 #[repr(C)]
 #[derive(Copy, Clone)]
-struct CGPoint { x: f64, y: f64 }
+struct CGPoint {
+    x: f64,
+    y: f64,
+}
 
 #[repr(C)]
 #[derive(Copy, Clone)]
-struct CGSize { width: f64, height: f64 }
+struct CGSize {
+    width: f64,
+    height: f64,
+}
 
 #[repr(C)]
 #[derive(Copy, Clone)]
-struct CGRect { origin: CGPoint, size: CGSize }
+struct CGRect {
+    origin: CGPoint,
+    size: CGSize,
+}

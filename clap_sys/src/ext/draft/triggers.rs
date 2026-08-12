@@ -1,7 +1,7 @@
-use crate::plugin::clap_plugin_t;
+use crate::events::clap_event_header_t;
 use crate::host::clap_host_t;
 use crate::id::clap_id;
-use crate::events::clap_event_header_t;
+use crate::plugin::clap_plugin_t;
 use crate::string_sizes::{CLAP_NAME_SIZE, CLAP_PATH_SIZE};
 use std::ffi::c_void;
 
@@ -42,7 +42,13 @@ pub struct clap_trigger_info_t {
 #[derive(Debug, Copy, Clone)]
 pub struct clap_plugin_triggers_t {
     pub count: Option<unsafe extern "C" fn(plugin: *const clap_plugin_t) -> u32>,
-    pub get_info: Option<unsafe extern "C" fn(plugin: *const clap_plugin_t, index: u32, trigger_info: *mut clap_trigger_info_t) -> bool>,
+    pub get_info: Option<
+        unsafe extern "C" fn(
+            plugin: *const clap_plugin_t,
+            index: u32,
+            trigger_info: *mut clap_trigger_info_t,
+        ) -> bool,
+    >,
 }
 
 pub const CLAP_TRIGGER_RESCAN_INFO: u32 = 1 << 0;
@@ -58,6 +64,13 @@ pub type clap_trigger_clear_flags = u32;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct clap_host_triggers_t {
-    pub rescan: Option<unsafe extern "C" fn(host: *const clap_host_t, flags: clap_trigger_rescan_flags)>,
-    pub clear: Option<unsafe extern "C" fn(host: *const clap_host_t, trigger_id: clap_id, flags: clap_trigger_clear_flags)>,
+    pub rescan:
+        Option<unsafe extern "C" fn(host: *const clap_host_t, flags: clap_trigger_rescan_flags)>,
+    pub clear: Option<
+        unsafe extern "C" fn(
+            host: *const clap_host_t,
+            trigger_id: clap_id,
+            flags: clap_trigger_clear_flags,
+        ),
+    >,
 }

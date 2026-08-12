@@ -1,6 +1,6 @@
 use au_rs::{
-    BufferList, ParameterInfo, ParameterUnit, Plugin, PluginInfo, export_au_plugin, fourcc,
-    for_each_channel,
+    BufferList, ParameterInfo, ParameterUnit, Plugin, PluginInfo, export_au_plugin,
+    for_each_channel, fourcc,
 };
 
 const PARAM_GAIN: u32 = 0;
@@ -31,10 +31,7 @@ impl Plugin for GainEffect {
     ) {
         for_each_channel(inputs, outputs, frames, |input, output| {
             for (idx, out_sample) in output.iter_mut().enumerate() {
-                let sample = input
-                    .and_then(|buf| buf.get(idx))
-                    .copied()
-                    .unwrap_or(0.0);
+                let sample = input.and_then(|buf| buf.get(idx)).copied().unwrap_or(0.0);
                 *out_sample = sample * self.gain;
             }
         });

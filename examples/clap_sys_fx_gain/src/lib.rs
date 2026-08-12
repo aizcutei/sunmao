@@ -101,6 +101,7 @@ unsafe fn apply_param_events(effect: &mut GainEffect, in_events: *const clap_inp
         }
         if (*header).space_id == clap_sys::events::CLAP_CORE_EVENT_SPACE_ID
             && (*header).type_ == CLAP_EVENT_PARAM_VALUE
+            && (*header).size >= std::mem::size_of::<clap_event_param_value_t>() as u32
         {
             let event = &*(header as *const clap_event_param_value_t);
             if event.param_id == PARAM_GAIN {
@@ -498,3 +499,116 @@ pub static clap_entry: clap_sys::entry::clap_plugin_entry_t =
         deinit: Some(entry_deinit),
         get_factory: Some(entry_get_factory),
     };
+
+#[cfg(test)]
+#[path = "../../realtime_test_support.rs"]
+mod realtime_test_support;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap_sys::events::{CLAP_CORE_EVENT_SPACE_ID, clap_event_header_t};
+    use std::ffi::c_void;
+
+    unsafe extern "C" fn event_count(_list: *const clap_input_events_t) -> u32 {
+        1
+    }
+
+    unsafe extern "C" fn event_get(
+        list: *const clap_input_events_t,
+        index: u32,
+    ) -> *const clap_event_header_t {
+        if index == 0 {
+            unsafe { (*list).ctx as *const clap_event_header_t }
+        } else {
+            ptr::null()
+        }
+    }
+
+    #[test]
+    fn raw_clap_effect_callback_does_not_allocate() {
+        let mut effect = GainEffect {
+            host: ptr::null(),
+            gain: 1.0,
+        };
+        let plugin = clap_plugin_t {
+            desc: ptr::null(),
+            plugin_data: &mut effect as *mut _ as *mut c_void,
+            init: None,
+            destroy: None,
+            activate: None,
+            deactivate: None,
+            start_processing: None,
+            stop_processing: None,
+            reset: None,
+            process: Some(plugin_process),
+            get_extension: None,
+            on_main_thread: None,
+        };
+
+        let input_left = [1.0_f32; 16];
+        let input_right = [0.5_f32; 16];
+        let mut output_left = [0.0_f32; 16];
+        let mut output_right = [0.0_f32; 16];
+        let mut input_channels = [
+            input_left.as_ptr() as *mut f32,
+            input_right.as_ptr() as *mut f32,
+        ];
+        let mut output_channels = [output_left.as_mut_ptr(), output_right.as_mut_ptr()];
+        let input = clap_audio_buffer_t {
+            data32: input_channels.as_mut_ptr(),
+            data64: ptr::null_mut(),
+            channel_count: 2,
+            latency: 0,
+            constant_mask: 0,
+        };
+        let mut output = clap_audio_buffer_t {
+            data32: output_channels.as_mut_ptr(),
+            data64: ptr::null_mut(),
+            channel_count: 2,
+            latency: 0,
+            constant_mask: 0,
+        };
+        let mut gain_event = clap_event_param_value_t {
+            header: clap_event_header_t {
+                size: std::mem::size_of::<clap_event_param_value_t>() as u32,
+                time: 0,
+                space_id: CLAP_CORE_EVENT_SPACE_ID,
+                type_: CLAP_EVENT_PARAM_VALUE,
+                flags: 0,
+            },
+            param_id: PARAM_GAIN,
+            cookie: ptr::null_mut(),
+            note_id: -1,
+            port_index: -1,
+            channel: -1,
+            key: -1,
+            value: 0.25,
+        };
+        let events = clap_input_events_t {
+            ctx: &mut gain_event as *mut _ as *mut c_void,
+            size: Some(event_count),
+            get: Some(event_get),
+        };
+        let process = clap_process_t {
+            steady_time: 0,
+            frames_count: 16,
+            transport: ptr::null(),
+            audio_inputs: &input,
+            audio_outputs: &mut output,
+            audio_inputs_count: 1,
+            audio_outputs_count: 1,
+            in_events: &events,
+            out_events: ptr::null(),
+        };
+
+        let (status, allocator_calls) = realtime_test_support::count_allocator_calls(|| unsafe {
+            plugin_process(&plugin, &process)
+        });
+        assert_eq!(status, CLAP_PROCESS_CONTINUE);
+        assert_eq!(allocator_calls, 0);
+        assert_eq!(output_left, [0.25; 16]);
+        assert_eq!(output_right, [0.125; 16]);
+        assert_eq!(effect.gain, 0.25);
+    }
+}

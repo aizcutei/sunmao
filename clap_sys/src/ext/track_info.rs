@@ -1,6 +1,6 @@
-use crate::plugin::clap_plugin_t;
-use crate::host::clap_host_t;
 use crate::color::clap_color_t;
+use crate::host::clap_host_t;
+use crate::plugin::clap_plugin_t;
 use crate::string_sizes::CLAP_NAME_SIZE;
 use std::ffi::c_char;
 
@@ -33,5 +33,7 @@ pub struct clap_plugin_track_info_t {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct clap_host_track_info_t {
-    pub get: Option<unsafe extern "C" fn(host: *const clap_host_t, info: *mut clap_track_info_t) -> bool>,
+    pub get: Option<
+        unsafe extern "C" fn(host: *const clap_host_t, info: *mut clap_track_info_t) -> bool,
+    >,
 }

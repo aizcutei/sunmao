@@ -1,7 +1,7 @@
 //! Event types and queue.
 
 /// A MIDI message.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MidiMessage {
     /// Sample offset within the current buffer.
     pub offset: u32,
@@ -47,52 +47,213 @@ impl MidiMessage {
     }
 }
 
+/// A normalized host automation change for a declared parameter.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ParamChange {
+    /// Static parameter ID from [`crate::params::ParamDescriptor`].
+    pub id: &'static str,
+    /// Normalized parameter value in the 0.0..=1.0 range.
+    pub value: f32,
+    /// Sample offset within the current buffer.
+    pub offset: u32,
+}
+
 /// An event that can occur during processing.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Event {
     /// MIDI message.
     Midi(MidiMessage),
     /// Parameter change from host automation.
-    ParamChange { id: String, value: f32, offset: u32 },
+    ParamChange {
+        id: &'static str,
+        value: f32,
+        offset: u32,
+    },
+}
+
+impl Event {
+    /// Sample offset within the current processing block.
+    pub fn offset(&self) -> u32 {
+        match self {
+            Self::Midi(event) => event.offset,
+            Self::ParamChange { offset, .. } => *offset,
+        }
+    }
+
+    /// Return the parameter change carried by this event, if any.
+    pub fn as_param_change(&self) -> Option<ParamChange> {
+        match self {
+            Self::ParamChange { id, value, offset } => Some(ParamChange {
+                id,
+                value: *value,
+                offset: *offset,
+            }),
+            Self::Midi(_) => None,
+        }
+    }
 }
 
 /// Queue of events for a processing block.
 pub struct EventQueue {
     events: Vec<Event>,
+    max_events: usize,
 }
 
 impl EventQueue {
     /// Create an empty event queue.
     pub fn new() -> Self {
-        Self { events: Vec::new() }
+        Self {
+            events: Vec::new(),
+            max_events: usize::MAX,
+        }
     }
 
-    /// Add an event.
-    pub fn push(&mut self, event: Event) {
+    /// Create an empty event queue with a fixed, activation-owned capacity.
+    ///
+    /// Once full, [`Self::push`] and [`Self::push_param_change`] return `false`
+    /// without allocating or modifying the queue.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            events: Vec::with_capacity(capacity),
+            max_events: capacity,
+        }
+    }
+
+    /// Reserve event scratch outside the processing callback.
+    pub fn reserve(&mut self, additional: usize) {
+        self.events.reserve(additional);
+        self.max_events = self.max_events.saturating_add(additional);
+    }
+
+    /// Add an event, returning `false` when a fixed-capacity queue is full.
+    pub fn push(&mut self, event: Event) -> bool {
+        if self.events.len() >= self.max_events {
+            return false;
+        }
         self.events.push(event);
+        true
     }
 
-    /// Iterate over events.
+    /// Add a parameter change, returning `false` when the queue is full.
+    pub fn push_param_change(&mut self, change: ParamChange) -> bool {
+        if self.events.len() >= self.max_events {
+            return false;
+        }
+        self.events.push(Event::ParamChange {
+            id: change.id,
+            value: change.value,
+            offset: change.offset,
+        });
+        true
+    }
+
+    /// Iterate over all events in their original insertion order.
     pub fn iter(&self) -> impl Iterator<Item = &Event> {
         self.events.iter()
     }
 
+    /// Iterate over all events by value.
+    pub fn timed_events(&self) -> impl Iterator<Item = Event> + '_ {
+        self.events.iter().copied()
+    }
+
     /// Get MIDI events only.
     pub fn midi_events(&self) -> impl Iterator<Item = &MidiMessage> {
-        self.events.iter().filter_map(|e| match e {
-            Event::Midi(m) => Some(m),
+        self.events.iter().filter_map(|event| match event {
+            Event::Midi(message) => Some(message),
             _ => None,
         })
+    }
+
+    /// Get parameter automation events in their original host order.
+    pub fn param_changes(&self) -> impl Iterator<Item = ParamChange> + '_ {
+        self.events.iter().filter_map(Event::as_param_change)
     }
 
     /// Clear all events.
     pub fn clear(&mut self) {
         self.events.clear();
     }
+
+    #[cfg(test)]
+    fn capacity(&self) -> usize {
+        self.events.capacity()
+    }
+
+    /// Maximum number of events accepted without changing the queue contract.
+    pub fn max_events(&self) -> usize {
+        self.max_events
+    }
 }
 
 impl Default for EventQueue {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_offsets_and_parameter_iteration_preserve_order() {
+        let mut events = EventQueue::with_capacity(3);
+        events.push(Event::Midi(MidiMessage::note_on(2, 0, 60, 100)));
+        events.push_param_change(ParamChange {
+            id: "gain",
+            value: 0.25,
+            offset: 5,
+        });
+        events.push_param_change(ParamChange {
+            id: "gain",
+            value: 0.75,
+            offset: 5,
+        });
+
+        assert_eq!(
+            events.iter().map(Event::offset).collect::<Vec<_>>(),
+            [2, 5, 5]
+        );
+        assert_eq!(
+            events.param_changes().collect::<Vec<_>>(),
+            [
+                ParamChange {
+                    id: "gain",
+                    value: 0.25,
+                    offset: 5,
+                },
+                ParamChange {
+                    id: "gain",
+                    value: 0.75,
+                    offset: 5,
+                },
+            ]
+        );
+        let capacity = events.capacity();
+        events.clear();
+        assert_eq!(events.capacity(), capacity);
+    }
+
+    #[test]
+    fn fixed_capacity_overflow_does_not_grow_or_modify_the_queue() {
+        let mut events = EventQueue::with_capacity(2);
+        assert!(events.push(Event::Midi(MidiMessage::note_on(0, 0, 60, 100))));
+        assert!(events.push_param_change(ParamChange {
+            id: "gain",
+            value: 0.5,
+            offset: 1,
+        }));
+        let capacity = events.capacity();
+
+        assert!(!events.push(Event::Midi(MidiMessage::note_off(2, 0, 60, 0))));
+        assert!(!events.push_param_change(ParamChange {
+            id: "gain",
+            value: 0.75,
+            offset: 2,
+        }));
+        assert_eq!(events.iter().count(), 2);
+        assert_eq!(events.capacity(), capacity);
+        assert_eq!(events.max_events(), 2);
     }
 }

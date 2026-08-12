@@ -119,7 +119,10 @@ pub(super) unsafe fn create_view(window_options: &WindowOpenOptions) -> id {
 
     let size = window_options.size;
 
-    view.initWithFrame_(NSRect::new(NSPoint::new(0., 0.), NSSize::new(size.width, size.height)));
+    view.initWithFrame_(NSRect::new(
+        NSPoint::new(0., 0.),
+        NSSize::new(size.width, size.height),
+    ));
 
     register_notification(view, NSWindowDidBecomeKeyNotification, nil);
     register_notification(view, NSWindowDidResignKeyNotification, nil);
@@ -153,7 +156,10 @@ unsafe fn create_view_class() -> &'static Class {
         sel!(resignFirstResponder),
         resign_first_responder as extern "C" fn(&Object, Sel) -> BOOL,
     );
-    class.add_method(sel!(isFlipped), property_yes as extern "C" fn(&Object, Sel) -> BOOL);
+    class.add_method(
+        sel!(isFlipped),
+        property_yes as extern "C" fn(&Object, Sel) -> BOOL,
+    );
     class.add_method(
         sel!(preservesContentInLiveResize),
         property_no as extern "C" fn(&Object, Sel) -> BOOL,
@@ -177,16 +183,36 @@ unsafe fn create_view_class() -> &'static Class {
         update_tracking_areas as extern "C" fn(&Object, Sel, id),
     );
 
-    class.add_method(sel!(mouseMoved:), mouse_moved as extern "C" fn(&Object, Sel, id));
-    class.add_method(sel!(mouseDragged:), mouse_moved as extern "C" fn(&Object, Sel, id));
-    class.add_method(sel!(rightMouseDragged:), mouse_moved as extern "C" fn(&Object, Sel, id));
-    class.add_method(sel!(otherMouseDragged:), mouse_moved as extern "C" fn(&Object, Sel, id));
+    class.add_method(
+        sel!(mouseMoved:),
+        mouse_moved as extern "C" fn(&Object, Sel, id),
+    );
+    class.add_method(
+        sel!(mouseDragged:),
+        mouse_moved as extern "C" fn(&Object, Sel, id),
+    );
+    class.add_method(
+        sel!(rightMouseDragged:),
+        mouse_moved as extern "C" fn(&Object, Sel, id),
+    );
+    class.add_method(
+        sel!(otherMouseDragged:),
+        mouse_moved as extern "C" fn(&Object, Sel, id),
+    );
 
-    class.add_method(sel!(scrollWheel:), scroll_wheel as extern "C" fn(&Object, Sel, id));
+    class.add_method(
+        sel!(scrollWheel:),
+        scroll_wheel as extern "C" fn(&Object, Sel, id),
+    );
 
     class.add_method(
         sel!(viewDidChangeBackingProperties:),
         view_did_change_backing_properties as extern "C" fn(&Object, Sel, id),
+    );
+
+    class.add_method(
+        sel!(setFrameSize:),
+        view_set_frame_size as extern "C" fn(&Object, Sel, NSSize),
     );
 
     class.add_method(
@@ -205,7 +231,10 @@ unsafe fn create_view_class() -> &'static Class {
         sel!(draggingUpdated:),
         dragging_updated as extern "C" fn(&Object, Sel, id) -> NSUInteger,
     );
-    class.add_method(sel!(draggingExited:), dragging_exited as extern "C" fn(&Object, Sel, id));
+    class.add_method(
+        sel!(draggingExited:),
+        dragging_exited as extern "C" fn(&Object, Sel, id),
+    );
     class.add_method(
         sel!(handleNotification:),
         handle_notification as extern "C" fn(&Object, Sel, id),
@@ -290,8 +319,11 @@ extern "C" fn view_did_change_backing_properties(this: &Object, _: Sel, _: id) {
     unsafe {
         let ns_window: *mut Object = msg_send![this, window];
 
-        let scale_factor: f64 =
-            if ns_window.is_null() { 1.0 } else { NSWindow::backingScaleFactor(ns_window) };
+        let scale_factor: f64 = if ns_window.is_null() {
+            1.0
+        } else {
+            NSWindow::backingScaleFactor(ns_window)
+        };
 
         let state = WindowState::from_view(this);
 
@@ -306,6 +338,41 @@ extern "C" fn view_did_change_backing_properties(this: &Object, _: Sel, _: id) {
 
         // Only send the event when the window's size has actually changed to be in line with the
         // other platform implementations
+        if new_window_info.physical_size() != window_info.physical_size() {
+            state.window_info.set(new_window_info);
+            state.trigger_event(Event::Window(WindowEvent::Resized(new_window_info)));
+        }
+    }
+}
+
+extern "C" fn view_set_frame_size(this: &Object, _: Sel, size: NSSize) {
+    unsafe {
+        // Call NSView's setFrameSize: via the superclass of our dynamically created class.
+        let cls: *const Class = msg_send![this, class];
+        let superclass: *const Class = msg_send![cls, superclass];
+        let superclass = if superclass.is_null() {
+            Class::get("NSView").unwrap_or(class!(NSView))
+        } else {
+            &*superclass
+        };
+        let _: () = msg_send![super(this, superclass), setFrameSize: size];
+
+        let ns_window: *mut Object = msg_send![this, window];
+        let scale_factor: f64 = if ns_window.is_null() {
+            1.0
+        } else {
+            NSWindow::backingScaleFactor(ns_window)
+        };
+
+        let Some(state) = WindowState::try_from_view(this) else {
+            // `initWithFrame:` may dispatch `setFrameSize:` before Window::init
+            // installs the retained WindowState pointer in this NSView.
+            return;
+        };
+        let new_window_info =
+            WindowInfo::from_logical_size(Size::new(size.width, size.height), scale_factor);
+
+        let window_info = state.window_info.get();
         if new_window_info.physical_size() != window_info.physical_size() {
             state.window_info.set(new_window_info);
             state.trigger_event(Event::Window(WindowEvent::Resized(new_window_info)));
@@ -400,7 +467,10 @@ extern "C" fn mouse_moved(this: &Object, _sel: Sel, event: id) {
     };
     let modifiers = unsafe { NSEvent::modifierFlags(event) };
 
-    let position = Point { x: point.x, y: point.y };
+    let position = Point {
+        x: point.x,
+        y: point.y,
+    };
 
     state.trigger_event(Event::Mouse(MouseEvent::CursorMoved {
         position,

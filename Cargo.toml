@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "au_sys",
+    "au_cocoa_stubs",
     "au_rs",
     "clap_sys",
     "clap_rs",
@@ -30,6 +31,7 @@ members = [
     "tools/au_packager",
     "tools/vst3_packager",
     "tools/sunmao_packager",
+    "tools/sunmao_unittest_runner",
     "baseview",
     "sunmao",
     "sunmao/core",
@@ -45,6 +47,9 @@ members = [
     "sunmao/view_baseview",
     "examples/sunmao_fx_gain",
     "examples/sunmao_syn_sine",
+    "examples/sunmao_syn_sine_gui_gl",
+    "examples/sunmao_syn_sine_gui_wgpu",
+    "examples/sunmao_syn_sine_gui_webview",
     "examples/sunmao_gui_gl_test",
     "examples/sunmao_fx_gain_gui_gl",
     "examples/sunmao_fx_lpf_gui_gl",
@@ -58,3 +63,10 @@ resolver = "2"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
+
+# NOTE: rustc 1.96 + the current macOS `ld` can emit a "mis-aligned LINKEDIT string pool"
+# Mach-O when release-stripping cdylibs that pull in a lot of code (observed on the wgpu
+# GUI plugins). The resulting dylib fails to dlopen. Keeping symbols (`strip = false`) avoids
+# it. Revisit once the toolchain is upgraded. See debug/phase1_assessment.md.
+[profile.release]
+strip = false

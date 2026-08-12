@@ -1,5 +1,5 @@
-use crate::plugin::clap_plugin_t;
 use crate::host::clap_host_t;
+use crate::plugin::clap_plugin_t;
 
 pub const CLAP_EXT_SURROUND: &str = "clap.surround/4\0";
 pub const CLAP_EXT_SURROUND_COMPAT: &str = "clap.surround.draft/4\0";
@@ -29,8 +29,17 @@ pub const CLAP_SURROUND_TSR: u32 = 19;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct clap_plugin_surround_t {
-    pub is_channel_mask_supported: Option<unsafe extern "C" fn(plugin: *const clap_plugin_t, channel_mask: u64) -> bool>,
-    pub get_channel_map: Option<unsafe extern "C" fn(plugin: *const clap_plugin_t, is_input: bool, port_index: u32, channel_map: *mut u8, channel_map_capacity: u32) -> u32>,
+    pub is_channel_mask_supported:
+        Option<unsafe extern "C" fn(plugin: *const clap_plugin_t, channel_mask: u64) -> bool>,
+    pub get_channel_map: Option<
+        unsafe extern "C" fn(
+            plugin: *const clap_plugin_t,
+            is_input: bool,
+            port_index: u32,
+            channel_map: *mut u8,
+            channel_map_capacity: u32,
+        ) -> u32,
+    >,
 }
 
 #[repr(C)]

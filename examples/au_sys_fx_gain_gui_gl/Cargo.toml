@@ -9,6 +9,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 au_sys = { path = "../../au_sys" }
+au_cocoa_stubs = { path = "../../au_cocoa_stubs" }
 objc = "0.2"
 gl = "0.14"
 

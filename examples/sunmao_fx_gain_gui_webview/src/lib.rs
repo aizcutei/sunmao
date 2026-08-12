@@ -1,21 +1,18 @@
 //! SunMao Gain Plugin with WebView GUI
 //!
 //! This example demonstrates a gain effect plugin with a custom GUI
-//! using the WebView renderer backend.
+//! using the platform WebView renderer. The same codebase exports to
+//! AU, VST3, and CLAP — no format-specific GUI code needed.
 
 use std::sync::Arc;
 use sunmao_core::prelude::*;
-use sunmao_gui::gl::GlContext;
-use sunmao_gui::{
-    Color, Event as GuiEvent, Fill, GuiContext, MouseButton as GuiMouseButton, ParameterWidget,
-    Rect, Slider, Widget,
-};
 use sunmao_macros::Params;
-use sunmao_view_baseview::{BaseviewConfig, BaseviewView, ViewState, WindowScalePolicy};
+use sunmao_view_baseview::{BaseviewConfig, BaseviewWebView, WebViewState, WindowScalePolicy};
 
 // ============ Plugin Definition ============
 
 #[derive(Params)]
+#[cfg_attr(all(target_os = "macos", feature = "au"), sunmao_au)]
 pub struct GainParams {
     #[unit = "LinearGain"]
     pub gain: FloatParam,
@@ -68,12 +65,29 @@ impl SunmaoPlugin for GainPlugin {
     fn process(
         &mut self,
         buffer: &mut AudioBuffer,
-        _events: &EventQueue,
+        events: &EventQueue,
         _context: &ProcessContext,
     ) -> ProcessStatus {
-        let gain = self.params.gain.get();
         buffer.copy_input_to_output();
-        buffer.apply_gain(gain);
+        let mut gain = self.params.gain.get();
+        let mut changes = events
+            .param_changes()
+            .filter(|change| change.id == self.params.gain.id)
+            .peekable();
+
+        for sample_index in 0..buffer.num_samples() {
+            while changes
+                .peek()
+                .is_some_and(|change| change.offset as usize <= sample_index)
+            {
+                let change = changes.next().expect("peeked parameter change");
+                gain = self.params.gain.min
+                    + change.value.clamp(0.0, 1.0) * (self.params.gain.max - self.params.gain.min);
+            }
+            for channel in 0..buffer.num_output_channels() {
+                buffer.output(channel)[sample_index] *= gain;
+            }
+        }
         ProcessStatus::Normal
     }
 
@@ -83,138 +97,33 @@ impl SunmaoPlugin for GainPlugin {
             width: 400,
             height: 120,
             scale_policy: WindowScalePolicy::SystemScaleFactor,
-            background: Color::rgb(0.12, 0.12, 0.18),
+            background: sunmao_gui::Color::rgb(0.12, 0.12, 0.18),
         };
 
-        let view = BaseviewView::new(config, |context| GainViewState::new(context, 400.0, 120.0));
+        let view = BaseviewWebView::new(config, |context| GainWebViewState::new(context), "sunmao");
         Some(Box::new(view))
     }
 }
 
-struct GainViewState {
-    slider: Slider,
+// ============ WebView State ============
+
+struct GainWebViewState {
     context: Arc<dyn ViewContext>,
-    editing: bool,
 }
 
-impl GainViewState {
-    fn new(context: Arc<dyn ViewContext>, width: f32, height: f32) -> Self {
-        let mut slider = Slider::new("gain").with_default(0.5);
-        slider.set_bounds(Rect::new(20.0, (height - 24.0) * 0.5, width - 40.0, 24.0));
-        Self {
-            slider,
-            context,
-            editing: false,
-        }
-    }
-
-    fn relayout(&mut self, width: f32, height: f32) {
-        self.slider
-            .set_bounds(Rect::new(20.0, (height - 24.0) * 0.5, width - 40.0, 24.0));
-    }
-
-    fn sync_from_params(&mut self) {
-        if let Some(value) = self.context.get_param("gain") {
-            self.slider.set_value(value);
-        }
+impl GainWebViewState {
+    fn new(context: Arc<dyn ViewContext>) -> Self {
+        Self { context }
     }
 }
 
-impl ViewState for GainViewState {
-    fn draw(&mut self, ctx: &mut GlContext, width: f32, height: f32) {
-        self.sync_from_params();
-        ctx.fill_rect(
-            0.0,
-            0.0,
-            width,
-            height,
-            Fill::Solid(Color::rgb(0.14, 0.14, 0.2)),
-        );
-        self.slider.draw(ctx);
-    }
-
-    fn on_mouse_event(&mut self, event: &GuiEvent) -> bool {
-        let before = self.slider.value();
-        let handled = self.slider.handle_event(event);
-        let after = self.slider.value();
-
-        if handled && (after - before).abs() > f32::EPSILON {
-            self.context.set_param("gain", after);
-        }
-
-        match event {
-            GuiEvent::MouseDown {
-                button: GuiMouseButton::Left,
-                ..
-            } if handled => {
-                self.editing = true;
-                self.context.begin_edit("gain");
-            }
-            GuiEvent::MouseUp {
-                button: GuiMouseButton::Left,
-                ..
-            } if self.editing => {
-                self.editing = false;
-                self.context.end_edit("gain");
-            }
-            _ => {}
-        }
-
-        handled
-    }
-
-    fn on_resize(&mut self, width: f32, height: f32) {
-        self.relayout(width, height);
-    }
-}
-
-// ============ VST3 Export ============
-use sunmao_backend_vst3::SunmaoVst3Wrapper;
-sunmao_backend_vst3::export_vst3_plugin_with_gui!(SunmaoVst3Wrapper<GainPlugin>);
-
-// ============ AU Export (macOS only) ============
-#[cfg(target_os = "macos")]
-mod au_export {
-    use super::*;
-    use std::ffi::c_void;
-    use sunmao_backend_au::gui::{
-        view_bounds, webview, CocoaObject, GuiConfig, GuiHandler, MessageCallback,
-    };
-    use sunmao_backend_au::{
-        au_params, fourcc, get_parameter_local, set_parameter_local, NSPoint, NSRect, NSSize,
-        PluginInfo,
-    };
-
-    const PARAM_INDEX: u32 = 0;
-
-    const AU_WEBVIEW_CONFIG: GuiConfig = GuiConfig {
-        factory_class: "SunmaoAUCocoaViewFactoryWebView",
-        view_class: "SunmaoAUCocoaViewWebView",
-        view_superclass: "NSView",
-        description: "SunMao AU WebView",
-    };
-
-    struct AuGainWebViewGui {
-        webview: *mut CocoaObject,
-        audio_unit: *mut c_void,
-    }
-
-    impl Default for AuGainWebViewGui {
-        fn default() -> Self {
-            Self {
-                webview: std::ptr::null_mut(),
-                audio_unit: std::ptr::null_mut(),
-            }
-        }
-    }
-
-    impl AuGainWebViewGui {
-        fn html() -> &'static str {
-            r#"<!DOCTYPE html>
+impl WebViewState for GainWebViewState {
+    fn html(&self) -> &str {
+        r#"<!DOCTYPE html>
 <html>
 <head>
-    <meta charset=\"utf-8\" />
-    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -253,7 +162,7 @@ mod au_export {
             margin-bottom: 16px;
         }
         .slider-container { width: 100%; padding: 8px 0; }
-        input[type=\"range\"] {
+        input[type="range"] {
             -webkit-appearance: none;
             width: 100%;
             height: 8px;
@@ -262,7 +171,7 @@ mod au_export {
             outline: none;
             cursor: pointer;
         }
-        input[type=\"range\"]::-webkit-slider-thumb {
+        input[type="range"]::-webkit-slider-thumb {
             -webkit-appearance: none;
             width: 24px;
             height: 24px;
@@ -281,13 +190,13 @@ mod au_export {
     </style>
 </head>
 <body>
-    <div class=\"container\">
-        <div class=\"title\">Gain</div>
-        <div class=\"value-display\" id=\"value\">1.00</div>
-        <div class=\"slider-container\">
-            <input type=\"range\" id=\"slider\" min=\"0\" max=\"200\" value=\"100\" />
+    <div class="container">
+        <div class="title">Gain</div>
+        <div class="value-display" id="value">1.00</div>
+        <div class="slider-container">
+            <input type="range" id="slider" min="0" max="200" value="100" />
         </div>
-        <div class=\"labels\">
+        <div class="labels">
             <span>0.0</span>
             <span>1.0</span>
             <span>2.0</span>
@@ -296,6 +205,22 @@ mod au_export {
     <script>
         const slider = document.getElementById('slider');
         const valueDisplay = document.getElementById('value');
+        let pointerEditing = false;
+        let editing = false;
+
+        function beginEdit() {
+            if (!editing && window.sunmao) {
+                editing = true;
+                window.sunmao.postMessage('begin');
+            }
+        }
+
+        function endEdit() {
+            if (editing && window.sunmao) {
+                editing = false;
+                window.sunmao.postMessage('end');
+            }
+        }
 
         function updateValue(val) {
             const gain = val / 100;
@@ -303,11 +228,26 @@ mod au_export {
         }
 
         slider.addEventListener('input', function () {
+            const accessibilityEdit = !pointerEditing && !editing;
+            if (accessibilityEdit) beginEdit();
             const gain = this.value / 100;
             updateValue(this.value);
-            if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.sunmao) {
-                window.webkit.messageHandlers.sunmao.postMessage(gain.toString());
+            if (window.sunmao) {
+                window.sunmao.postMessage('value:' + gain.toString());
             }
+            if (accessibilityEdit) endEdit();
+        });
+        slider.addEventListener('pointerdown', function () {
+            pointerEditing = true;
+            beginEdit();
+        });
+        slider.addEventListener('pointerup', function () {
+            pointerEditing = false;
+            endEdit();
+        });
+        slider.addEventListener('pointercancel', function () {
+            pointerEditing = false;
+            endEdit();
         });
 
         function setGain(gain) {
@@ -318,65 +258,32 @@ mod au_export {
     </script>
 </body>
 </html>"#
-        }
-
-        fn update_slider_from_au(&self, audio_unit: *mut c_void) {
-            if self.webview.is_null() || audio_unit.is_null() {
-                return;
-            }
-            if let Ok(value) = get_parameter_local(audio_unit, PARAM_INDEX) {
-                let clamped = value.clamp(0.0, 2.0);
-                let script = format!("setGain({});", clamped);
-                webview::evaluate_js(self.webview, &script);
-            }
-        }
     }
 
-    impl GuiHandler for AuGainWebViewGui {
-        fn init(&mut self, view: *mut CocoaObject, size: NSSize, audio_unit: *mut c_void) {
-            self.audio_unit = audio_unit;
-            let frame = NSRect {
-                origin: NSPoint { x: 0.0, y: 0.0 },
-                size,
-            };
-            let web = webview::create_wkwebview_with_handler(
-                view,
-                frame,
-                "sunmao",
-                on_js_message as MessageCallback,
-                self as *mut _ as *mut c_void,
-            );
-            webview::load_html(web, Self::html());
-            self.webview = web;
-            self.update_slider_from_au(audio_unit);
-        }
-
-        fn reshape(&mut self, view: *mut CocoaObject, _audio_unit: *mut c_void) {
-            if self.webview.is_null() {
-                return;
-            }
-            let bounds = view_bounds(view);
-            webview::set_frame(self.webview, bounds);
-        }
-
-        fn deinit(&mut self, _view: *mut CocoaObject) {
-            self.webview = std::ptr::null_mut();
-        }
-    }
-
-    fn on_js_message(message: &str, user_data: *mut c_void) {
-        if user_data.is_null() {
-            return;
-        }
-        let gui = unsafe { &mut *(user_data as *mut AuGainWebViewGui) };
-        if gui.audio_unit.is_null() {
-            return;
-        }
-        if let Ok(value) = message.parse::<f32>() {
+    fn on_message(&mut self, message: &str, context: &dyn ViewContext) {
+        if message == "begin" {
+            context.begin_edit("gain");
+        } else if message == "end" {
+            context.end_edit("gain");
+        } else if let Some(value) = message
+            .strip_prefix("value:")
+            .and_then(|value| value.parse::<f32>().ok())
+        {
             let clamped = value.clamp(0.0, 2.0);
-            let _ = set_parameter_local(gui.audio_unit, PARAM_INDEX, clamped);
+            context.set_param("gain", clamped / 2.0);
         }
     }
+}
+
+// ============ VST3 Export ============
+use sunmao_backend_vst3::SunmaoVst3Wrapper;
+sunmao_backend_vst3::export_vst3_plugin_with_gui!(SunmaoVst3Wrapper<GainPlugin>);
+
+// ============ AU Export (macOS only) ============
+#[cfg(all(target_os = "macos", feature = "au"))]
+mod au_export {
+    use super::*;
+    use sunmao_backend_au::{au_params, fourcc, PluginInfo};
 
     const AU_INFO: PluginInfo = PluginInfo {
         name: "SunMao Gain WebView",
@@ -391,13 +298,8 @@ mod au_export {
         supports_midi: false,
     };
 
-    sunmao_backend_au::sunmao_export_au!(
-        SunMaoGainWebViewFactory,
-        GainPlugin,
-        AU_INFO,
-        au_params::<GainParams>(),
-        gui: { handler: AuGainWebViewGui, config: AU_WEBVIEW_CONFIG }
-    );
+    // One macro call — no format-specific GUI code needed!
+    sunmao_backend_au::sunmao_export_au_with_view!(GainPlugin, AU_INFO, au_params::<GainParams>());
 }
 
 // ============ CLAP Export ============

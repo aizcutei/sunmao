@@ -17,6 +17,18 @@ pub struct clap_audio_port_configuration_request_t {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct clap_plugin_configurable_audio_ports_t {
-    pub can_apply_configuration: Option<unsafe extern "C" fn(plugin: *const clap_plugin_t, requests: *const clap_audio_port_configuration_request_t, request_count: u32) -> bool>,
-    pub apply_configuration: Option<unsafe extern "C" fn(plugin: *const clap_plugin_t, requests: *const clap_audio_port_configuration_request_t, request_count: u32) -> bool>,
+    pub can_apply_configuration: Option<
+        unsafe extern "C" fn(
+            plugin: *const clap_plugin_t,
+            requests: *const clap_audio_port_configuration_request_t,
+            request_count: u32,
+        ) -> bool,
+    >,
+    pub apply_configuration: Option<
+        unsafe extern "C" fn(
+            plugin: *const clap_plugin_t,
+            requests: *const clap_audio_port_configuration_request_t,
+            request_count: u32,
+        ) -> bool,
+    >,
 }

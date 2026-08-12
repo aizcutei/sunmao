@@ -2,35 +2,35 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
 
-pub mod version;
-pub mod id;
-pub mod events;
 pub mod audio_buffer;
-pub mod process;
-pub mod plugin;
-pub mod host;
+pub mod color;
 pub mod entry;
-pub mod factory;
+pub mod events;
 pub mod ext;
+pub mod factory;
+pub mod fixedpoint;
+pub mod host;
+pub mod id;
+pub mod plugin;
+pub mod plugin_features;
+pub mod process;
+pub mod stream;
 pub mod string_sizes;
 pub mod timestamp;
 pub mod universal_plugin_id;
-pub mod stream;
-pub mod color;
-pub mod fixedpoint;
-pub mod plugin_features;
+pub mod version;
 
-pub use version::*;
-pub use id::*;
-pub use events::*;
 pub use audio_buffer::*;
-pub use process::*;
-pub use plugin::*;
-pub use host::*;
+pub use color::*;
 pub use entry::*;
+pub use events::*;
+pub use fixedpoint::*;
+pub use host::*;
+pub use id::*;
+pub use plugin::*;
+pub use plugin_features::*;
+pub use process::*;
+pub use stream::*;
 pub use timestamp::*;
 pub use universal_plugin_id::*;
-pub use stream::*;
-pub use color::*;
-pub use fixedpoint::*;
-pub use plugin_features::*;
+pub use version::*;

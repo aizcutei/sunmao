@@ -26,4 +26,27 @@ pub struct WindowOpenOptions {
     /// access this context through [crate::Window::gl_context].
     #[cfg(feature = "opengl")]
     pub gl_config: Option<crate::gl::GlConfig>,
+
+    /// If `true`, a `CAMetalLayer` will be created on the window's NSView,
+    /// enabling wgpu/Metal rendering. Access via [crate::Window::metal_layer].
+    #[cfg(feature = "metal")]
+    pub metal_layer: bool,
+}
+
+impl WindowOpenOptions {
+    /// Create window options with all feature-dependent facilities disabled.
+    ///
+    /// Constructing this inside `baseview` keeps downstream crates independent
+    /// from Cargo feature unification changing this struct's optional fields.
+    pub fn new(title: impl Into<String>, size: Size, scale: WindowScalePolicy) -> Self {
+        Self {
+            title: title.into(),
+            size,
+            scale,
+            #[cfg(feature = "opengl")]
+            gl_config: None,
+            #[cfg(feature = "metal")]
+            metal_layer: false,
+        }
+    }
 }

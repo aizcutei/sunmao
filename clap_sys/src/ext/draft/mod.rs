@@ -6,8 +6,8 @@ pub mod resource_directory;
 pub mod scratch_memory;
 pub mod transport_control;
 pub mod triggers;
-pub mod undo;
 pub mod tuning;
+pub mod undo;
 pub mod webview;
 
 pub use extensible_audio_ports::*;
@@ -18,6 +18,6 @@ pub use resource_directory::*;
 pub use scratch_memory::*;
 pub use transport_control::*;
 pub use triggers::*;
-pub use undo::*;
 pub use tuning::*;
+pub use undo::*;
 pub use webview::*;

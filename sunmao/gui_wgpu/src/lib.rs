@@ -2,8 +2,8 @@
 //!
 //! This crate implements the `GuiContext` trait using WGPU for modern cross-platform graphics.
 
-use sunmao_gui::{GuiContext, Color, Fill, Stroke, TextAlign};
 use std::f32::consts::PI;
+use sunmao_gui::{Color, Fill, GuiContext, Stroke, TextAlign};
 use wgpu::util::DeviceExt;
 
 /// Vertex for 2D rendering
@@ -19,7 +19,7 @@ impl Vertex {
         0 => Float32x2,
         1 => Float32x4,
     ];
-    
+
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
@@ -56,13 +56,13 @@ impl WgpuContext {
             label: Some("SunMao GUI Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
-        
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("SunMao GUI Pipeline Layout"),
             bind_group_layouts: &[],
             push_constant_ranges: &[],
         });
-        
+
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("SunMao GUI Pipeline"),
             layout: Some(&pipeline_layout),
@@ -96,7 +96,7 @@ impl WgpuContext {
             multiview: None,
             cache: None,
         });
-        
+
         Self {
             device,
             queue,
@@ -108,39 +108,45 @@ impl WgpuContext {
             current_color: Color::WHITE,
         }
     }
-    
+
     /// Resize the context
     pub fn resize(&mut self, width: f32, height: f32) {
         self.width = width;
         self.height = height;
     }
-    
+
     /// Set the scale factor
     pub fn set_scale(&mut self, scale: f32) {
         self.scale = scale;
     }
-    
+
     /// Begin a frame - clear vertex buffer
     pub fn begin_frame(&mut self) {
         self.vertices.clear();
     }
-    
-    /// End a frame - render accumulated vertices
+
+    /// End a frame over a transparent clear color.
     pub fn end_frame(&self, view: &wgpu::TextureView) {
-        if self.vertices.is_empty() {
-            return;
-        }
-        
-        let vertex_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("SunMao GUI Vertex Buffer"),
-            contents: bytemuck::cast_slice(&self.vertices),
-            usage: wgpu::BufferUsages::VERTEX,
+        self.end_frame_with_clear(view, Color::TRANSPARENT);
+    }
+
+    /// End a frame over the configured clear color.
+    pub fn end_frame_with_clear(&self, view: &wgpu::TextureView, clear_color: Color) {
+        let vertex_buffer = (!self.vertices.is_empty()).then(|| {
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("SunMao GUI Vertex Buffer"),
+                    contents: bytemuck::cast_slice(&self.vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                })
         });
-        
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("SunMao GUI Encoder"),
-        });
-        
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("SunMao GUI Encoder"),
+            });
+
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("SunMao GUI Render Pass"),
@@ -148,7 +154,7 @@ impl WgpuContext {
                     view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load, // Don't clear, just draw on top
+                        load: wgpu::LoadOp::Clear(to_wgpu_color(clear_color)),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -156,39 +162,50 @@ impl WgpuContext {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            
-            render_pass.set_pipeline(&self.pipeline);
-            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-            render_pass.draw(0..self.vertices.len() as u32, 0..1);
+
+            if let Some(vertex_buffer) = &vertex_buffer {
+                render_pass.set_pipeline(&self.pipeline);
+                render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                render_pass.draw(0..self.vertices.len() as u32, 0..1);
+            }
         }
-        
+
         self.queue.submit(std::iter::once(encoder.finish()));
     }
-    
+
     fn to_ndc(&self, x: f32, y: f32) -> [f32; 2] {
         [
             (x / self.width) * 2.0 - 1.0,
             1.0 - (y / self.height) * 2.0, // Flip Y
         ]
     }
-    
+
     fn add_triangle(&mut self, p1: [f32; 2], p2: [f32; 2], p3: [f32; 2], color: Color) {
         let c = [color.r, color.g, color.b, color.a];
-        self.vertices.push(Vertex { position: self.to_ndc(p1[0], p1[1]), color: c });
-        self.vertices.push(Vertex { position: self.to_ndc(p2[0], p2[1]), color: c });
-        self.vertices.push(Vertex { position: self.to_ndc(p3[0], p3[1]), color: c });
+        self.vertices.push(Vertex {
+            position: self.to_ndc(p1[0], p1[1]),
+            color: c,
+        });
+        self.vertices.push(Vertex {
+            position: self.to_ndc(p2[0], p2[1]),
+            color: c,
+        });
+        self.vertices.push(Vertex {
+            position: self.to_ndc(p3[0], p3[1]),
+            color: c,
+        });
     }
-    
+
     fn add_quad(&mut self, x: f32, y: f32, w: f32, h: f32, color: Color) {
         self.add_triangle([x, y], [x + w, y], [x + w, y + h], color);
         self.add_triangle([x, y], [x + w, y + h], [x, y + h], color);
     }
-    
+
     fn add_circle(&mut self, cx: f32, cy: f32, radius: f32, color: Color, segments: usize) {
         for i in 0..segments {
             let a1 = (i as f32 / segments as f32) * 2.0 * PI;
             let a2 = ((i + 1) as f32 / segments as f32) * 2.0 * PI;
-            
+
             self.add_triangle(
                 [cx, cy],
                 [cx + radius * a1.cos(), cy + radius * a1.sin()],
@@ -197,15 +214,24 @@ impl WgpuContext {
             );
         }
     }
-    
-    fn add_arc(&mut self, cx: f32, cy: f32, radius: f32, start: f32, end: f32, color: Color, segments: usize) {
+
+    fn add_arc(
+        &mut self,
+        cx: f32,
+        cy: f32,
+        radius: f32,
+        start: f32,
+        end: f32,
+        color: Color,
+        segments: usize,
+    ) {
         let range = end - start;
         for i in 0..segments {
             let t1 = i as f32 / segments as f32;
             let t2 = (i + 1) as f32 / segments as f32;
             let a1 = start + t1 * range;
             let a2 = start + t2 * range;
-            
+
             self.add_triangle(
                 [cx, cy],
                 [cx + radius * a1.cos(), cy + radius * a1.sin()],
@@ -214,16 +240,18 @@ impl WgpuContext {
             );
         }
     }
-    
+
     fn add_line(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, width: f32, color: Color) {
         let dx = x2 - x1;
         let dy = y2 - y1;
         let len = (dx * dx + dy * dy).sqrt();
-        if len < 0.001 { return; }
-        
+        if len < 0.001 {
+            return;
+        }
+
         let nx = -dy / len * width * 0.5;
         let ny = dx / len * width * 0.5;
-        
+
         self.add_triangle(
             [x1 - nx, y1 - ny],
             [x1 + nx, y1 + ny],
@@ -239,20 +267,45 @@ impl WgpuContext {
     }
 }
 
+fn to_wgpu_color(color: Color) -> wgpu::Color {
+    wgpu::Color {
+        r: color.r as f64,
+        g: color.g as f64,
+        b: color.b as f64,
+        a: color.a as f64,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clear_color_preserves_rgba_components() {
+        let color = to_wgpu_color(Color::rgba(0.1, 0.2, 0.3, 0.4));
+        assert_eq!(color.r, 0.1_f32 as f64);
+        assert_eq!(color.g, 0.2_f32 as f64);
+        assert_eq!(color.b, 0.3_f32 as f64);
+        assert_eq!(color.a, 0.4_f32 as f64);
+    }
+}
+
 impl GuiContext for WgpuContext {
     fn size(&self) -> (f32, f32) {
         (self.width, self.height)
     }
-    
+
     fn scale_factor(&self) -> f32 {
         self.scale
     }
-    
+
     fn fill_rect(&mut self, x: f32, y: f32, width: f32, height: f32, fill: Fill) {
-        let color = match fill { Fill::Solid(c) => c };
+        let color = match fill {
+            Fill::Solid(c) => c,
+        };
         self.add_quad(x, y, width, height, color);
     }
-    
+
     fn stroke_rect(&mut self, x: f32, y: f32, width: f32, height: f32, stroke: Stroke) {
         let w = stroke.width;
         let c = stroke.color;
@@ -265,18 +318,28 @@ impl GuiContext for WgpuContext {
         // Right
         self.add_quad(x + width - w, y, w, height, c);
     }
-    
-    fn fill_rounded_rect(&mut self, x: f32, y: f32, width: f32, height: f32, radius: f32, fill: Fill) {
-        let color = match fill { Fill::Solid(c) => c };
+
+    fn fill_rounded_rect(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        radius: f32,
+        fill: Fill,
+    ) {
+        let color = match fill {
+            Fill::Solid(c) => c,
+        };
         let r = radius.min(width / 2.0).min(height / 2.0);
-        
+
         // Center rectangle
         self.add_quad(x + r, y, width - 2.0 * r, height, color);
         // Left rectangle
         self.add_quad(x, y + r, r, height - 2.0 * r, color);
         // Right rectangle
         self.add_quad(x + width - r, y + r, r, height - 2.0 * r, color);
-        
+
         // Corners (quarter circles)
         let segs = 8;
         // Top-left
@@ -288,64 +351,100 @@ impl GuiContext for WgpuContext {
         // Bottom-left
         self.add_arc(x + r, y + height - r, r, PI * 0.5, PI, color, segs);
     }
-    
-    fn stroke_rounded_rect(&mut self, x: f32, y: f32, width: f32, height: f32, radius: f32, stroke: Stroke) {
+
+    fn stroke_rounded_rect(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        radius: f32,
+        stroke: Stroke,
+    ) {
         // Simplified: just stroke a regular rect
         self.stroke_rect(x, y, width, height, stroke);
     }
-    
+
     fn fill_circle(&mut self, cx: f32, cy: f32, radius: f32, fill: Fill) {
-        let color = match fill { Fill::Solid(c) => c };
+        let color = match fill {
+            Fill::Solid(c) => c,
+        };
         self.add_circle(cx, cy, radius, color, 32);
     }
-    
+
     fn stroke_circle(&mut self, cx: f32, cy: f32, radius: f32, stroke: Stroke) {
         // Draw as a thick ring
         let inner = radius - stroke.width;
         let outer = radius;
         let segs = 32;
-        
+
         for i in 0..segs {
             let a1 = (i as f32 / segs as f32) * 2.0 * PI;
             let a2 = ((i + 1) as f32 / segs as f32) * 2.0 * PI;
-            
+
             self.add_quad_arc(cx, cy, inner, outer, a1, a2, stroke.color);
         }
     }
-    
+
     fn stroke_line(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, stroke: Stroke) {
         self.add_line(x1, y1, x2, y2, stroke.width, stroke.color);
     }
-    
-    fn stroke_arc(&mut self, cx: f32, cy: f32, radius: f32, start_angle: f32, end_angle: f32, stroke: Stroke) {
+
+    fn stroke_arc(
+        &mut self,
+        cx: f32,
+        cy: f32,
+        radius: f32,
+        start_angle: f32,
+        end_angle: f32,
+        stroke: Stroke,
+    ) {
         let inner = radius - stroke.width * 0.5;
         let outer = radius + stroke.width * 0.5;
         let segs = 32;
         let range = end_angle - start_angle;
-        
+
         for i in 0..segs {
             let t1 = i as f32 / segs as f32;
             let t2 = (i + 1) as f32 / segs as f32;
             let a1 = start_angle + t1 * range;
             let a2 = start_angle + t2 * range;
-            
+
             self.add_quad_arc(cx, cy, inner, outer, a1, a2, stroke.color);
         }
     }
-    
-    fn fill_arc(&mut self, cx: f32, cy: f32, radius: f32, start_angle: f32, end_angle: f32, fill: Fill) {
-        let color = match fill { Fill::Solid(c) => c };
+
+    fn fill_arc(
+        &mut self,
+        cx: f32,
+        cy: f32,
+        radius: f32,
+        start_angle: f32,
+        end_angle: f32,
+        fill: Fill,
+    ) {
+        let color = match fill {
+            Fill::Solid(c) => c,
+        };
         self.add_arc(cx, cy, radius, start_angle, end_angle, color, 32);
     }
-    
-    fn draw_text(&mut self, _text: &str, _x: f32, _y: f32, _size: f32, _color: Color, _align: TextAlign) {
+
+    fn draw_text(
+        &mut self,
+        _text: &str,
+        _x: f32,
+        _y: f32,
+        _size: f32,
+        _color: Color,
+        _align: TextAlign,
+    ) {
         // Text rendering requires font atlas - placeholder
     }
-    
+
     fn measure_text(&self, _text: &str, _size: f32) -> f32 {
         0.0
     }
-    
+
     fn save(&mut self) {}
     fn restore(&mut self) {}
     fn translate(&mut self, _x: f32, _y: f32) {}
@@ -354,12 +453,21 @@ impl GuiContext for WgpuContext {
 }
 
 impl WgpuContext {
-    fn add_quad_arc(&mut self, cx: f32, cy: f32, inner: f32, outer: f32, a1: f32, a2: f32, color: Color) {
+    fn add_quad_arc(
+        &mut self,
+        cx: f32,
+        cy: f32,
+        inner: f32,
+        outer: f32,
+        a1: f32,
+        a2: f32,
+        color: Color,
+    ) {
         let p1 = [cx + inner * a1.cos(), cy + inner * a1.sin()];
         let p2 = [cx + outer * a1.cos(), cy + outer * a1.sin()];
         let p3 = [cx + outer * a2.cos(), cy + outer * a2.sin()];
         let p4 = [cx + inner * a2.cos(), cy + inner * a2.sin()];
-        
+
         self.add_triangle(p1, p2, p3, color);
         self.add_triangle(p1, p3, p4, color);
     }

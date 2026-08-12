@@ -1,21 +1,23 @@
 //! SunMao Gain Plugin with WGPU GUI
 //!
 //! This example demonstrates a gain effect plugin with a custom GUI
-//! using the WGPU renderer backend.
+//! using the WGPU renderer backend. The same codebase exports to
+//! AU, VST3, and CLAP — no format-specific GUI code needed.
 
 use std::sync::Arc;
 use sunmao_core::prelude::*;
-use sunmao_gui::gl::GlContext;
+use sunmao_gui::wgpu::WgpuContext;
 use sunmao_gui::{
     Color, Event as GuiEvent, Fill, GuiContext, MouseButton as GuiMouseButton, ParameterWidget,
     Rect, Slider, Widget,
 };
 use sunmao_macros::Params;
-use sunmao_view_baseview::{BaseviewConfig, BaseviewView, ViewState, WindowScalePolicy};
+use sunmao_view_baseview::{BaseviewConfig, BaseviewWgpuView, WgpuViewState, WindowScalePolicy};
 
 // ============ Plugin Definition ============
 
 #[derive(Params)]
+#[cfg_attr(all(target_os = "macos", feature = "au"), sunmao_au)]
 pub struct GainParams {
     #[unit = "LinearGain"]
     pub gain: FloatParam,
@@ -68,12 +70,29 @@ impl SunmaoPlugin for GainPlugin {
     fn process(
         &mut self,
         buffer: &mut AudioBuffer,
-        _events: &EventQueue,
+        events: &EventQueue,
         _context: &ProcessContext,
     ) -> ProcessStatus {
-        let gain = self.params.gain.get();
         buffer.copy_input_to_output();
-        buffer.apply_gain(gain);
+        let mut gain = self.params.gain.get();
+        let mut changes = events
+            .param_changes()
+            .filter(|change| change.id == self.params.gain.id)
+            .peekable();
+
+        for sample_index in 0..buffer.num_samples() {
+            while changes
+                .peek()
+                .is_some_and(|change| change.offset as usize <= sample_index)
+            {
+                let change = changes.next().expect("peeked parameter change");
+                gain = self.params.gain.min
+                    + change.value.clamp(0.0, 1.0) * (self.params.gain.max - self.params.gain.min);
+            }
+            for channel in 0..buffer.num_output_channels() {
+                buffer.output(channel)[sample_index] *= gain;
+            }
+        }
         ProcessStatus::Normal
     }
 
@@ -86,10 +105,13 @@ impl SunmaoPlugin for GainPlugin {
             background: Color::rgb(0.12, 0.12, 0.18),
         };
 
-        let view = BaseviewView::new(config, |context| GainViewState::new(context, 400.0, 120.0));
+        let view =
+            BaseviewWgpuView::new(config, |context| GainViewState::new(context, 400.0, 120.0));
         Some(Box::new(view))
     }
 }
+
+// ============ GUI State ============
 
 struct GainViewState {
     slider: Slider,
@@ -120,8 +142,8 @@ impl GainViewState {
     }
 }
 
-impl ViewState for GainViewState {
-    fn draw(&mut self, ctx: &mut GlContext, width: f32, height: f32) {
+impl WgpuViewState for GainViewState {
+    fn draw(&mut self, ctx: &mut WgpuContext, width: f32, height: f32) {
         self.sync_from_params();
         ctx.fill_rect(
             0.0,
@@ -137,10 +159,6 @@ impl ViewState for GainViewState {
         let before = self.slider.value();
         let handled = self.slider.handle_event(event);
         let after = self.slider.value();
-
-        if handled && (after - before).abs() > f32::EPSILON {
-            self.context.set_param("gain", after);
-        }
 
         match event {
             GuiEvent::MouseDown {
@@ -160,6 +178,10 @@ impl ViewState for GainViewState {
             _ => {}
         }
 
+        if handled && (after - before).abs() > f32::EPSILON {
+            self.context.set_param("gain", after);
+        }
+
         handled
     }
 
@@ -173,100 +195,10 @@ use sunmao_backend_vst3::SunmaoVst3Wrapper;
 sunmao_backend_vst3::export_vst3_plugin_with_gui!(SunmaoVst3Wrapper<GainPlugin>);
 
 // ============ AU Export (macOS only) ============
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "au"))]
 mod au_export {
     use super::*;
-    use std::ffi::c_void;
-    use sunmao_backend_au::gui::{
-        get_view_layer, set_needs_display, view_bounds, CocoaObject, GuiConfig, GuiHandler, Layer,
-        TransactionGuard,
-    };
-    use sunmao_backend_au::{
-        au_params, fourcc, get_parameter_local, set_parameter_local, NSPoint, NSSize, PluginInfo,
-    };
-
-    const PARAM_INDEX: u32 = 0;
-    const SLIDER_MARGIN: f64 = 20.0;
-    const SLIDER_HEIGHT: f64 = 24.0;
-    const SLIDER_TRACK_HEIGHT: f64 = 6.0;
-    const KNOB_WIDTH: f64 = 12.0;
-
-    const AU_WGPU_CONFIG: GuiConfig = GuiConfig {
-        factory_class: "SunmaoAUCocoaViewFactoryWgpu",
-        view_class: "SunmaoAUCocoaViewWgpu",
-        view_superclass: "MTKView",
-        description: "SunMao AU WGPU",
-    };
-
-    fn normalize(value: f32) -> f32 {
-        ((value - 0.0) / (2.0 - 0.0)).clamp(0.0, 1.0)
-    }
-
-    fn denormalize(norm: f32) -> f32 {
-        0.0 + norm.clamp(0.0, 1.0) * (2.0 - 0.0)
-    }
-
-    struct AuGainWgpuGui {
-        track_layer: Layer,
-        knob_layer: Layer,
-        value: f32,
-        dragging: bool,
-        width: f64,
-        height: f64,
-    }
-
-    impl Default for AuGainWgpuGui {
-        fn default() -> Self {
-            Self {
-                track_layer: Layer::from_ptr(std::ptr::null_mut()),
-                knob_layer: Layer::from_ptr(std::ptr::null_mut()),
-                value: 0.5,
-                dragging: false,
-                width: 400.0,
-                height: 120.0,
-            }
-        }
-    }
-
-    impl AuGainWgpuGui {
-        fn refresh_from_au(&mut self, audio_unit: *mut c_void) {
-            if audio_unit.is_null() {
-                return;
-            }
-            if let Ok(value) = get_parameter_local(audio_unit, PARAM_INDEX) {
-                self.value = normalize(value);
-            }
-        }
-
-        fn gain_from_x(&self, x: f64) -> f32 {
-            let slider_width = (self.width - 2.0 * SLIDER_MARGIN - KNOB_WIDTH).max(1.0);
-            let local_x = (x - SLIDER_MARGIN).clamp(0.0, slider_width);
-            (local_x / slider_width) as f32
-        }
-
-        fn update_knob_position(&self) {
-            if self.knob_layer.is_null() {
-                return;
-            }
-            let slider_width = self.width - 2.0 * SLIDER_MARGIN - KNOB_WIDTH;
-            let knob_x = SLIDER_MARGIN + (self.value as f64).clamp(0.0, 1.0) * slider_width;
-            let knob_height = SLIDER_HEIGHT * 2.0;
-            let knob_y = (self.height - knob_height) / 2.0;
-            let _guard = TransactionGuard::begin_no_animation();
-            self.knob_layer
-                .set_frame(knob_x, knob_y, KNOB_WIDTH, knob_height);
-        }
-
-        fn set_value(&mut self, view: *mut CocoaObject, audio_unit: *mut c_void, normalized: f32) {
-            self.value = normalized.clamp(0.0, 1.0);
-            if !audio_unit.is_null() {
-                let value = denormalize(self.value);
-                let _ = set_parameter_local(audio_unit, PARAM_INDEX, value);
-            }
-            self.update_knob_position();
-            set_needs_display(view);
-        }
-    }
+    use sunmao_backend_au::{au_params, fourcc, PluginInfo};
 
     const AU_INFO: PluginInfo = PluginInfo {
         name: "SunMao Gain WGPU",
@@ -281,101 +213,10 @@ mod au_export {
         supports_midi: false,
     };
 
-    impl GuiHandler for AuGainWgpuGui {
-        fn init(&mut self, view: *mut CocoaObject, size: NSSize, audio_unit: *mut c_void) {
-            self.width = size.width.max(1.0);
-            self.height = size.height.max(1.0);
-            self.refresh_from_au(audio_unit);
-
-            let root_layer = get_view_layer(view);
-            if root_layer.is_null() {
-                return;
-            }
-
-            root_layer.set_background_color(0.12, 0.12, 0.18, 1.0);
-
-            let track_layer = Layer::new();
-            let track_width = self.width - 2.0 * SLIDER_MARGIN;
-            let track_y = (self.height - SLIDER_TRACK_HEIGHT) / 2.0;
-            track_layer.set_frame(SLIDER_MARGIN, track_y, track_width, SLIDER_TRACK_HEIGHT);
-            track_layer.set_background_color(0.3, 0.3, 0.35, 1.0);
-            root_layer.add_sublayer(&track_layer);
-            self.track_layer = track_layer;
-
-            let knob_layer = Layer::new();
-            knob_layer.set_background_color(0.2, 0.7, 1.0, 1.0);
-            knob_layer.set_corner_radius(4.0);
-            root_layer.add_sublayer(&knob_layer);
-            self.knob_layer = knob_layer;
-
-            self.update_knob_position();
-            set_needs_display(view);
-        }
-
-        fn reshape(&mut self, view: *mut CocoaObject, _audio_unit: *mut c_void) {
-            let bounds = view_bounds(view);
-            self.width = bounds.size.width.max(1.0);
-            self.height = bounds.size.height.max(1.0);
-
-            if !self.track_layer.is_null() {
-                let track_width = self.width - 2.0 * SLIDER_MARGIN;
-                let track_y = (self.height - SLIDER_TRACK_HEIGHT) / 2.0;
-                let _guard = TransactionGuard::begin_no_animation();
-                self.track_layer.set_frame(
-                    SLIDER_MARGIN,
-                    track_y,
-                    track_width,
-                    SLIDER_TRACK_HEIGHT,
-                );
-            }
-            self.update_knob_position();
-            set_needs_display(view);
-        }
-
-        fn mouse_down(
-            &mut self,
-            view: *mut CocoaObject,
-            audio_unit: *mut c_void,
-            point: NSPoint,
-            _flags: u64,
-        ) {
-            self.dragging = true;
-            let value = self.gain_from_x(point.x);
-            self.set_value(view, audio_unit, value);
-        }
-
-        fn mouse_dragged(
-            &mut self,
-            view: *mut CocoaObject,
-            audio_unit: *mut c_void,
-            point: NSPoint,
-            _flags: u64,
-        ) {
-            if self.dragging {
-                let value = self.gain_from_x(point.x);
-                self.set_value(view, audio_unit, value);
-            }
-        }
-
-        fn mouse_up(
-            &mut self,
-            view: *mut CocoaObject,
-            _audio_unit: *mut c_void,
-            _point: NSPoint,
-            _flags: u64,
-        ) {
-            self.dragging = false;
-            set_needs_display(view);
-        }
-    }
-
-    sunmao_backend_au::sunmao_export_au!(
-        SunMaoGainWgpuFactory,
-        GainPlugin,
-        AU_INFO,
-        au_params::<GainParams>(),
-        gui: { handler: AuGainWgpuGui, config: AU_WGPU_CONFIG }
-    );
+    // One macro call — no format-specific GUI code needed!
+    // The plugin's `view()` returns a BaseviewWgpuView, and the AU backend
+    // bridges it via AuViewAdapter + baseview's native window handles.
+    sunmao_backend_au::sunmao_export_au_with_view!(GainPlugin, AU_INFO, au_params::<GainParams>());
 }
 
 // ============ CLAP Export ============

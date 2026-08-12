@@ -1,14 +1,14 @@
 use std::cell::Cell;
 use std::error::Error;
-use std::ffi::c_void;
+use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use raw_window_handle::{
-    HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle, XlibDisplayHandle,
-    XlibWindowHandle,
+    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
+    RawWindowHandle, WindowHandle as RwhWindowHandle, XlibDisplayHandle, XlibWindowHandle,
 };
 
 use x11rb::connection::Connection;
@@ -32,6 +32,7 @@ use crate::x11::visual_info::WindowVisualConfig;
 pub struct WindowHandle {
     raw_window_handle: Option<RawWindowHandle>,
     event_loop_handle: Option<JoinHandle<()>>,
+    resize_sender: Option<mpsc::Sender<Size>>,
     close_requested: Arc<AtomicBool>,
     is_open: Arc<AtomicBool>,
 }
@@ -47,17 +48,23 @@ impl WindowHandle {
     pub fn is_open(&self) -> bool {
         self.is_open.load(Ordering::Relaxed)
     }
+
+    pub fn resize(&mut self, size: Size) {
+        if let Some(sender) = &self.resize_sender {
+            let _ = sender.send(size);
+        }
+    }
 }
 
-unsafe impl HasRawWindowHandle for WindowHandle {
-    fn raw_window_handle(&self) -> RawWindowHandle {
+impl HasWindowHandle for WindowHandle {
+    fn window_handle(&self) -> Result<RwhWindowHandle<'_>, HandleError> {
         if let Some(raw_window_handle) = self.raw_window_handle {
             if self.is_open.load(Ordering::Relaxed) {
-                return raw_window_handle;
+                return Ok(unsafe { RwhWindowHandle::borrow_raw(raw_window_handle) });
             }
         }
 
-        RawWindowHandle::Xlib(XlibWindowHandle::empty())
+        Err(HandleError::Unavailable)
     }
 }
 
@@ -67,17 +74,26 @@ pub(crate) struct ParentHandle {
 }
 
 impl ParentHandle {
-    pub fn new() -> (Self, WindowHandle) {
+    pub fn new() -> (Self, WindowHandle, mpsc::Receiver<Size>) {
         let close_requested = Arc::new(AtomicBool::new(false));
         let is_open = Arc::new(AtomicBool::new(true));
+        let (resize_sender, resize_receiver) = mpsc::channel();
         let handle = WindowHandle {
             raw_window_handle: None,
             event_loop_handle: None,
+            resize_sender: Some(resize_sender),
             close_requested: Arc::clone(&close_requested),
             is_open: Arc::clone(&is_open),
         };
 
-        (Self { close_requested, is_open }, handle)
+        (
+            Self {
+                close_requested,
+                is_open,
+            },
+            handle,
+            resize_receiver,
+        )
     }
 
     pub fn parent_did_drop(&self) -> bool {
@@ -119,23 +135,33 @@ type WindowOpenResult = Result<SendableRwh, ()>;
 impl<'a> Window<'a> {
     pub fn open_parented<P, H, B>(parent: &P, options: WindowOpenOptions, build: B) -> WindowHandle
     where
-        P: HasRawWindowHandle,
+        P: HasWindowHandle,
         H: WindowHandler + 'static,
         B: FnOnce(&mut crate::Window) -> H,
         B: Send + 'static,
     {
         // Convert parent into something that X understands
-        let parent_id = match parent.raw_window_handle() {
+        let parent_handle = parent
+            .window_handle()
+            .expect("parent window handle is unavailable");
+        let parent_id = match parent_handle.as_raw() {
             RawWindowHandle::Xlib(h) => h.window as u32,
-            RawWindowHandle::Xcb(h) => h.window,
+            RawWindowHandle::Xcb(h) => h.window.get(),
             h => panic!("unsupported parent handle type {:?}", h),
         };
 
         let (tx, rx) = mpsc::sync_channel::<WindowOpenResult>(1);
-        let (parent_handle, mut window_handle) = ParentHandle::new();
+        let (parent_handle, mut window_handle, resize_receiver) = ParentHandle::new();
         let join_handle = thread::spawn(move || {
-            Self::window_thread(Some(parent_id), options, build, tx.clone(), Some(parent_handle))
-                .unwrap();
+            Self::window_thread(
+                Some(parent_id),
+                options,
+                build,
+                tx.clone(),
+                Some(parent_handle),
+                Some(resize_receiver),
+            )
+            .unwrap();
         });
 
         let raw_window_handle = rx.recv().unwrap().unwrap();
@@ -153,7 +179,7 @@ impl<'a> Window<'a> {
         let (tx, rx) = mpsc::sync_channel::<WindowOpenResult>(1);
 
         let thread = thread::spawn(move || {
-            Self::window_thread(None, options, build, tx, None).unwrap();
+            Self::window_thread(None, options, build, tx, None, None).unwrap();
         });
 
         let _ = rx.recv().unwrap().unwrap();
@@ -164,8 +190,12 @@ impl<'a> Window<'a> {
     }
 
     fn window_thread<H, B>(
-        parent: Option<u32>, options: WindowOpenOptions, build: B,
-        tx: mpsc::SyncSender<WindowOpenResult>, parent_handle: Option<ParentHandle>,
+        parent: Option<u32>,
+        options: WindowOpenOptions,
+        build: B,
+        tx: mpsc::SyncSender<WindowOpenResult>,
+        parent_handle: Option<ParentHandle>,
+        resize_receiver: Option<mpsc::Receiver<Size>>,
     ) -> Result<(), Box<dyn Error>>
     where
         H: WindowHandler + 'static,
@@ -184,7 +214,9 @@ impl<'a> Window<'a> {
         xcb_connection.conn.create_gc(
             gc_id,
             parent_id,
-            &CreateGCAux::new().foreground(screen.black_pixel).graphics_exposures(0),
+            &CreateGCAux::new()
+                .foreground(screen.black_pixel)
+                .graphics_exposures(0),
         )?;
 
         let scaling = match options.scale {
@@ -287,11 +319,18 @@ impl<'a> Window<'a> {
 
         // Send an initial window resized event so the user is alerted of
         // the correct dpi scaling.
-        handler.on_event(&mut window, Event::Window(WindowEvent::Resized(window_info)));
+        handler.on_event(
+            &mut window,
+            Event::Window(WindowEvent::Resized(window_info)),
+        );
 
-        let _ = tx.send(Ok(SendableRwh(window.raw_window_handle())));
+        let raw_window_handle = window
+            .window_handle()
+            .expect("new X11 window handle is unavailable")
+            .as_raw();
+        let _ = tx.send(Ok(SendableRwh(raw_window_handle)));
 
-        EventLoop::new(inner, handler, parent_handle).run()?;
+        EventLoop::new(inner, handler, parent_handle, resize_receiver).run()?;
 
         Ok(())
     }
@@ -319,11 +358,22 @@ impl<'a> Window<'a> {
     }
 
     pub fn has_focus(&mut self) -> bool {
-        unimplemented!()
+        self.inner
+            .xcb_connection
+            .conn
+            .get_input_focus()
+            .and_then(|cookie| cookie.reply())
+            .map(|reply| reply.focus == self.inner.window_id)
+            .unwrap_or(false)
     }
 
     pub fn focus(&mut self) {
-        unimplemented!()
+        let _ = self.inner.xcb_connection.conn.set_input_focus(
+            x11rb::protocol::xproto::InputFocus::PARENT,
+            self.inner.window_id,
+            x11rb::CURRENT_TIME,
+        );
+        let _ = self.inner.xcb_connection.conn.flush();
     }
 
     pub fn resize(&mut self, size: Size) {
@@ -348,29 +398,25 @@ impl<'a> Window<'a> {
     }
 }
 
-unsafe impl<'a> HasRawWindowHandle for Window<'a> {
-    fn raw_window_handle(&self) -> RawWindowHandle {
-        let mut handle = XlibWindowHandle::empty();
-
-        handle.window = self.inner.window_id.into();
+impl HasWindowHandle for Window<'_> {
+    fn window_handle(&self) -> Result<RwhWindowHandle<'_>, HandleError> {
+        let mut handle = XlibWindowHandle::new(self.inner.window_id.into());
         handle.visual_id = self.inner.visual_id.into();
-
-        RawWindowHandle::Xlib(handle)
+        let handle = RawWindowHandle::Xlib(handle);
+        Ok(unsafe { RwhWindowHandle::borrow_raw(handle) })
     }
 }
 
-unsafe impl<'a> HasRawDisplayHandle for Window<'a> {
-    fn raw_display_handle(&self) -> RawDisplayHandle {
+impl HasDisplayHandle for Window<'_> {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
         let display = self.inner.xcb_connection.dpy;
-        let mut handle = XlibDisplayHandle::empty();
-
-        handle.display = display as *mut c_void;
-        handle.screen = unsafe { x11::xlib::XDefaultScreen(display) };
-
-        RawDisplayHandle::Xlib(handle)
+        let display = NonNull::new(display.cast());
+        let screen = unsafe { x11::xlib::XDefaultScreen(self.inner.xcb_connection.dpy) };
+        let handle = RawDisplayHandle::Xlib(XlibDisplayHandle::new(display, screen));
+        Ok(unsafe { DisplayHandle::borrow_raw(handle) })
     }
 }
 
-pub fn copy_to_clipboard(_data: &str) {
-    todo!()
-}
+/// Clipboard support is not part of the Phase-1 native editor contract.
+/// Keep this entry point non-panicking until the platform clipboard service is implemented.
+pub fn copy_to_clipboard(_data: &str) {}

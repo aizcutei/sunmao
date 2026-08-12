@@ -45,25 +45,27 @@ pub fn create_wkwebview_with_handler(
         if view.is_null() {
             return std::ptr::null_mut();
         }
-        
+
         // Store callback globally (simple approach for single webview)
         MESSAGE_CALLBACK = Some(callback);
         MESSAGE_USER_DATA = user_data;
-        
+
         // Register our message handler class
         register_message_handler_class();
-        
+
         let config: *mut Object = msg_send![class!(WKWebViewConfiguration), new];
         let content_controller: *mut Object = msg_send![config, userContentController];
-        
+
         // Create and add message handler
-        let handler_class = Class::get("RustWKScriptMessageHandler").expect("Handler class missing");
+        let handler_class =
+            Class::get("RustWKScriptMessageHandler").expect("Handler class missing");
         let handler: *mut Object = msg_send![handler_class, new];
-        
+
         let name_cstr = CString::new(handler_name).unwrap_or_default();
-        let name_ns: *mut Object = msg_send![class!(NSString), stringWithUTF8String: name_cstr.as_ptr()];
+        let name_ns: *mut Object =
+            msg_send![class!(NSString), stringWithUTF8String: name_cstr.as_ptr()];
         let _: () = msg_send![content_controller, addScriptMessageHandler: handler name: name_ns];
-        
+
         let webview: *mut Object = msg_send![class!(WKWebView), alloc];
         let webview: *mut Object = msg_send![webview, initWithFrame: frame configuration: config];
         let _: () = msg_send![view, addSubview: webview];
@@ -76,12 +78,12 @@ fn register_message_handler_class() {
         let superclass = class!(NSObject);
         let mut decl = ClassDecl::new("RustWKScriptMessageHandler", superclass)
             .expect("Failed to create message handler class");
-        
+
         decl.add_method(
             sel!(userContentController:didReceiveScriptMessage:),
             did_receive_script_message as extern "C" fn(&Object, Sel, *mut Object, *mut Object),
         );
-        
+
         decl.register();
     });
 }
@@ -96,19 +98,19 @@ extern "C" fn did_receive_script_message(
         if message.is_null() {
             return;
         }
-        
+
         // Get message body
         let body: *mut Object = msg_send![message, body];
         if body.is_null() {
             return;
         }
-        
+
         // Convert to string
         let utf8: *const i8 = msg_send![body, UTF8String];
         if utf8.is_null() {
             return;
         }
-        
+
         let c_str = std::ffi::CStr::from_ptr(utf8);
         if let Ok(s) = c_str.to_str() {
             if let Some(callback) = MESSAGE_CALLBACK {
@@ -147,13 +149,15 @@ pub fn load_html(webview: *mut Object, html: &str) {
         let Ok(html_cstr) = CString::new(html) else {
             return;
         };
-        let html_ns: *mut Object = msg_send![class!(NSString), stringWithUTF8String: html_cstr.as_ptr()];
-        
+        let html_ns: *mut Object =
+            msg_send![class!(NSString), stringWithUTF8String: html_cstr.as_ptr()];
+
         // Use about:blank as base URL
         let base_cstr = CString::new("about:blank").unwrap();
-        let base_ns: *mut Object = msg_send![class!(NSString), stringWithUTF8String: base_cstr.as_ptr()];
+        let base_ns: *mut Object =
+            msg_send![class!(NSString), stringWithUTF8String: base_cstr.as_ptr()];
         let base_url: *mut Object = msg_send![class!(NSURL), URLWithString: base_ns];
-        
+
         let _: () = msg_send![webview, loadHTMLString: html_ns baseURL: base_url];
     }
 }
@@ -167,8 +171,9 @@ pub fn evaluate_js(webview: *mut Object, script: &str) {
         let Ok(script_cstr) = CString::new(script) else {
             return;
         };
-        let script_ns: *mut Object = msg_send![class!(NSString), stringWithUTF8String: script_cstr.as_ptr()];
-        
+        let script_ns: *mut Object =
+            msg_send![class!(NSString), stringWithUTF8String: script_cstr.as_ptr()];
+
         // evaluateJavaScript:completionHandler: with nil handler
         let nil: *mut Object = std::ptr::null_mut();
         let _: () = msg_send![webview, evaluateJavaScript: script_ns completionHandler: nil];

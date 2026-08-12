@@ -77,10 +77,13 @@ pub struct GlContext {
 impl GlContext {
     #[cfg(not(target_os = "linux"))]
     pub(crate) unsafe fn create(
-        parent: &RawWindowHandle, config: GlConfig,
+        parent: &RawWindowHandle,
+        config: GlConfig,
     ) -> Result<GlContext, GlError> {
-        platform::GlContext::create(parent, config)
-            .map(|context| GlContext { context, phantom: PhantomData })
+        platform::GlContext::create(parent, config).map(|context| GlContext {
+            context,
+            phantom: PhantomData,
+        })
     }
 
     /// The X11 version needs to be set up in a different way compared to the Windows and macOS
@@ -88,7 +91,10 @@ impl GlContext {
     /// baseview, and then this object can be passed to the user.
     #[cfg(target_os = "linux")]
     pub(crate) fn new(context: platform::GlContext) -> GlContext {
-        GlContext { context, phantom: PhantomData }
+        GlContext {
+            context,
+            phantom: PhantomData,
+        }
     }
 
     pub unsafe fn make_current(&self) {

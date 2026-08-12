@@ -2,6 +2,9 @@
 //!
 //! Displays host transport info (tempo, playing state, sample position)
 //! using a simple OpenGL-based UI. Audio is passed through (bypass).
+//!
+//! The same codebase exports to AU, VST3, and CLAP — no format-specific
+//! GUI code needed.
 
 use std::sync::{Arc, Mutex, OnceLock};
 use sunmao_core::prelude::*;
@@ -21,7 +24,6 @@ struct TransportSnapshot {
 
 static TRANSPORT_STATE: OnceLock<Arc<Mutex<TransportSnapshot>>> = OnceLock::new();
 
-
 fn shared_transport() -> Arc<Mutex<TransportSnapshot>> {
     TRANSPORT_STATE
         .get_or_init(|| Arc::new(Mutex::new(TransportSnapshot::default())))
@@ -38,6 +40,7 @@ fn read_snapshot(state: &Arc<Mutex<TransportSnapshot>>) -> TransportSnapshot {
 // ============ Plugin Definition ============
 
 #[derive(Params)]
+#[cfg_attr(all(target_os = "macos", feature = "au"), sunmao_au)]
 pub struct DawInfoParams {
     #[unit = "Generic"]
     pub dummy: FloatParam,
@@ -79,11 +82,9 @@ impl SunmaoPlugin for DawInfoPlugin {
     fn input_channels(&self) -> u32 {
         2
     }
-
     fn output_channels(&self) -> u32 {
         2
     }
-
     fn accepts_midi(&self) -> bool {
         false
     }
@@ -336,117 +337,10 @@ use sunmao_backend_vst3::SunmaoVst3Wrapper;
 sunmao_backend_vst3::export_vst3_plugin_with_gui!(SunmaoVst3Wrapper<DawInfoPlugin>);
 
 // ============ AU Export (macOS only) ============
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "au"))]
 mod au_export {
     use super::*;
-    use std::ffi::c_void;
-    use sunmao_backend_au::gui::{
-        flush_context, make_current_context, open_gl_context, set_best_resolution,
-        set_needs_display, set_pixel_format, update_open_gl_view, view_backing_bounds, view_bounds,
-        CocoaObject, GuiConfig, GuiHandler,
-    };
-    use sunmao_backend_au::{
-        au_params, fourcc, gl_get_proc_address, AudioComponentDescription,
-        AudioComponentPlugInInterface, NSRect, NSSize, PluginInfo,
-    };
-    use sunmao_gui::gl::GlContext;
-    use sunmao_gui::Color;
-
-    const AU_OPENGL_CONFIG: GuiConfig = GuiConfig {
-        factory_class: "SunmaoAUCocoaViewFactoryDawInfo",
-        view_class: "SunmaoAUCocoaViewDawInfo",
-        view_superclass: "NSOpenGLView",
-        description: "SunMao AU DAW Info",
-    };
-
-    struct AuDawInfoOpenGlGui {
-        width: f32,
-        height: f32,
-        gl: Option<GlContext>,
-    }
-
-    impl Default for AuDawInfoOpenGlGui {
-        fn default() -> Self {
-            Self {
-                width: 520.0,
-                height: 160.0,
-                gl: None,
-            }
-        }
-    }
-
-    impl GuiHandler for AuDawInfoOpenGlGui {
-        fn init(&mut self, view: *mut CocoaObject, size: NSSize, _audio_unit: *mut c_void) {
-            self.width = size.width.max(1.0) as f32;
-            self.height = size.height.max(1.0) as f32;
-
-            let attrs = [
-                99,     // NSOPENGLPFA_OPENGL_PROFILE
-                0x3200, // NSOpenGLProfileVersion3_2Core
-                73,     // NSOPENGLPFA_ACCELERATED
-                5,      // NSOPENGLPFA_DOUBLEBUFFER
-                0,
-            ];
-            set_pixel_format(view, &attrs);
-            set_best_resolution(view, true);
-            update_open_gl_view(view);
-            set_needs_display(view);
-        }
-
-        fn draw(&mut self, view: *mut CocoaObject, _audio_unit: *mut c_void, _rect: NSRect) {
-            let ctx = open_gl_context(view);
-            if ctx.is_null() {
-                return;
-            }
-            make_current_context(ctx);
-
-            if self.gl.is_none() {
-                self.gl = unsafe {
-                    GlContext::from_loader(
-                        |s| gl_get_proc_address(s) as *const _,
-                        self.width,
-                        self.height,
-                    )
-                    .ok()
-                };
-            }
-
-            let bounds = view_bounds(view);
-            let backing = view_backing_bounds(view);
-            let scale = if bounds.size.width > 0.0 {
-                (backing.size.width / bounds.size.width) as f32
-            } else {
-                1.0
-            };
-            let physical_w = backing.size.width.max(1.0) as u32;
-            let physical_h = backing.size.height.max(1.0) as u32;
-
-            self.width = bounds.size.width.max(1.0) as f32;
-            self.height = bounds.size.height.max(1.0) as f32;
-
-            if let Some(gl) = self.gl.as_mut() {
-                gl.set_scale(scale);
-                gl.set_viewport(physical_w, physical_h);
-                gl.clear(Color::rgb(0.12, 0.12, 0.18));
-                gl.begin_frame();
-
-                let snapshot = super::read_snapshot(&super::shared_transport());
-                super::draw_daw_info(gl, self.width, self.height, snapshot);
-
-                gl.end_frame();
-            }
-
-            flush_context(ctx);
-        }
-
-        fn reshape(&mut self, view: *mut CocoaObject, _audio_unit: *mut c_void) {
-            update_open_gl_view(view);
-            let bounds = view_bounds(view);
-            self.width = bounds.size.width.max(1.0) as f32;
-            self.height = bounds.size.height.max(1.0) as f32;
-            set_needs_display(view);
-        }
-    }
+    use sunmao_backend_au::{au_params, fourcc, PluginInfo};
 
     const AU_INFO: PluginInfo = PluginInfo {
         name: "SunMao DAW Info GUI",
@@ -461,24 +355,12 @@ mod au_export {
         supports_midi: false,
     };
 
-    sunmao_backend_au::sunmao_export_au!(
-        SunMaoDawInfoFactoryInner,
+    // One macro call — no format-specific GUI code needed!
+    sunmao_backend_au::sunmao_export_au_with_view!(
         DawInfoPlugin,
         AU_INFO,
-        au_params::<DawInfoParams>(),
-        gui: { handler: AuDawInfoOpenGlGui, config: AU_OPENGL_CONFIG }
+        au_params::<DawInfoParams>()
     );
-
-    #[unsafe(no_mangle)]
-    pub extern "C" fn SunMaoDawInfoFactory(
-        in_desc: *const AudioComponentDescription,
-    ) -> *mut AudioComponentPlugInInterface {
-        let result = std::panic::catch_unwind(|| SunMaoDawInfoFactoryInner(in_desc));
-        match result {
-            Ok(ptr) => ptr,
-            Err(_) => std::ptr::null_mut(),
-        }
-    }
 }
 
 // ============ CLAP Export ============

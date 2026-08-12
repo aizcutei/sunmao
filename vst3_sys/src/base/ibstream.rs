@@ -1,7 +1,7 @@
 //! IBStream interface for state persistence
 
-use std::ffi::c_void;
 use crate::base::types::*;
+use std::ffi::c_void;
 
 // =============================================================================
 // Stream Seek Mode

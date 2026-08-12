@@ -3,18 +3,18 @@ use std::ffi::c_void;
 
 use au_sys::{
     AudioUnitCocoaViewInfo, CocoaViewConfig, NSPoint, NSRect, NSSize, ViewCallbacks,
-    cocoa_view_info as au_cocoa_view_info,
-    init_cocoa_view_factory as au_init_cocoa_view_factory, set_view_user_data,
+    cocoa_view_info as au_cocoa_view_info, init_cocoa_view_factory as au_init_cocoa_view_factory,
+    set_view_user_data,
 };
 use objc::{class, msg_send, sel, sel_impl};
 
-pub mod opengl;
-#[cfg(target_os = "macos")]
-pub mod metal;
-#[cfg(target_os = "macos")]
-pub mod webview;
 #[cfg(target_os = "macos")]
 pub mod layer;
+#[cfg(target_os = "macos")]
+pub mod metal;
+pub mod opengl;
+#[cfg(target_os = "macos")]
+pub mod webview;
 
 pub use objc::runtime::Object as CocoaObject;
 
@@ -105,6 +105,7 @@ pub struct GuiConfig {
     pub view_class: &'static str,
     pub view_superclass: &'static str,
     pub description: &'static str,
+    pub preferred_size: Option<NSSize>,
 }
 
 pub trait GuiHandler {
@@ -149,6 +150,7 @@ pub trait GuiHandler {
 pub fn register_gui<Gui: GuiHandler + Default + 'static>(
     config: GuiConfig,
 ) -> AudioUnitCocoaViewInfo {
+    au_cocoa_stubs::ensure_linked();
     au_init_cocoa_view_factory(
         CocoaViewConfig {
             factory_class: config.factory_class,
@@ -156,6 +158,7 @@ pub fn register_gui<Gui: GuiHandler + Default + 'static>(
             view_superclass: config.view_superclass,
             description: config.description,
             view_init: Some(view_init::<Gui>),
+            preferred_size: config.preferred_size,
         },
         ViewCallbacks {
             draw: Some(draw::<Gui>),

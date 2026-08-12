@@ -97,16 +97,24 @@ pub unsafe extern "C" fn au_component_factory(
     _in_desc: *const AudioComponentDescription,
 ) -> *mut AudioComponentPlugInInterface {
     log_msg("[AU] au_component_factory called");
-    if FACTORY_PTR.load(Ordering::SeqCst).is_null() {
-        log_msg("[AU] factory_ptr is null");
+    let fp = FACTORY_PTR.load(Ordering::SeqCst);
+    log_msg(&format!("[AU] au_component_factory: factory_ptr={:?}", fp));
+    if fp.is_null() {
+        log_msg("[AU] factory_ptr is null, returning null");
         return ptr::null_mut();
     }
-    Box::into_raw(Box::new(AudioComponentPlugInInterface {
+    log_msg("[AU] au_component_factory: creating vtable");
+    let result = Box::into_raw(Box::new(AudioComponentPlugInInterface {
         Open: Some(open_instance),
         Close: Some(close_instance),
         Lookup: Some(lookup_selector),
         reserved: ptr::null_mut(),
-    }))
+    }));
+    log_msg(&format!(
+        "[AU] au_component_factory: returning vtable={:?}",
+        result
+    ));
+    result
 }
 
 struct AuInstance {
@@ -286,17 +294,22 @@ unsafe extern "C" fn open_instance(
     self_ptr: *mut c_void,
     _instance: AudioComponentInstance,
 ) -> OSStatus {
+    log_msg("[AU] open_instance called");
     let factory = FACTORY_PTR.load(Ordering::SeqCst);
+    log_msg(&format!("[AU] open_instance: factory_ptr={:?}", factory));
     if factory.is_null() {
+        log_msg("[AU] open_instance: factory is null, returning error");
         return kAudioUnitErr_FailedInitialization;
     }
     let factory = &*factory;
+    log_msg("[AU] open_instance: creating AuInstance");
     let instance_handle = if _instance.is_null() {
         self_ptr as AudioUnit
     } else {
         _instance as AudioUnit
     };
     let instance_box = Box::new(AuInstance::new(&factory.descriptor, instance_handle));
+    log_msg("[AU] open_instance: AuInstance created");
     let instance_ptr = Box::into_raw(instance_box) as *mut AuInstance;
     let storage_handle = Box::into_raw(Box::new(instance_ptr as *mut c_void)) as Handle;
     SetComponentInstanceStorage(self_ptr as AudioComponentInstance, storage_handle);
@@ -313,6 +326,7 @@ unsafe extern "C" fn open_instance(
             map.insert(instance_key, instance_value);
         }
     }
+    log_msg("[AU] open_instance: returning noErr");
     noErr
 }
 

@@ -27,6 +27,7 @@ impl Voice {
 
 /// Synth parameters.
 #[derive(Params)]
+#[cfg_attr(all(target_os = "macos", feature = "au"), sunmao_au)]
 pub struct SineParams {
     /// Master volume (0.0 to 1.0).
     #[unit = "LinearGain"]
@@ -83,55 +84,68 @@ impl SunmaoPlugin for SineSynth {
         self.sample_rate = sample_rate;
     }
 
+    fn reset(&mut self) {
+        for voice in &mut self.voices {
+            voice.active = false;
+            voice.velocity = 0.0;
+            voice.phase = 0.0;
+        }
+    }
+
     fn process(
         &mut self,
         buffer: &mut AudioBuffer,
         events: &EventQueue,
         _context: &ProcessContext,
     ) -> ProcessStatus {
-        // Handle MIDI events
-        for midi in events.midi_events() {
-            if midi.is_note_on() {
-                // Find free voice
-                if let Some(voice) = self.voices.iter_mut().find(|v| !v.active) {
-                    voice.note = midi.note();
-                    voice.velocity = midi.velocity() as f32 / 127.0;
-                    voice.phase = 0.0;
-                    voice.active = true;
-                }
-            } else if midi.is_note_off() {
-                // Release matching voice
-                if let Some(voice) = self
-                    .voices
-                    .iter_mut()
-                    .find(|v| v.active && v.note == midi.note())
-                {
-                    voice.active = false;
+        let mut volume = self.params.volume.get();
+        let num_samples = buffer.num_samples();
+        buffer.clear();
+        let mut events = events.timed_events().peekable();
+
+        for sample_index in 0..num_samples {
+            while events
+                .peek()
+                .is_some_and(|event| event.offset() as usize <= sample_index)
+            {
+                match events.next().expect("peeked event") {
+                    Event::Midi(event) if event.is_note_on() => {
+                        if let Some(voice) = self.voices.iter_mut().find(|voice| !voice.active) {
+                            voice.note = event.note();
+                            voice.velocity = event.velocity() as f32 / 127.0;
+                            voice.phase = 0.0;
+                            voice.active = true;
+                        }
+                    }
+                    Event::Midi(event) if event.is_note_off() => {
+                        if let Some(voice) = self
+                            .voices
+                            .iter_mut()
+                            .find(|voice| voice.active && voice.note == event.note())
+                        {
+                            voice.active = false;
+                        }
+                    }
+                    Event::ParamChange { id, value, .. } if id == self.params.volume.id => {
+                        volume = self.params.volume.min
+                            + value.clamp(0.0, 1.0)
+                                * (self.params.volume.max - self.params.volume.min);
+                    }
+                    _ => {}
                 }
             }
-        }
 
-        let volume = self.params.volume.get();
-        let num_samples = buffer.num_samples();
-
-        // Clear buffer
-        buffer.clear();
-
-        // Render voices
-        for voice in self.voices.iter_mut().filter(|v| v.active) {
-            let freq = 440.0 * 2.0_f64.powf((voice.note as f64 - 69.0) / 12.0);
-            let phase_inc = freq / self.sample_rate;
-
-            for i in 0..num_samples {
+            for voice in self.voices.iter_mut().filter(|voice| voice.active) {
+                let freq = 440.0 * 2.0_f64.powf((voice.note as f64 - 69.0) / 12.0);
+                let phase_inc = freq / self.sample_rate;
                 let sample = (voice.phase * std::f64::consts::TAU).sin() as f32;
                 let out = sample * voice.velocity * volume;
 
-                // Add to both channels
                 if buffer.num_output_channels() > 0 {
-                    buffer.output(0)[i] += out;
+                    buffer.output(0)[sample_index] += out;
                 }
                 if buffer.num_output_channels() > 1 {
-                    buffer.output(1)[i] += out;
+                    buffer.output(1)[sample_index] += out;
                 }
 
                 voice.phase += phase_inc;
@@ -148,6 +162,7 @@ impl SunmaoPlugin for SineSynth {
         Vst3Info {
             class_id: *b"SunMaoSynSine!!!",
             categories: &["Instrument", "Synth"],
+            ..Default::default()
         }
     }
 
@@ -167,13 +182,68 @@ impl SunmaoPlugin for SineSynth {
     }
 }
 
-// ============ VST3 Export ============
-use sunmao_backend_vst3::SunmaoVst3Wrapper;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-sunmao_backend_vst3::export_vst3_plugin!(SunmaoVst3Wrapper<SineSynth>);
+    fn peak(samples: &[f32]) -> f32 {
+        samples
+            .iter()
+            .fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
+    }
+
+    #[test]
+    fn timed_volume_changes_apply_at_sample_offsets_without_advancing_params() {
+        let mut synth = SineSynth::default();
+        synth.initialize(48_000.0, 16);
+        let inputs: [&[f32]; 0] = [];
+        let mut left = [0.0; 12];
+        let mut right = [0.0; 12];
+        let mut outputs: [&mut [f32]; 2] = [&mut left, &mut right];
+        let mut buffer = AudioBuffer::new(&inputs, &mut outputs, 12);
+        let mut events = EventQueue::new();
+        events.push(Event::Midi(MidiMessage::note_on(0, 0, 69, 127)));
+        events.push_param_change(ParamChange {
+            id: "volume",
+            value: 0.0,
+            offset: 4,
+        });
+        events.push_param_change(ParamChange {
+            id: "volume",
+            value: 0.25,
+            offset: 7,
+        });
+        events.push_param_change(ParamChange {
+            id: "volume",
+            value: 1.0,
+            offset: 7,
+        });
+
+        let status = synth.process(
+            &mut buffer,
+            &events,
+            &ProcessContext {
+                sample_rate: 48_000.0,
+                tempo: None,
+                is_playing: true,
+                sample_pos: 0,
+            },
+        );
+
+        assert_eq!(status, ProcessStatus::Normal);
+        assert!(peak(&left[..4]) > 1.0e-6);
+        assert_eq!(peak(&left[4..7]), 0.0);
+        assert!(peak(&left[7..]) > 1.0e-6);
+        assert_eq!(right, left);
+        assert_eq!(synth.params.volume.get(), 0.5);
+    }
+}
+
+// ============ Unified VST3 + CLAP Export ============
+sunmao::sunmao_export!(SineSynth);
 
 // ============ AU Export (macOS only) ============
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "au"))]
 mod au_export {
     use super::*;
     use sunmao_backend_au::SunmaoAuWrapper;
@@ -198,32 +268,4 @@ mod au_export {
         AU_INFO,
         au_params::<SineParams>()
     );
-}
-
-// ============ CLAP Export ============
-mod clap_export {
-    use super::*;
-    use std::ffi::c_char;
-    use sunmao_backend_clap::SunmaoClapWrapper;
-    use sunmao_backend_clap::{export_clap_plugin, ClapFeature, ClapFeatures, PluginInfo};
-
-    static PLUGIN_INFO: PluginInfo = PluginInfo {
-        id: "com.sunmao.synth.sine\0",
-        name: "SunMao Sine Synth\0",
-        vendor: "aizcutei\0",
-        url: "https://aizcutei.github.io/sunmao\0",
-        manual_url: "\0",
-        support_url: "\0",
-        version: "1.0.0\0",
-        description: "Simple sine wave synthesizer\0",
-    };
-
-    const FEATURES_LIST: [*const c_char; 3] = [
-        ClapFeature::Instrument.as_ptr(),
-        ClapFeature::Synthesizer.as_ptr(),
-        std::ptr::null(),
-    ];
-    static FEATURES: ClapFeatures = ClapFeatures::new(&FEATURES_LIST);
-
-    export_clap_plugin!(SunmaoClapWrapper<SineSynth>, PLUGIN_INFO, FEATURES);
 }

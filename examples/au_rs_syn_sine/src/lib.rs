@@ -1,6 +1,9 @@
 use std::f32::consts::TAU;
 
-use au_rs::{BufferList, ParameterInfo, ParameterUnit, Plugin, PluginInfo, export_au_plugin, fourcc, for_each_channel};
+use au_rs::{
+    BufferList, ParameterInfo, ParameterUnit, Plugin, PluginInfo, export_au_plugin,
+    for_each_channel, fourcc,
+};
 
 const PARAM_GAIN: u32 = 0;
 
@@ -48,7 +51,11 @@ impl Plugin for BasicSynth {
     ) {
         for_each_channel(None, outputs, frames, |_input, output| {
             for i in 0..output.len() {
-                let sample = if self.gate { self.phase.sin() * self.gain } else { 0.0 };
+                let sample = if self.gate {
+                    self.phase.sin() * self.gain
+                } else {
+                    0.0
+                };
                 self.phase += TAU * self.freq / self.sample_rate;
                 if self.phase >= TAU {
                     self.phase -= TAU;

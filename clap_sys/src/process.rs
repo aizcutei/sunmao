@@ -1,5 +1,5 @@
-use crate::events::{clap_event_transport_t, clap_input_events_t, clap_output_events_t};
 use crate::audio_buffer::clap_audio_buffer_t;
+use crate::events::{clap_event_transport_t, clap_input_events_t, clap_output_events_t};
 
 pub const CLAP_PROCESS_ERROR: i32 = 0;
 pub const CLAP_PROCESS_CONTINUE: i32 = 1;

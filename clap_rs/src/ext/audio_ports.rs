@@ -3,8 +3,8 @@
 use crate::plugin::Plugin;
 use crate::plugin_instance::PluginInstance;
 use clap_sys::ext::audio_ports::{
-    clap_plugin_audio_ports_t, clap_audio_port_info_t, 
-    CLAP_AUDIO_PORT_IS_MAIN, CLAP_PORT_STEREO, CLAP_EXT_AUDIO_PORTS   
+    CLAP_AUDIO_PORT_IS_MAIN, CLAP_EXT_AUDIO_PORTS, CLAP_PORT_STEREO, clap_audio_port_info_t,
+    clap_plugin_audio_ports_t,
 };
 use clap_sys::id::CLAP_INVALID_ID;
 use clap_sys::plugin::clap_plugin_t;
@@ -30,11 +30,15 @@ fn write_cstr_to_array(dst: &mut [c_char], bytes: &[u8]) {
 }
 
 pub(crate) unsafe extern "C" fn audio_ports_count<P: Plugin>(
-    plugin: *const clap_plugin_t, 
-    is_input: bool
+    plugin: *const clap_plugin_t,
+    is_input: bool,
 ) -> u32 {
     let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
-    instance.audio_ports_cache.iter().filter(|p| p.is_input == is_input).count() as u32
+    instance
+        .audio_ports_cache
+        .iter()
+        .filter(|p| p.is_input == is_input)
+        .count() as u32
 }
 
 pub(crate) unsafe extern "C" fn audio_ports_get<P: Plugin>(
@@ -43,15 +47,27 @@ pub(crate) unsafe extern "C" fn audio_ports_get<P: Plugin>(
     is_input: bool,
     info: *mut clap_audio_port_info_t,
 ) -> bool {
-    if info.is_null() { return false; }
+    if info.is_null() {
+        return false;
+    }
     let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
-    let ports: Vec<_> = instance.audio_ports_cache.iter().filter(|p| p.is_input == is_input).collect();
-    if (index as usize) >= ports.len() { return false; }
+    let ports: Vec<_> = instance
+        .audio_ports_cache
+        .iter()
+        .filter(|p| p.is_input == is_input)
+        .collect();
+    if (index as usize) >= ports.len() {
+        return false;
+    }
     let port = &ports[index as usize];
     let info = unsafe { &mut *info };
     info.id = port.id;
     write_cstr_to_array(&mut info.name, port.name.as_bytes());
-    info.flags = if port.is_main { CLAP_AUDIO_PORT_IS_MAIN } else { 0 };
+    info.flags = if port.is_main {
+        CLAP_AUDIO_PORT_IS_MAIN
+    } else {
+        0
+    };
     info.channel_count = port.channel_count;
     info.port_type = CLAP_PORT_STEREO.as_ptr() as *const c_char;
     info.in_place_pair = CLAP_INVALID_ID;
@@ -68,15 +84,19 @@ pub(crate) fn create_audio_ports_ext<P: Plugin>() -> clap_plugin_audio_ports_t {
 
 // ======= GUI Plugin Support =======
 
-use crate::plugin_instance::PluginInstanceWithGui;
 use crate::ext::gui::GuiHandler;
+use crate::plugin_instance::PluginInstanceWithGui;
 
 pub(crate) unsafe extern "C" fn audio_ports_count_gui<P: Plugin + GuiHandler>(
-    plugin: *const clap_plugin_t, 
-    is_input: bool
+    plugin: *const clap_plugin_t,
+    is_input: bool,
 ) -> u32 {
     let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
-    instance.audio_ports_cache.iter().filter(|p| p.is_input == is_input).count() as u32
+    instance
+        .audio_ports_cache
+        .iter()
+        .filter(|p| p.is_input == is_input)
+        .count() as u32
 }
 
 pub(crate) unsafe extern "C" fn audio_ports_get_gui<P: Plugin + GuiHandler>(
@@ -85,15 +105,27 @@ pub(crate) unsafe extern "C" fn audio_ports_get_gui<P: Plugin + GuiHandler>(
     is_input: bool,
     info: *mut clap_audio_port_info_t,
 ) -> bool {
-    if info.is_null() { return false; }
+    if info.is_null() {
+        return false;
+    }
     let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
-    let ports: Vec<_> = instance.audio_ports_cache.iter().filter(|p| p.is_input == is_input).collect();
-    if (index as usize) >= ports.len() { return false; }
+    let ports: Vec<_> = instance
+        .audio_ports_cache
+        .iter()
+        .filter(|p| p.is_input == is_input)
+        .collect();
+    if (index as usize) >= ports.len() {
+        return false;
+    }
     let port = &ports[index as usize];
     let info = unsafe { &mut *info };
     info.id = port.id;
     write_cstr_to_array(&mut info.name, port.name.as_bytes());
-    info.flags = if port.is_main { CLAP_AUDIO_PORT_IS_MAIN } else { 0 };
+    info.flags = if port.is_main {
+        CLAP_AUDIO_PORT_IS_MAIN
+    } else {
+        0
+    };
     info.channel_count = port.channel_count;
     info.port_type = CLAP_PORT_STEREO.as_ptr() as *const c_char;
     info.in_place_pair = CLAP_INVALID_ID;

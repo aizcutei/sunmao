@@ -7,7 +7,11 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 sunmao_core = { path = "../core" }
+sunmao_gui = { path = "../gui" }
+sunmao_view_baseview = { path = "../view_baseview" }
 au_rs = { path = "../../au_rs" }
+au_sys = { path = "../../au_sys", default-features = false }
+objc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # macOS specific dependencies if any

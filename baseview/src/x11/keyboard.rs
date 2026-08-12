@@ -391,7 +391,15 @@ pub(super) fn convert_key_press_event(key_press: &KeyPressEvent) -> KeyboardEven
     let location = code_to_location(code);
     let state = KeyState::Down;
 
-    KeyboardEvent { code, key, modifiers, location, state, repeat: false, is_composing: false }
+    KeyboardEvent {
+        code,
+        key,
+        modifiers,
+        location,
+        state,
+        repeat: false,
+        is_composing: false,
+    }
 }
 
 pub(super) fn convert_key_release_event(key_release: &KeyReleaseEvent) -> KeyboardEvent {
@@ -402,5 +410,13 @@ pub(super) fn convert_key_release_event(key_release: &KeyReleaseEvent) -> Keyboa
     let location = code_to_location(code);
     let state = KeyState::Up;
 
-    KeyboardEvent { code, key, modifiers, location, state, repeat: false, is_composing: false }
+    KeyboardEvent {
+        code,
+        key,
+        modifiers,
+        location,
+        state,
+        repeat: false,
+        is_composing: false,
+    }
 }

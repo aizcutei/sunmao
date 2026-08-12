@@ -1,14 +1,14 @@
 //! Voice Info Extension for clap_rs
-//! 
+//!
 //! Report voice allocation info for polyphonic synths.
 
 use crate::plugin::Plugin;
 use crate::plugin_instance::PluginInstance;
-use clap_sys::plugin::clap_plugin_t;
 use clap_sys::ext::voice_info::{
-    clap_plugin_voice_info_t, clap_voice_info_t,
-    CLAP_EXT_VOICE_INFO, CLAP_VOICE_INFO_SUPPORTS_OVERLAPPING_NOTES
+    CLAP_EXT_VOICE_INFO, CLAP_VOICE_INFO_SUPPORTS_OVERLAPPING_NOTES, clap_plugin_voice_info_t,
+    clap_voice_info_t,
 };
+use clap_sys::plugin::clap_plugin_t;
 
 /// Voice allocation info
 #[derive(Debug, Clone, Copy)]
@@ -35,16 +35,18 @@ pub(crate) unsafe extern "C" fn voice_info_get<P: Plugin>(
     plugin: *const clap_plugin_t,
     info: *mut clap_voice_info_t,
 ) -> bool {
-    if info.is_null() { return false; }
+    if info.is_null() {
+        return false;
+    }
     let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
-    if let Some(vi) = instance.plugin.voice_info() {
+    if let Some(vi) = unsafe { instance.controller() }.voice_info() {
         let out = unsafe { &mut *info };
         out.voice_count = vi.voice_count;
         out.voice_capacity = vi.voice_capacity;
-        out.flags = if vi.supports_overlapping_notes { 
-            CLAP_VOICE_INFO_SUPPORTS_OVERLAPPING_NOTES 
-        } else { 
-            0 
+        out.flags = if vi.supports_overlapping_notes {
+            CLAP_VOICE_INFO_SUPPORTS_OVERLAPPING_NOTES
+        } else {
+            0
         };
         true
     } else {
@@ -61,23 +63,25 @@ pub(crate) fn create_voice_info_ext<P: Plugin>() -> clap_plugin_voice_info_t {
 
 // ======= GUI Plugin Support =======
 
-use crate::plugin_instance::PluginInstanceWithGui;
 use crate::ext::gui::GuiHandler;
+use crate::plugin_instance::PluginInstanceWithGui;
 
 pub(crate) unsafe extern "C" fn voice_info_get_gui<P: Plugin + GuiHandler>(
     plugin: *const clap_plugin_t,
     info: *mut clap_voice_info_t,
 ) -> bool {
-    if info.is_null() { return false; }
+    if info.is_null() {
+        return false;
+    }
     let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
-    if let Some(vi) = instance.plugin.voice_info() {
+    if let Some(vi) = unsafe { instance.controller() }.voice_info() {
         let out = unsafe { &mut *info };
         out.voice_count = vi.voice_count;
         out.voice_capacity = vi.voice_capacity;
-        out.flags = if vi.supports_overlapping_notes { 
-            CLAP_VOICE_INFO_SUPPORTS_OVERLAPPING_NOTES 
-        } else { 
-            0 
+        out.flags = if vi.supports_overlapping_notes {
+            CLAP_VOICE_INFO_SUPPORTS_OVERLAPPING_NOTES
+        } else {
+            0
         };
         true
     } else {
@@ -90,5 +94,3 @@ pub(crate) fn create_voice_info_ext_gui<P: Plugin + GuiHandler>() -> clap_plugin
         get: Some(voice_info_get_gui::<P>),
     }
 }
-
-

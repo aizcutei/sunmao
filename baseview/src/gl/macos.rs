@@ -8,8 +8,9 @@ use std::str::FromStr;
 use raw_window_handle::RawWindowHandle;
 
 use cocoa::appkit::{
-    NSOpenGLContext, NSOpenGLContextParameter, NSOpenGLPFAAccelerated, NSOpenGLPFAAlphaSize,
-    NSOpenGLPFAColorSize, NSOpenGLPFADepthSize, NSOpenGLPFADoubleBuffer, NSOpenGLPFAMultisample,
+    NSOpenGLContext, NSOpenGLContextParameter, NSOpenGLPFAAccelerated,
+    NSOpenGLPFAAllowOfflineRenderers, NSOpenGLPFAAlphaSize, NSOpenGLPFAColorSize,
+    NSOpenGLPFADepthSize, NSOpenGLPFADoubleBuffer, NSOpenGLPFAMultisample,
     NSOpenGLPFAOpenGLProfile, NSOpenGLPFASampleBuffers, NSOpenGLPFASamples, NSOpenGLPFAStencilSize,
     NSOpenGLPixelFormat, NSOpenGLProfileVersion3_2Core, NSOpenGLProfileVersion4_1Core,
     NSOpenGLProfileVersionLegacy, NSOpenGLView, NSView,
@@ -25,7 +26,12 @@ use objc::{msg_send, sel, sel_impl};
 
 use super::{GlConfig, GlError, Profile};
 
-pub type CreationFailedError = ();
+#[derive(Debug)]
+pub enum CreationFailedError {
+    PixelFormat,
+    View,
+    Context,
+}
 pub struct GlContext {
     view: id,
     context: id,
@@ -59,7 +65,6 @@ impl GlContext {
             NSOpenGLPFAAlphaSize as u32, config.alpha_bits as u32,
             NSOpenGLPFADepthSize as u32, config.depth_bits as u32,
             NSOpenGLPFAStencilSize as u32, config.stencil_bits as u32,
-            NSOpenGLPFAAccelerated as u32,
         ];
 
         if config.samples.is_some() {
@@ -75,19 +80,52 @@ impl GlContext {
             attrs.push(NSOpenGLPFADoubleBuffer as u32);
         }
 
-        attrs.push(0);
+        // Prefer an accelerated renderer, but keep a software/offline fallback
+        // for headless hosts and transient WindowServer/GPU pressure. Each
+        // attribute list is terminated exactly as required by AppKit.
+        let mut accelerated = attrs.clone();
+        accelerated.push(NSOpenGLPFAAccelerated as u32);
+        accelerated.push(0);
 
-        let pixel_format = NSOpenGLPixelFormat::alloc(nil).initWithAttributes_(&attrs);
+        let mut offline = attrs.clone();
+        offline.push(NSOpenGLPFAAccelerated as u32);
+        offline.push(NSOpenGLPFAAllowOfflineRenderers as u32);
+        offline.push(0);
+
+        let mut software = attrs;
+        software.push(NSOpenGLPFAAllowOfflineRenderers as u32);
+        software.push(0);
+
+        let mut pixel_format = nil;
+        for attributes in [&accelerated, &offline, &software] {
+            // cocoa 0.24's initWithAttributes_ wrapper takes `&[u32]`, which is
+            // a Rust fat pointer and does not match Objective-C's pointer-to-
+            // terminated attribute array ABI. Pass the backing pointer explicitly.
+            for _attempt in 0..3 {
+                pixel_format = msg_send![
+                    NSOpenGLPixelFormat::alloc(nil),
+                    initWithAttributes: attributes.as_ptr()
+                ];
+                if pixel_format != nil {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            if pixel_format != nil {
+                break;
+            }
+        }
 
         if pixel_format == nil {
-            return Err(GlError::CreationFailed(()));
+            return Err(GlError::CreationFailed(CreationFailedError::PixelFormat));
         }
 
         let view =
             NSOpenGLView::alloc(nil).initWithFrame_pixelFormat_(parent_view.frame(), pixel_format);
 
         if view == nil {
-            return Err(GlError::CreationFailed(()));
+            let () = msg_send![pixel_format, release];
+            return Err(GlError::CreationFailed(CreationFailedError::View));
         }
 
         view.setWantsBestResolutionOpenGLSurface_(YES);
@@ -96,6 +134,12 @@ impl GlContext {
         parent_view.addSubview_(view);
 
         let context: id = msg_send![view, openGLContext];
+        if context == nil {
+            view.removeFromSuperview();
+            let () = msg_send![view, release];
+            let () = msg_send![pixel_format, release];
+            return Err(GlError::CreationFailed(CreationFailedError::Context));
+        }
         let () = msg_send![context, retain];
 
         context.setValues_forParameter_(

@@ -3,7 +3,7 @@ use std::os::windows::ffi::OsStrExt;
 
 use raw_window_handle::RawWindowHandle;
 
-use winapi::shared::minwindef::{HINSTANCE, HMODULE};
+use winapi::shared::minwindef::{HINSTANCE, HMODULE, PROC};
 use winapi::shared::ntdef::WCHAR;
 use winapi::shared::windef::{HDC, HGLRC, HWND};
 use winapi::um::libloaderapi::{FreeLibrary, GetProcAddress, LoadLibraryA};
@@ -64,6 +64,14 @@ const WGL_FRAMEBUFFER_SRGB_CAPABLE_ARB: i32 = 0x20A9;
 
 type WglSwapIntervalEXT = extern "system" fn(i32) -> i32;
 
+// `wglGetProcAddress` uses the values 1, 2, 3, and -1 as failure sentinels on
+// some implementations. They are non-null, so checking only for null before
+// transmuting/calling the result can jump to an invalid address.
+fn is_valid_wgl_proc_address(address: PROC) -> bool {
+    let address = address as usize;
+    address > 3 && address != usize::MAX
+}
+
 pub type CreationFailedError = ();
 pub struct GlContext {
     hwnd: HWND,
@@ -83,10 +91,6 @@ impl GlContext {
         } else {
             return Err(GlError::InvalidWindowHandle);
         };
-
-        if handle.hwnd.is_null() {
-            return Err(GlError::InvalidWindowHandle);
-        }
 
         // Create temporary window and context to load function pointers
 
@@ -125,10 +129,16 @@ impl GlContext {
         );
 
         if hwnd_tmp.is_null() {
+            UnregisterClassW(class_name.as_ptr(), hinstance);
             return Err(GlError::CreationFailed(()));
         }
 
         let hdc_tmp = GetDC(hwnd_tmp);
+        if hdc_tmp.is_null() {
+            DestroyWindow(hwnd_tmp);
+            UnregisterClassW(class_name.as_ptr(), hinstance);
+            return Err(GlError::CreationFailed(()));
+        }
 
         let pfd_tmp = PIXELFORMATDESCRIPTOR {
             nSize: std::mem::size_of::<PIXELFORMATDESCRIPTOR>() as u16,
@@ -143,23 +153,34 @@ impl GlContext {
             ..std::mem::zeroed()
         };
 
-        SetPixelFormat(hdc_tmp, ChoosePixelFormat(hdc_tmp, &pfd_tmp), &pfd_tmp);
+        let pixel_format_tmp = ChoosePixelFormat(hdc_tmp, &pfd_tmp);
+        if pixel_format_tmp == 0 || SetPixelFormat(hdc_tmp, pixel_format_tmp, &pfd_tmp) == 0 {
+            ReleaseDC(hwnd_tmp, hdc_tmp);
+            DestroyWindow(hwnd_tmp);
+            UnregisterClassW(class_name.as_ptr(), hinstance);
+            return Err(GlError::CreationFailed(()));
+        }
 
         let hglrc_tmp = wglCreateContext(hdc_tmp);
         if hglrc_tmp.is_null() {
             ReleaseDC(hwnd_tmp, hdc_tmp);
-            UnregisterClassW(class as *const WCHAR, hinstance);
             DestroyWindow(hwnd_tmp);
+            UnregisterClassW(class_name.as_ptr(), hinstance);
             return Err(GlError::CreationFailed(()));
         }
 
-        wglMakeCurrent(hdc_tmp, hglrc_tmp);
+        if wglMakeCurrent(hdc_tmp, hglrc_tmp) == 0 {
+            wglDeleteContext(hglrc_tmp);
+            ReleaseDC(hwnd_tmp, hdc_tmp);
+            DestroyWindow(hwnd_tmp);
+            UnregisterClassW(class_name.as_ptr(), hinstance);
+            return Err(GlError::CreationFailed(()));
+        }
 
-        #[allow(non_snake_case)]
-        let wglCreateContextAttribsARB: Option<WglCreateContextAttribsARB> = {
-            let symbol = CString::new("wglCreateContextAttribsARB").unwrap();
-            let addr = wglGetProcAddress(symbol.as_ptr());
-            if !addr.is_null() {
+        let wgl_create_context_attribs_arb: Option<WglCreateContextAttribsARB> = {
+            let symbol = b"wglCreateContextAttribsARB\0";
+            let addr = wglGetProcAddress(symbol.as_ptr() as *const i8);
+            if is_valid_wgl_proc_address(addr) {
                 #[allow(clippy::missing_transmute_annotations)]
                 Some(std::mem::transmute(addr))
             } else {
@@ -167,11 +188,10 @@ impl GlContext {
             }
         };
 
-        #[allow(non_snake_case)]
-        let wglChoosePixelFormatARB: Option<WglChoosePixelFormatARB> = {
-            let symbol = CString::new("wglChoosePixelFormatARB").unwrap();
-            let addr = wglGetProcAddress(symbol.as_ptr());
-            if !addr.is_null() {
+        let wgl_choose_pixel_format_arb: Option<WglChoosePixelFormatARB> = {
+            let symbol = b"wglChoosePixelFormatARB\0";
+            let addr = wglGetProcAddress(symbol.as_ptr() as *const i8);
+            if is_valid_wgl_proc_address(addr) {
                 #[allow(clippy::missing_transmute_annotations)]
                 Some(std::mem::transmute(addr))
             } else {
@@ -179,11 +199,10 @@ impl GlContext {
             }
         };
 
-        #[allow(non_snake_case)]
-        let wglSwapIntervalEXT: Option<WglSwapIntervalEXT> = {
-            let symbol = CString::new("wglSwapIntervalEXT").unwrap();
-            let addr = wglGetProcAddress(symbol.as_ptr());
-            if !addr.is_null() {
+        let wgl_swap_interval_ext: Option<WglSwapIntervalEXT> = {
+            let symbol = b"wglSwapIntervalEXT\0";
+            let addr = wglGetProcAddress(symbol.as_ptr() as *const i8);
+            if is_valid_wgl_proc_address(addr) {
                 #[allow(clippy::missing_transmute_annotations)]
                 Some(std::mem::transmute(addr))
             } else {
@@ -194,14 +213,23 @@ impl GlContext {
         wglMakeCurrent(hdc_tmp, std::ptr::null_mut());
         wglDeleteContext(hglrc_tmp);
         ReleaseDC(hwnd_tmp, hdc_tmp);
-        UnregisterClassW(class as *const WCHAR, hinstance);
         DestroyWindow(hwnd_tmp);
+        UnregisterClassW(class_name.as_ptr(), hinstance);
+
+        let (Some(wgl_choose_pixel_format_arb), Some(wgl_create_context_attribs_arb)) =
+            (wgl_choose_pixel_format_arb, wgl_create_context_attribs_arb)
+        else {
+            return Err(GlError::VersionNotSupported);
+        };
 
         // Create actual context
 
-        let hwnd = handle.hwnd as HWND;
+        let hwnd = handle.hwnd.get() as HWND;
 
         let hdc = GetDC(hwnd);
+        if hdc.is_null() {
+            return Err(GlError::CreationFailed(()));
+        }
 
         #[rustfmt::skip]
         let pixel_format_attribs = [
@@ -224,23 +252,33 @@ impl GlContext {
 
         let mut pixel_format = 0;
         let mut num_formats = 0;
-        wglChoosePixelFormatARB.unwrap()(
+        if wgl_choose_pixel_format_arb(
             hdc,
             pixel_format_attribs.as_ptr(),
             std::ptr::null(),
             1,
             &mut pixel_format,
             &mut num_formats,
-        );
+        ) == 0
+            || num_formats == 0
+            || pixel_format == 0
+        {
+            ReleaseDC(hwnd, hdc);
+            return Err(GlError::CreationFailed(()));
+        }
 
         let mut pfd: PIXELFORMATDESCRIPTOR = std::mem::zeroed();
-        DescribePixelFormat(
+        if DescribePixelFormat(
             hdc,
             pixel_format,
             std::mem::size_of::<PIXELFORMATDESCRIPTOR>() as u32,
             &mut pfd,
-        );
-        SetPixelFormat(hdc, pixel_format, &pfd);
+        ) == 0
+            || SetPixelFormat(hdc, pixel_format, &pfd) == 0
+        {
+            ReleaseDC(hwnd, hdc);
+            return Err(GlError::CreationFailed(()));
+        }
 
         let profile_mask = match config.profile {
             Profile::Core => WGL_CONTEXT_CORE_PROFILE_BIT_ARB,
@@ -255,20 +293,36 @@ impl GlContext {
             0
         ];
 
-        let hglrc =
-            wglCreateContextAttribsARB.unwrap()(hdc, std::ptr::null_mut(), ctx_attribs.as_ptr());
+        let hglrc = wgl_create_context_attribs_arb(hdc, std::ptr::null_mut(), ctx_attribs.as_ptr());
         if hglrc.is_null() {
+            ReleaseDC(hwnd, hdc);
             return Err(GlError::CreationFailed(()));
         }
 
-        let gl_library_name = CString::new("opengl32.dll").unwrap();
-        let gl_library = LoadLibraryA(gl_library_name.as_ptr());
+        let gl_library = LoadLibraryA(b"opengl32.dll\0".as_ptr() as *const i8);
+        if gl_library.is_null() {
+            wglDeleteContext(hglrc);
+            ReleaseDC(hwnd, hdc);
+            return Err(GlError::CreationFailed(()));
+        }
 
-        wglMakeCurrent(hdc, hglrc);
-        wglSwapIntervalEXT.unwrap()(config.vsync as i32);
+        if wglMakeCurrent(hdc, hglrc) == 0 {
+            FreeLibrary(gl_library);
+            wglDeleteContext(hglrc);
+            ReleaseDC(hwnd, hdc);
+            return Err(GlError::CreationFailed(()));
+        }
+        if let Some(wgl_swap_interval_ext) = wgl_swap_interval_ext {
+            wgl_swap_interval_ext(config.vsync as i32);
+        }
         wglMakeCurrent(hdc, std::ptr::null_mut());
 
-        Ok(GlContext { hwnd, hdc, hglrc, gl_library })
+        Ok(GlContext {
+            hwnd,
+            hdc,
+            hglrc,
+            gl_library,
+        })
     }
 
     pub unsafe fn make_current(&self) {
@@ -280,12 +334,16 @@ impl GlContext {
     }
 
     pub fn get_proc_address(&self, symbol: &str) -> *const c_void {
-        let symbol = CString::new(symbol).unwrap();
-        let addr = unsafe { wglGetProcAddress(symbol.as_ptr()) as *const c_void };
-        if !addr.is_null() {
-            addr
-        } else {
-            unsafe { GetProcAddress(self.gl_library, symbol.as_ptr()) as *const c_void }
+        let Ok(symbol) = CString::new(symbol) else {
+            return std::ptr::null();
+        };
+        unsafe {
+            let addr = wglGetProcAddress(symbol.as_ptr()) as PROC;
+            if is_valid_wgl_proc_address(addr) {
+                addr as *const c_void
+            } else {
+                GetProcAddress(self.gl_library, symbol.as_ptr()) as *const c_void
+            }
         }
     }
 

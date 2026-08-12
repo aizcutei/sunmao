@@ -1,6 +1,6 @@
-use crate::plugin::clap_plugin_t;
 use crate::host::clap_host_t;
 use crate::id::clap_id;
+use crate::plugin::clap_plugin_t;
 use crate::string_sizes::CLAP_NAME_SIZE;
 use std::ffi::c_char;
 
@@ -24,7 +24,14 @@ pub struct clap_note_port_info_t {
 #[derive(Debug, Copy, Clone)]
 pub struct clap_plugin_note_ports_t {
     pub count: Option<unsafe extern "C" fn(plugin: *const clap_plugin_t, is_input: bool) -> u32>,
-    pub get: Option<unsafe extern "C" fn(plugin: *const clap_plugin_t, index: u32, is_input: bool, info: *mut clap_note_port_info_t) -> bool>,
+    pub get: Option<
+        unsafe extern "C" fn(
+            plugin: *const clap_plugin_t,
+            index: u32,
+            is_input: bool,
+            info: *mut clap_note_port_info_t,
+        ) -> bool,
+    >,
 }
 
 pub const CLAP_NOTE_PORTS_RESCAN_ALL: u32 = 1 << 0;

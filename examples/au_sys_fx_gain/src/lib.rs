@@ -1,4 +1,7 @@
-use au_sys::{export_au_component, fourcc, AuComponentDescriptor, AuPlugin, BufferList, ParameterInfo, ParameterUnit};
+use au_sys::{
+    AuComponentDescriptor, AuPlugin, BufferList, ParameterInfo, ParameterUnit, export_au_component,
+    fourcc,
+};
 
 const PARAM_GAIN: u32 = 0;
 
@@ -20,13 +23,24 @@ impl AuPlugin for GainEffect {
         Self { gain: 1.0 }
     }
 
-    fn process(&mut self, mut inputs: Option<BufferList<'_>>, outputs: &mut BufferList<'_>, frames: usize) {
+    fn process(
+        &mut self,
+        mut inputs: Option<BufferList<'_>>,
+        outputs: &mut BufferList<'_>,
+        frames: usize,
+    ) {
         let channels = outputs.len();
         for ch in 0..channels {
             let out = unsafe { outputs.channel_mut(ch) };
-            let in_buf = inputs.as_mut().map(|input| unsafe { input.channel_mut(ch) });
+            let in_buf = inputs
+                .as_mut()
+                .map(|input| unsafe { input.channel_mut(ch) });
             for i in 0..frames.min(out.len()) {
-                let sample = in_buf.as_ref().and_then(|buf| buf.get(i)).copied().unwrap_or(0.0);
+                let sample = in_buf
+                    .as_ref()
+                    .and_then(|buf| buf.get(i))
+                    .copied()
+                    .unwrap_or(0.0);
                 out[i] = sample * self.gain;
             }
         }

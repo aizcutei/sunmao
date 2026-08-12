@@ -1,25 +1,31 @@
 use clap_sys::audio_buffer::clap_audio_buffer_t;
 use clap_sys::events::{
-    clap_event_note_t, clap_event_param_value_t, clap_input_events_t, CLAP_EVENT_NOTE_CHOKE, CLAP_EVENT_NOTE_END,
-    CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE,
+    CLAP_EVENT_NOTE_CHOKE, CLAP_EVENT_NOTE_END, CLAP_EVENT_NOTE_OFF, CLAP_EVENT_NOTE_ON,
+    CLAP_EVENT_PARAM_VALUE, clap_event_note_t, clap_event_param_value_t, clap_input_events_t,
 };
-use clap_sys::ext::audio_ports::{clap_audio_port_info_t, clap_plugin_audio_ports_t, CLAP_AUDIO_PORT_IS_MAIN, CLAP_PORT_STEREO};
-use clap_sys::ext::note_ports::{clap_note_port_info_t, clap_plugin_note_ports_t, CLAP_NOTE_DIALECT_CLAP, CLAP_NOTE_DIALECT_MIDI, CLAP_NOTE_DIALECT_MIDI2, CLAP_NOTE_DIALECT_MIDI_MPE};
-use clap_sys::ext::params::{clap_param_info_t, clap_plugin_params_t, CLAP_PARAM_IS_AUTOMATABLE};
-use clap_sys::factory::plugin_factory::{clap_plugin_factory_t, CLAP_PLUGIN_FACTORY_ID};
-use clap_sys::host::clap_host_t;
-use clap_sys::id::{clap_id, CLAP_INVALID_ID};
-use clap_sys::plugin::{clap_plugin_descriptor_t, clap_plugin_t};
-use clap_sys::process::{clap_process_t, clap_process_status, CLAP_PROCESS_CONTINUE};
-use clap_sys::string_sizes::{CLAP_NAME_SIZE, CLAP_PATH_SIZE};
-use clap_sys::version::{clap_version_is_compatible, CLAP_VERSION};
-use clap_sys::plugin_features::{CLAP_PLUGIN_FEATURE_INSTRUMENT, CLAP_PLUGIN_FEATURE_STEREO, CLAP_PLUGIN_FEATURE_SYNTHESIZER};
 use clap_sys::ext::audio_ports::CLAP_EXT_AUDIO_PORTS;
+use clap_sys::ext::audio_ports::{
+    CLAP_AUDIO_PORT_IS_MAIN, CLAP_PORT_STEREO, clap_audio_port_info_t, clap_plugin_audio_ports_t,
+};
 use clap_sys::ext::note_ports::CLAP_EXT_NOTE_PORTS;
+use clap_sys::ext::note_ports::{
+    CLAP_NOTE_DIALECT_CLAP, clap_note_port_info_t, clap_plugin_note_ports_t,
+};
 use clap_sys::ext::params::CLAP_EXT_PARAMS;
-use clap_sys::ext::state::{clap_plugin_state_t, CLAP_EXT_STATE};
+use clap_sys::ext::params::{CLAP_PARAM_IS_AUTOMATABLE, clap_param_info_t, clap_plugin_params_t};
+use clap_sys::ext::state::{CLAP_EXT_STATE, clap_plugin_state_t};
+use clap_sys::factory::plugin_factory::{CLAP_PLUGIN_FACTORY_ID, clap_plugin_factory_t};
+use clap_sys::host::clap_host_t;
+use clap_sys::id::{CLAP_INVALID_ID, clap_id};
+use clap_sys::plugin::{clap_plugin_descriptor_t, clap_plugin_t};
+use clap_sys::plugin_features::{
+    CLAP_PLUGIN_FEATURE_INSTRUMENT, CLAP_PLUGIN_FEATURE_STEREO, CLAP_PLUGIN_FEATURE_SYNTHESIZER,
+};
+use clap_sys::process::{CLAP_PROCESS_CONTINUE, clap_process_status, clap_process_t};
 use clap_sys::stream::{clap_istream_t, clap_ostream_t};
-use std::ffi::{c_char, CStr};
+use clap_sys::string_sizes::{CLAP_NAME_SIZE, CLAP_PATH_SIZE};
+use clap_sys::version::{CLAP_VERSION, clap_version_is_compatible};
+use std::ffi::{CStr, c_char};
 use std::ptr;
 
 const PARAM_GAIN: clap_id = 0;
@@ -73,7 +79,12 @@ unsafe extern "C" fn plugin_destroy(plugin: *const clap_plugin_t) {
     }
 }
 
-unsafe extern "C" fn plugin_activate(plugin: *const clap_plugin_t, sample_rate: f64, _min_frames_count: u32, _max_frames_count: u32) -> bool {
+unsafe extern "C" fn plugin_activate(
+    plugin: *const clap_plugin_t,
+    sample_rate: f64,
+    _min_frames_count: u32,
+    _max_frames_count: u32,
+) -> bool {
     let synth = &mut *((*plugin).plugin_data as *mut SineSynth);
     synth.sample_rate = sample_rate.max(1.0);
     true
@@ -105,7 +116,10 @@ fn midi_note_to_freq(note: i16) -> f64 {
     440.0 * (2.0_f64).powf((note as f64 - 69.0) / 12.0)
 }
 
-unsafe fn handle_event(synth: &mut SineSynth, header: *const clap_sys::events::clap_event_header_t) {
+unsafe fn handle_event(
+    synth: &mut SineSynth,
+    header: *const clap_sys::events::clap_event_header_t,
+) {
     if header.is_null() {
         return;
     }
@@ -113,15 +127,19 @@ unsafe fn handle_event(synth: &mut SineSynth, header: *const clap_sys::events::c
         return;
     }
     match (*header).type_ {
-        CLAP_EVENT_NOTE_ON => {
+        CLAP_EVENT_NOTE_ON if (*header).size >= std::mem::size_of::<clap_event_note_t>() as u32 => {
             let event = &*(header as *const clap_event_note_t);
             synth.freq = midi_note_to_freq(event.key);
             synth.gate = event.velocity > 0.0;
         }
-        CLAP_EVENT_NOTE_OFF | CLAP_EVENT_NOTE_END | CLAP_EVENT_NOTE_CHOKE => {
+        CLAP_EVENT_NOTE_OFF | CLAP_EVENT_NOTE_END | CLAP_EVENT_NOTE_CHOKE
+            if (*header).size >= std::mem::size_of::<clap_event_note_t>() as u32 =>
+        {
             synth.gate = false;
         }
-        CLAP_EVENT_PARAM_VALUE => {
+        CLAP_EVENT_PARAM_VALUE
+            if (*header).size >= std::mem::size_of::<clap_event_param_value_t>() as u32 =>
+        {
             let event = &*(header as *const clap_event_param_value_t);
             if event.param_id == PARAM_GAIN {
                 synth.gain = event.value.clamp(0.0, 1.0);
@@ -131,7 +149,11 @@ unsafe fn handle_event(synth: &mut SineSynth, header: *const clap_sys::events::c
     }
 }
 
-unsafe fn process_audio_f32(synth: &mut SineSynth, output: &mut clap_audio_buffer_t, frames: usize) {
+unsafe fn process_audio_f32(
+    synth: &mut SineSynth,
+    output: &mut clap_audio_buffer_t,
+    frames: usize,
+) {
     if output.data32.is_null() {
         return;
     }
@@ -160,7 +182,11 @@ unsafe fn process_audio_f32(synth: &mut SineSynth, output: &mut clap_audio_buffe
     }
 }
 
-unsafe fn process_audio_f64(synth: &mut SineSynth, output: &mut clap_audio_buffer_t, frames: usize) {
+unsafe fn process_audio_f64(
+    synth: &mut SineSynth,
+    output: &mut clap_audio_buffer_t,
+    frames: usize,
+) {
     if output.data64.is_null() {
         return;
     }
@@ -189,7 +215,10 @@ unsafe fn process_audio_f64(synth: &mut SineSynth, output: &mut clap_audio_buffe
     }
 }
 
-unsafe extern "C" fn plugin_process(plugin: *const clap_plugin_t, process: *const clap_process_t) -> clap_process_status {
+unsafe extern "C" fn plugin_process(
+    plugin: *const clap_plugin_t,
+    process: *const clap_process_t,
+) -> clap_process_status {
     let synth = &mut *((*plugin).plugin_data as *mut SineSynth);
     let process = &*process;
 
@@ -253,7 +282,8 @@ unsafe extern "C" fn plugin_process(plugin: *const clap_plugin_t, process: *cons
                 } else {
                     0.0
                 };
-                let out_channels = std::slice::from_raw_parts_mut(output.data32, output.channel_count as usize);
+                let out_channels =
+                    std::slice::from_raw_parts_mut(output.data32, output.channel_count as usize);
                 for ch in 0..out_channels.len() {
                     let out_ptr = out_channels[ch];
                     if out_ptr.is_null() {
@@ -275,7 +305,8 @@ unsafe extern "C" fn plugin_process(plugin: *const clap_plugin_t, process: *cons
                 } else {
                     0.0
                 };
-                let out_channels = std::slice::from_raw_parts_mut(output.data64, output.channel_count as usize);
+                let out_channels =
+                    std::slice::from_raw_parts_mut(output.data64, output.channel_count as usize);
                 for ch in 0..out_channels.len() {
                     let out_ptr = out_channels[ch];
                     if out_ptr.is_null() {
@@ -293,7 +324,10 @@ unsafe extern "C" fn plugin_process(plugin: *const clap_plugin_t, process: *cons
     CLAP_PROCESS_CONTINUE
 }
 
-unsafe extern "C" fn plugin_get_extension(_plugin: *const clap_plugin_t, id: *const c_char) -> *const std::ffi::c_void {
+unsafe extern "C" fn plugin_get_extension(
+    _plugin: *const clap_plugin_t,
+    id: *const c_char,
+) -> *const std::ffi::c_void {
     if id.is_null() {
         return ptr::null();
     }
@@ -319,7 +353,12 @@ unsafe extern "C" fn audio_ports_count(_plugin: *const clap_plugin_t, is_input: 
     if is_input { 0 } else { 1 }
 }
 
-unsafe extern "C" fn audio_ports_get(_plugin: *const clap_plugin_t, index: u32, is_input: bool, info: *mut clap_audio_port_info_t) -> bool {
+unsafe extern "C" fn audio_ports_get(
+    _plugin: *const clap_plugin_t,
+    index: u32,
+    is_input: bool,
+    info: *mut clap_audio_port_info_t,
+) -> bool {
     if is_input || index != 0 || info.is_null() {
         return false;
     }
@@ -342,13 +381,18 @@ unsafe extern "C" fn note_ports_count(_plugin: *const clap_plugin_t, is_input: b
     if is_input { 1 } else { 0 }
 }
 
-unsafe extern "C" fn note_ports_get(_plugin: *const clap_plugin_t, index: u32, is_input: bool, info: *mut clap_note_port_info_t) -> bool {
+unsafe extern "C" fn note_ports_get(
+    _plugin: *const clap_plugin_t,
+    index: u32,
+    is_input: bool,
+    info: *mut clap_note_port_info_t,
+) -> bool {
     if !is_input || index != 0 || info.is_null() {
         return false;
     }
     let info = &mut *info;
     info.id = 0;
-    info.supported_dialects = CLAP_NOTE_DIALECT_CLAP | CLAP_NOTE_DIALECT_MIDI | CLAP_NOTE_DIALECT_MIDI_MPE | CLAP_NOTE_DIALECT_MIDI2;
+    info.supported_dialects = CLAP_NOTE_DIALECT_CLAP;
     info.preferred_dialect = CLAP_NOTE_DIALECT_CLAP;
     write_cstr_to_array(&mut info.name, b"Notes\0");
     true
@@ -363,7 +407,11 @@ unsafe extern "C" fn params_count(_plugin: *const clap_plugin_t) -> u32 {
     1
 }
 
-unsafe extern "C" fn params_get_info(_plugin: *const clap_plugin_t, param_index: u32, param_info: *mut clap_param_info_t) -> bool {
+unsafe extern "C" fn params_get_info(
+    _plugin: *const clap_plugin_t,
+    param_index: u32,
+    param_info: *mut clap_param_info_t,
+) -> bool {
     if param_index != 0 || param_info.is_null() {
         return false;
     }
@@ -379,7 +427,11 @@ unsafe extern "C" fn params_get_info(_plugin: *const clap_plugin_t, param_index:
     true
 }
 
-unsafe extern "C" fn params_get_value(plugin: *const clap_plugin_t, param_id: clap_id, out_value: *mut f64) -> bool {
+unsafe extern "C" fn params_get_value(
+    plugin: *const clap_plugin_t,
+    param_id: clap_id,
+    out_value: *mut f64,
+) -> bool {
     if out_value.is_null() || param_id != PARAM_GAIN {
         return false;
     }
@@ -388,7 +440,13 @@ unsafe extern "C" fn params_get_value(plugin: *const clap_plugin_t, param_id: cl
     true
 }
 
-unsafe extern "C" fn params_value_to_text(_plugin: *const clap_plugin_t, param_id: clap_id, value: f64, out_buffer: *mut c_char, out_buffer_capacity: u32) -> bool {
+unsafe extern "C" fn params_value_to_text(
+    _plugin: *const clap_plugin_t,
+    param_id: clap_id,
+    value: f64,
+    out_buffer: *mut c_char,
+    out_buffer_capacity: u32,
+) -> bool {
     if param_id != PARAM_GAIN || out_buffer.is_null() || out_buffer_capacity == 0 {
         return false;
     }
@@ -404,7 +462,12 @@ unsafe extern "C" fn params_value_to_text(_plugin: *const clap_plugin_t, param_i
     true
 }
 
-unsafe extern "C" fn params_text_to_value(_plugin: *const clap_plugin_t, param_id: clap_id, param_value_text: *const c_char, out_value: *mut f64) -> bool {
+unsafe extern "C" fn params_text_to_value(
+    _plugin: *const clap_plugin_t,
+    param_id: clap_id,
+    param_value_text: *const c_char,
+    out_value: *mut f64,
+) -> bool {
     if param_id != PARAM_GAIN || param_value_text.is_null() || out_value.is_null() {
         return false;
     }
@@ -418,7 +481,11 @@ unsafe extern "C" fn params_text_to_value(_plugin: *const clap_plugin_t, param_i
     false
 }
 
-unsafe extern "C" fn params_flush(plugin: *const clap_plugin_t, input: *const clap_input_events_t, _output: *const clap_sys::events::clap_output_events_t) {
+unsafe extern "C" fn params_flush(
+    plugin: *const clap_plugin_t,
+    input: *const clap_input_events_t,
+    _output: *const clap_sys::events::clap_output_events_t,
+) {
     if input.is_null() {
         return;
     }
@@ -452,7 +519,9 @@ fn stream_write_all(stream: *const clap_ostream_t, mut buffer: *const u8, mut si
         return false;
     }
     let write_fn = unsafe { (*stream).write };
-    let Some(write_fn) = write_fn else { return false };
+    let Some(write_fn) = write_fn else {
+        return false;
+    };
     while size > 0 {
         let written = unsafe { write_fn(stream, buffer as *const _, size as u64) };
         if written <= 0 {
@@ -483,7 +552,10 @@ fn stream_read_exact(stream: *const clap_istream_t, mut buffer: *mut u8, mut siz
     true
 }
 
-unsafe extern "C" fn state_save(plugin: *const clap_plugin_t, stream: *const clap_ostream_t) -> bool {
+unsafe extern "C" fn state_save(
+    plugin: *const clap_plugin_t,
+    stream: *const clap_ostream_t,
+) -> bool {
     if plugin.is_null() {
         return false;
     }
@@ -499,7 +571,10 @@ unsafe extern "C" fn state_save(plugin: *const clap_plugin_t, stream: *const cla
     stream_write_all(stream, &gate as *const u8, 1)
 }
 
-unsafe extern "C" fn state_load(plugin: *const clap_plugin_t, stream: *const clap_istream_t) -> bool {
+unsafe extern "C" fn state_load(
+    plugin: *const clap_plugin_t,
+    stream: *const clap_istream_t,
+) -> bool {
     if plugin.is_null() {
         return false;
     }
@@ -528,7 +603,10 @@ unsafe extern "C" fn get_plugin_count(_factory: *const clap_plugin_factory_t) ->
     1
 }
 
-unsafe extern "C" fn get_plugin_descriptor(_factory: *const clap_plugin_factory_t, index: u32) -> *const clap_plugin_descriptor_t {
+unsafe extern "C" fn get_plugin_descriptor(
+    _factory: *const clap_plugin_factory_t,
+    index: u32,
+) -> *const clap_plugin_descriptor_t {
     if index == 0 {
         &DESCRIPTOR.0
     } else {
@@ -536,7 +614,11 @@ unsafe extern "C" fn get_plugin_descriptor(_factory: *const clap_plugin_factory_
     }
 }
 
-unsafe extern "C" fn create_plugin(_factory: *const clap_plugin_factory_t, host: *const clap_host_t, plugin_id: *const c_char) -> *const clap_plugin_t {
+unsafe extern "C" fn create_plugin(
+    _factory: *const clap_plugin_factory_t,
+    host: *const clap_host_t,
+    plugin_id: *const c_char,
+) -> *const clap_plugin_t {
     if host.is_null() || plugin_id.is_null() {
         return ptr::null();
     }
@@ -599,9 +681,113 @@ unsafe extern "C" fn entry_get_factory(factory_id: *const c_char) -> *const std:
 }
 
 #[unsafe(no_mangle)]
-pub static clap_entry: clap_sys::entry::clap_plugin_entry_t = clap_sys::entry::clap_plugin_entry_t {
-    clap_version: CLAP_VERSION,
-    init: Some(entry_init),
-    deinit: Some(entry_deinit),
-    get_factory: Some(entry_get_factory),
-};
+pub static clap_entry: clap_sys::entry::clap_plugin_entry_t =
+    clap_sys::entry::clap_plugin_entry_t {
+        clap_version: CLAP_VERSION,
+        init: Some(entry_init),
+        deinit: Some(entry_deinit),
+        get_factory: Some(entry_get_factory),
+    };
+
+#[cfg(test)]
+#[path = "../../realtime_test_support.rs"]
+mod realtime_test_support;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap_sys::events::{CLAP_CORE_EVENT_SPACE_ID, clap_event_header_t};
+    use std::ffi::c_void;
+
+    unsafe extern "C" fn event_count(_list: *const clap_input_events_t) -> u32 {
+        1
+    }
+
+    unsafe extern "C" fn event_get(
+        list: *const clap_input_events_t,
+        index: u32,
+    ) -> *const clap_event_header_t {
+        if index == 0 {
+            unsafe { (*list).ctx as *const clap_event_header_t }
+        } else {
+            ptr::null()
+        }
+    }
+
+    #[test]
+    fn raw_clap_synth_callback_does_not_allocate() {
+        let mut synth = SineSynth {
+            host: ptr::null(),
+            sample_rate: 48_000.0,
+            phase: 0.0,
+            freq: 440.0,
+            gain: 0.5,
+            gate: false,
+        };
+        let plugin = clap_plugin_t {
+            desc: ptr::null(),
+            plugin_data: &mut synth as *mut _ as *mut c_void,
+            init: None,
+            destroy: None,
+            activate: None,
+            deactivate: None,
+            start_processing: None,
+            stop_processing: None,
+            reset: None,
+            process: Some(plugin_process),
+            get_extension: None,
+            on_main_thread: None,
+        };
+
+        let mut output_left = [0.0_f32; 16];
+        let mut output_right = [0.0_f32; 16];
+        let mut output_channels = [output_left.as_mut_ptr(), output_right.as_mut_ptr()];
+        let mut output = clap_audio_buffer_t {
+            data32: output_channels.as_mut_ptr(),
+            data64: ptr::null_mut(),
+            channel_count: 2,
+            latency: 0,
+            constant_mask: 0,
+        };
+        let mut note_on = clap_event_note_t {
+            header: clap_event_header_t {
+                size: std::mem::size_of::<clap_event_note_t>() as u32,
+                time: 3,
+                space_id: CLAP_CORE_EVENT_SPACE_ID,
+                type_: CLAP_EVENT_NOTE_ON,
+                flags: 0,
+            },
+            note_id: 1,
+            port_index: 0,
+            channel: 0,
+            key: 69,
+            velocity: 1.0,
+        };
+        let events = clap_input_events_t {
+            ctx: &mut note_on as *mut _ as *mut c_void,
+            size: Some(event_count),
+            get: Some(event_get),
+        };
+        let process = clap_process_t {
+            steady_time: 0,
+            frames_count: 16,
+            transport: ptr::null(),
+            audio_inputs: ptr::null(),
+            audio_outputs: &mut output,
+            audio_inputs_count: 0,
+            audio_outputs_count: 1,
+            in_events: &events,
+            out_events: ptr::null(),
+        };
+
+        let (status, allocator_calls) = realtime_test_support::count_allocator_calls(|| unsafe {
+            plugin_process(&plugin, &process)
+        });
+        assert_eq!(status, CLAP_PROCESS_CONTINUE);
+        assert_eq!(allocator_calls, 0);
+        assert_eq!(&output_left[..4], &[0.0; 4]);
+        assert_eq!(&output_left, &output_right);
+        assert!(output_left[4..].iter().any(|sample| *sample != 0.0));
+        assert!(synth.gate);
+    }
+}

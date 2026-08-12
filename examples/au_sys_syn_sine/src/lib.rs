@@ -1,6 +1,9 @@
 use std::f32::consts::TAU;
 
-use au_sys::{export_au_component, fourcc, AuComponentDescriptor, AuPlugin, BufferList, ParameterInfo, ParameterUnit};
+use au_sys::{
+    AuComponentDescriptor, AuPlugin, BufferList, ParameterInfo, ParameterUnit, export_au_component,
+    fourcc,
+};
 
 const PARAM_GAIN: u32 = 0;
 
@@ -40,10 +43,19 @@ impl AuPlugin for BasicSynth {
         self.phase = 0.0;
     }
 
-    fn process(&mut self, _inputs: Option<BufferList<'_>>, outputs: &mut BufferList<'_>, frames: usize) {
+    fn process(
+        &mut self,
+        _inputs: Option<BufferList<'_>>,
+        outputs: &mut BufferList<'_>,
+        frames: usize,
+    ) {
         let channels = outputs.len();
         for i in 0..frames {
-            let sample = if self.gate { (self.phase).sin() * self.gain } else { 0.0 };
+            let sample = if self.gate {
+                (self.phase).sin() * self.gain
+            } else {
+                0.0
+            };
             self.phase += TAU * self.freq / self.sample_rate;
             if self.phase >= TAU {
                 self.phase -= TAU;

@@ -3,39 +3,37 @@ use baseview::{
     WindowHandler, WindowOpenOptions, WindowScalePolicy,
 };
 use clap_sys::audio_buffer::clap_audio_buffer_t;
-use clap_sys::events::{clap_event_param_value_t, clap_input_events_t, CLAP_EVENT_PARAM_VALUE};
+use clap_sys::events::{CLAP_EVENT_PARAM_VALUE, clap_event_param_value_t, clap_input_events_t};
 use clap_sys::ext::audio_ports::{
-    clap_audio_port_info_t, clap_plugin_audio_ports_t, CLAP_AUDIO_PORT_IS_MAIN, CLAP_PORT_STEREO,
+    CLAP_AUDIO_PORT_IS_MAIN, CLAP_PORT_STEREO, clap_audio_port_info_t, clap_plugin_audio_ports_t,
 };
 use clap_sys::ext::gui::{
-    clap_gui_resize_hints_t, clap_plugin_gui_t, clap_window_t, CLAP_EXT_GUI,
-    CLAP_WINDOW_API_COCOA, CLAP_WINDOW_API_WIN32, CLAP_WINDOW_API_X11,
+    CLAP_EXT_GUI, CLAP_WINDOW_API_COCOA, CLAP_WINDOW_API_WIN32, CLAP_WINDOW_API_X11,
+    clap_gui_resize_hints_t, clap_plugin_gui_t, clap_window_t,
 };
-use clap_sys::ext::params::{clap_param_info_t, clap_plugin_params_t, CLAP_PARAM_IS_AUTOMATABLE};
-use clap_sys::ext::state::{clap_plugin_state_t, CLAP_EXT_STATE};
-use clap_sys::factory::plugin_factory::{clap_plugin_factory_t, CLAP_PLUGIN_FACTORY_ID};
+use clap_sys::ext::params::{CLAP_PARAM_IS_AUTOMATABLE, clap_param_info_t, clap_plugin_params_t};
+use clap_sys::ext::state::{CLAP_EXT_STATE, clap_plugin_state_t};
+use clap_sys::factory::plugin_factory::{CLAP_PLUGIN_FACTORY_ID, clap_plugin_factory_t};
 use clap_sys::host::clap_host_t;
-use clap_sys::id::{clap_id, CLAP_INVALID_ID};
+use clap_sys::id::{CLAP_INVALID_ID, clap_id};
 use clap_sys::plugin::{clap_plugin_descriptor_t, clap_plugin_t};
 use clap_sys::plugin_features::{CLAP_PLUGIN_FEATURE_AUDIO_EFFECT, CLAP_PLUGIN_FEATURE_STEREO};
-use clap_sys::process::{clap_process_t, clap_process_status, CLAP_PROCESS_CONTINUE};
+use clap_sys::process::{CLAP_PROCESS_CONTINUE, clap_process_status, clap_process_t};
 use clap_sys::stream::{clap_istream_t, clap_ostream_t};
 use clap_sys::string_sizes::CLAP_PATH_SIZE;
-use clap_sys::version::{clap_version_is_compatible, CLAP_VERSION};
-use raw_window_handle::{
-    HasWindowHandle, HasDisplayHandle, RawDisplayHandle, RawWindowHandle,
-};
+use clap_sys::version::{CLAP_VERSION, clap_version_is_compatible};
 #[cfg(target_os = "macos")]
 use objc::runtime::{Object, YES};
 #[cfg(target_os = "macos")]
 use objc::{msg_send, sel, sel_impl};
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use softbuffer::{Context, Surface};
-use std::ffi::{c_char, c_void, CStr, CString};
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::num::NonZeroU32;
 use std::ptr;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const PARAM_GAIN: clap_id = 0;
 const GUI_WIDTH: f64 = 400.0;
@@ -82,7 +80,9 @@ struct ParentWindow {
 }
 
 impl HasWindowHandle for ParentWindow {
-    fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(self.handle) })
     }
 }
@@ -94,13 +94,17 @@ struct WrappedWindow {
 }
 
 impl HasWindowHandle for WrappedWindow {
-    fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(self.raw_window_handle) })
     }
 }
 
 impl HasDisplayHandle for WrappedWindow {
-    fn display_handle(&self) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(self.raw_display_handle) })
     }
 }
@@ -119,7 +123,7 @@ struct GainGuiHandler {
 impl GainGuiHandler {
     fn new(_window: &mut Window, gain_bits: Arc<AtomicU64>) -> Self {
         let physical_size = PhySize::new(GUI_WIDTH as u32, GUI_HEIGHT as u32);
-        
+
         Self {
             _wrapped: None,
             _ctx: None,
@@ -138,9 +142,13 @@ impl GainGuiHandler {
         }
 
         // Extract raw handles from baseview window (raw-window-handle 0.6)
-        let Ok(window_handle) = window.window_handle() else { return; };
-        let Ok(display_handle) = window.display_handle() else { return; };
-        
+        let Ok(window_handle) = window.window_handle() else {
+            return;
+        };
+        let Ok(display_handle) = window.display_handle() else {
+            return;
+        };
+
         let mut raw_window = window_handle.as_raw();
         let raw_display = display_handle.as_raw();
 
@@ -175,19 +183,18 @@ impl GainGuiHandler {
 
         match result {
             Ok(Ok(mut s)) => {
-                 if let (Some(width), Some(height)) =
-                    (NonZeroU32::new(self.physical_size.width), NonZeroU32::new(self.physical_size.height))
-                {
+                if let (Some(width), Some(height)) = (
+                    NonZeroU32::new(self.physical_size.width),
+                    NonZeroU32::new(self.physical_size.height),
+                ) {
                     let _ = s.resize(width, height);
                 }
                 self.surface = Some(s);
                 self._ctx = Some(ctx);
                 self._wrapped = Some(wrapped);
             }
-            Ok(Err(_)) => {
-            }
-            Err(_) => {
-            }
+            Ok(Err(_)) => {}
+            Err(_) => {}
         }
     }
 
@@ -225,7 +232,7 @@ impl GainGuiHandler {
 
     fn draw(&mut self, window: &Window) {
         self.ensure_resources(window);
-        
+
         let width = self.physical_size.width as usize;
         let height = self.physical_size.height as usize;
         if width == 0 || height == 0 {
@@ -241,8 +248,24 @@ impl GainGuiHandler {
         if let Some(surface) = &mut self.surface {
             if let Ok(mut buffer) = surface.buffer_mut() {
                 buffer.fill(0xFF202020);
-                fill_rect(&mut buffer, width, height, track, scale_x, scale_y, 0xFF3A3A3A);
-                fill_rect(&mut buffer, width, height, knob, scale_x, scale_y, 0xFF1BA1E2);
+                fill_rect(
+                    &mut buffer,
+                    width,
+                    height,
+                    track,
+                    scale_x,
+                    scale_y,
+                    0xFF3A3A3A,
+                );
+                fill_rect(
+                    &mut buffer,
+                    width,
+                    height,
+                    knob,
+                    scale_x,
+                    scale_y,
+                    0xFF1BA1E2,
+                );
                 let _ = buffer.present();
             }
         }
@@ -260,11 +283,12 @@ impl WindowHandler for GainGuiHandler {
                 let new_size = info.physical_size();
                 self.physical_size = new_size;
                 self.logical_size = info.logical_size();
-                if let (Some(width), Some(height)) =
-                    (NonZeroU32::new(new_size.width), NonZeroU32::new(new_size.height))
-                {
+                if let (Some(width), Some(height)) = (
+                    NonZeroU32::new(new_size.width),
+                    NonZeroU32::new(new_size.height),
+                ) {
                     if let Some(surface) = &mut self.surface {
-                         let _ = surface.resize(width, height);
+                        let _ = surface.resize(width, height);
                     }
                 }
             }
@@ -274,13 +298,19 @@ impl WindowHandler for GainGuiHandler {
                     self.set_gain_from_position(position);
                 }
             }
-            Event::Mouse(MouseEvent::ButtonPressed { button: MouseButton::Left, .. }) => {
+            Event::Mouse(MouseEvent::ButtonPressed {
+                button: MouseButton::Left,
+                ..
+            }) => {
                 if Self::point_in_rect(self.cursor, self.slider_rect()) {
                     self.dragging = true;
                     self.set_gain_from_position(self.cursor);
                 }
             }
-            Event::Mouse(MouseEvent::ButtonReleased { button: MouseButton::Left, .. }) => {
+            Event::Mouse(MouseEvent::ButtonReleased {
+                button: MouseButton::Left,
+                ..
+            }) => {
                 self.dragging = false;
             }
             _ => {}
@@ -345,7 +375,7 @@ fn raw_window_handle_from_clap(window: &clap_window_t) -> Option<RawWindowHandle
     if api.to_bytes_with_nul() == CLAP_WINDOW_API_X11.as_bytes() {
         use raw_window_handle::XlibWindowHandle;
         unsafe {
-            let handle = XlibWindowHandle::new(window.handle.x11 as u64);
+            let handle = XlibWindowHandle::new(window.handle.x11);
             return Some(RawWindowHandle::Xlib(handle));
         }
     }
@@ -360,12 +390,14 @@ fn open_gui_window(effect: &mut GainEffectGui) -> bool {
         Some(handle) => handle,
         None => return false,
     };
-    let parent = ParentWindow { handle: parent_handle };
-    let options = WindowOpenOptions {
-        title: "CLAP Sys Gain".to_string(),
-        size: Size::new(GUI_WIDTH, GUI_HEIGHT),
-        scale: WindowScalePolicy::SystemScaleFactor,
+    let parent = ParentWindow {
+        handle: parent_handle,
     };
+    let options = WindowOpenOptions::new(
+        "CLAP Sys Gain",
+        Size::new(GUI_WIDTH, GUI_HEIGHT),
+        WindowScalePolicy::SystemScaleFactor,
+    );
     let gain_bits = effect.gain_bits.clone();
     let window_handle = Window::open_parented(&parent, options, move |window| {
         GainGuiHandler::new(window, gain_bits)
@@ -425,16 +457,24 @@ unsafe fn apply_param_events(effect: &GainEffectGui, in_events: *const clap_inpu
         }
         if (*header).space_id == clap_sys::events::CLAP_CORE_EVENT_SPACE_ID
             && (*header).type_ == CLAP_EVENT_PARAM_VALUE
+            && (*header).size >= std::mem::size_of::<clap_event_param_value_t>() as u32
         {
             let event = &*(header as *const clap_event_param_value_t);
             if event.param_id == PARAM_GAIN {
-                effect.gain_bits.store(event.value.clamp(0.0, 2.0).to_bits(), Ordering::Relaxed);
+                effect
+                    .gain_bits
+                    .store(event.value.clamp(0.0, 2.0).to_bits(), Ordering::Relaxed);
             }
         }
     }
 }
 
-unsafe fn process_audio_f32(effect: &GainEffectGui, input: &clap_audio_buffer_t, output: &mut clap_audio_buffer_t, frames: usize) {
+unsafe fn process_audio_f32(
+    effect: &GainEffectGui,
+    input: &clap_audio_buffer_t,
+    output: &mut clap_audio_buffer_t,
+    frames: usize,
+) {
     if input.data32.is_null() || output.data32.is_null() {
         return;
     }
@@ -456,7 +496,12 @@ unsafe fn process_audio_f32(effect: &GainEffectGui, input: &clap_audio_buffer_t,
     }
 }
 
-unsafe fn process_audio_f64(effect: &GainEffectGui, input: &clap_audio_buffer_t, output: &mut clap_audio_buffer_t, frames: usize) {
+unsafe fn process_audio_f64(
+    effect: &GainEffectGui,
+    input: &clap_audio_buffer_t,
+    output: &mut clap_audio_buffer_t,
+    frames: usize,
+) {
     if input.data64.is_null() || output.data64.is_null() {
         return;
     }
@@ -478,7 +523,10 @@ unsafe fn process_audio_f64(effect: &GainEffectGui, input: &clap_audio_buffer_t,
     }
 }
 
-unsafe extern "C" fn plugin_process(plugin: *const clap_plugin_t, process: *const clap_process_t) -> clap_process_status {
+unsafe extern "C" fn plugin_process(
+    plugin: *const clap_plugin_t,
+    process: *const clap_process_t,
+) -> clap_process_status {
     let effect = &mut *((*plugin).plugin_data as *mut GainEffectGui);
     let process = &*process;
     apply_param_events(effect, process.in_events);
@@ -503,7 +551,10 @@ unsafe extern "C" fn plugin_process(plugin: *const clap_plugin_t, process: *cons
     CLAP_PROCESS_CONTINUE
 }
 
-unsafe extern "C" fn plugin_get_extension(_plugin: *const clap_plugin_t, id: *const c_char) -> *const std::ffi::c_void {
+unsafe extern "C" fn plugin_get_extension(
+    _plugin: *const clap_plugin_t,
+    id: *const c_char,
+) -> *const std::ffi::c_void {
     if id.is_null() {
         return ptr::null();
     }
@@ -538,7 +589,12 @@ fn write_cstr_to_array(dst: &mut [c_char], bytes: &[u8]) {
     }
 }
 
-unsafe extern "C" fn audio_ports_get(_plugin: *const clap_plugin_t, index: u32, _is_input: bool, info: *mut clap_audio_port_info_t) -> bool {
+unsafe extern "C" fn audio_ports_get(
+    _plugin: *const clap_plugin_t,
+    index: u32,
+    _is_input: bool,
+    info: *mut clap_audio_port_info_t,
+) -> bool {
     if index != 0 || info.is_null() {
         return false;
     }
@@ -561,7 +617,11 @@ unsafe extern "C" fn params_count(_plugin: *const clap_plugin_t) -> u32 {
     1
 }
 
-unsafe extern "C" fn params_get_info(_plugin: *const clap_plugin_t, param_index: u32, param_info: *mut clap_param_info_t) -> bool {
+unsafe extern "C" fn params_get_info(
+    _plugin: *const clap_plugin_t,
+    param_index: u32,
+    param_info: *mut clap_param_info_t,
+) -> bool {
     if param_index != 0 || param_info.is_null() {
         return false;
     }
@@ -577,7 +637,11 @@ unsafe extern "C" fn params_get_info(_plugin: *const clap_plugin_t, param_index:
     true
 }
 
-unsafe extern "C" fn params_get_value(plugin: *const clap_plugin_t, param_id: clap_id, out_value: *mut f64) -> bool {
+unsafe extern "C" fn params_get_value(
+    plugin: *const clap_plugin_t,
+    param_id: clap_id,
+    out_value: *mut f64,
+) -> bool {
     if out_value.is_null() || param_id != PARAM_GAIN {
         return false;
     }
@@ -586,7 +650,13 @@ unsafe extern "C" fn params_get_value(plugin: *const clap_plugin_t, param_id: cl
     true
 }
 
-unsafe extern "C" fn params_value_to_text(_plugin: *const clap_plugin_t, param_id: clap_id, value: f64, out_buffer: *mut c_char, out_buffer_capacity: u32) -> bool {
+unsafe extern "C" fn params_value_to_text(
+    _plugin: *const clap_plugin_t,
+    param_id: clap_id,
+    value: f64,
+    out_buffer: *mut c_char,
+    out_buffer_capacity: u32,
+) -> bool {
     if param_id != PARAM_GAIN || out_buffer.is_null() || out_buffer_capacity == 0 {
         return false;
     }
@@ -602,7 +672,12 @@ unsafe extern "C" fn params_value_to_text(_plugin: *const clap_plugin_t, param_i
     true
 }
 
-unsafe extern "C" fn params_text_to_value(_plugin: *const clap_plugin_t, param_id: clap_id, param_value_text: *const c_char, out_value: *mut f64) -> bool {
+unsafe extern "C" fn params_text_to_value(
+    _plugin: *const clap_plugin_t,
+    param_id: clap_id,
+    param_value_text: *const c_char,
+    out_value: *mut f64,
+) -> bool {
     if param_id != PARAM_GAIN || param_value_text.is_null() || out_value.is_null() {
         return false;
     }
@@ -616,7 +691,11 @@ unsafe extern "C" fn params_text_to_value(_plugin: *const clap_plugin_t, param_i
     false
 }
 
-unsafe extern "C" fn params_flush(plugin: *const clap_plugin_t, input: *const clap_input_events_t, _output: *const clap_sys::events::clap_output_events_t) {
+unsafe extern "C" fn params_flush(
+    plugin: *const clap_plugin_t,
+    input: *const clap_input_events_t,
+    _output: *const clap_sys::events::clap_output_events_t,
+) {
     let effect = &mut *((*plugin).plugin_data as *mut GainEffectGui);
     apply_param_events(effect, input);
 }
@@ -635,7 +714,9 @@ fn stream_write_all(stream: *const clap_ostream_t, mut buffer: *const u8, mut si
         return false;
     }
     let write_fn = unsafe { (*stream).write };
-    let Some(write_fn) = write_fn else { return false };
+    let Some(write_fn) = write_fn else {
+        return false;
+    };
     while size > 0 {
         let written = unsafe { write_fn(stream, buffer as *const _, size as u64) };
         if written <= 0 {
@@ -666,7 +747,10 @@ fn stream_read_exact(stream: *const clap_istream_t, mut buffer: *mut u8, mut siz
     true
 }
 
-unsafe extern "C" fn state_save(plugin: *const clap_plugin_t, stream: *const clap_ostream_t) -> bool {
+unsafe extern "C" fn state_save(
+    plugin: *const clap_plugin_t,
+    stream: *const clap_ostream_t,
+) -> bool {
     if plugin.is_null() {
         return false;
     }
@@ -675,7 +759,10 @@ unsafe extern "C" fn state_save(plugin: *const clap_plugin_t, stream: *const cla
     stream_write_all(stream, gain.as_ptr(), gain.len())
 }
 
-unsafe extern "C" fn state_load(plugin: *const clap_plugin_t, stream: *const clap_istream_t) -> bool {
+unsafe extern "C" fn state_load(
+    plugin: *const clap_plugin_t,
+    stream: *const clap_istream_t,
+) -> bool {
     if plugin.is_null() {
         return false;
     }
@@ -684,7 +771,10 @@ unsafe extern "C" fn state_load(plugin: *const clap_plugin_t, stream: *const cla
         return false;
     }
     let effect = &mut *((*plugin).plugin_data as *mut GainEffectGui);
-    effect.gain_bits.store(f64::from_le_bytes(buffer).clamp(0.0, 2.0).to_bits(), Ordering::Relaxed);
+    effect.gain_bits.store(
+        f64::from_le_bytes(buffer).clamp(0.0, 2.0).to_bits(),
+        Ordering::Relaxed,
+    );
     true
 }
 
@@ -693,7 +783,11 @@ static STATE: clap_plugin_state_t = clap_plugin_state_t {
     load: Some(state_load),
 };
 
-unsafe extern "C" fn gui_is_api_supported(_plugin: *const clap_plugin_t, api: *const c_char, is_floating: bool) -> bool {
+unsafe extern "C" fn gui_is_api_supported(
+    _plugin: *const clap_plugin_t,
+    api: *const c_char,
+    is_floating: bool,
+) -> bool {
     if is_floating || api.is_null() {
         return false;
     }
@@ -703,7 +797,11 @@ unsafe extern "C" fn gui_is_api_supported(_plugin: *const clap_plugin_t, api: *c
         || api_cstr.to_bytes_with_nul() == CLAP_WINDOW_API_X11.as_bytes()
 }
 
-unsafe extern "C" fn gui_get_preferred_api(_plugin: *const clap_plugin_t, api: *mut *const c_char, is_floating: *mut bool) -> bool {
+unsafe extern "C" fn gui_get_preferred_api(
+    _plugin: *const clap_plugin_t,
+    api: *mut *const c_char,
+    is_floating: *mut bool,
+) -> bool {
     if api.is_null() || is_floating.is_null() {
         return false;
     }
@@ -723,7 +821,11 @@ unsafe extern "C" fn gui_get_preferred_api(_plugin: *const clap_plugin_t, api: *
     true
 }
 
-unsafe extern "C" fn gui_create(plugin: *const clap_plugin_t, _api: *const c_char, _is_floating: bool) -> bool {
+unsafe extern "C" fn gui_create(
+    plugin: *const clap_plugin_t,
+    _api: *const c_char,
+    _is_floating: bool,
+) -> bool {
     let effect = &mut *((*plugin).plugin_data as *mut GainEffectGui);
     effect.gui_open = true;
     if effect.gui_parent.is_some() {
@@ -737,7 +839,7 @@ unsafe extern "C" fn gui_destroy(plugin: *const clap_plugin_t) {
     if let Some(mut handle) = effect.gui_handle.take() {
         handle.close();
     }
-    effect.gui_parent = None;  // Clear parent so next cycle starts fresh
+    effect.gui_parent = None; // Clear parent so next cycle starts fresh
     effect.gui_open = false;
 }
 
@@ -745,7 +847,11 @@ unsafe extern "C" fn gui_set_scale(_plugin: *const clap_plugin_t, _scale: f64) -
     true
 }
 
-unsafe extern "C" fn gui_get_size(_plugin: *const clap_plugin_t, width: *mut u32, height: *mut u32) -> bool {
+unsafe extern "C" fn gui_get_size(
+    _plugin: *const clap_plugin_t,
+    width: *mut u32,
+    height: *mut u32,
+) -> bool {
     if width.is_null() || height.is_null() {
         return false;
     }
@@ -758,7 +864,10 @@ unsafe extern "C" fn gui_can_resize(_plugin: *const clap_plugin_t) -> bool {
     false
 }
 
-unsafe extern "C" fn gui_get_resize_hints(_plugin: *const clap_plugin_t, hints: *mut clap_gui_resize_hints_t) -> bool {
+unsafe extern "C" fn gui_get_resize_hints(
+    _plugin: *const clap_plugin_t,
+    hints: *mut clap_gui_resize_hints_t,
+) -> bool {
     if hints.is_null() {
         return false;
     }
@@ -772,7 +881,11 @@ unsafe extern "C" fn gui_get_resize_hints(_plugin: *const clap_plugin_t, hints: 
     true
 }
 
-unsafe extern "C" fn gui_adjust_size(_plugin: *const clap_plugin_t, width: *mut u32, height: *mut u32) -> bool {
+unsafe extern "C" fn gui_adjust_size(
+    _plugin: *const clap_plugin_t,
+    width: *mut u32,
+    height: *mut u32,
+) -> bool {
     if width.is_null() || height.is_null() {
         return false;
     }
@@ -785,7 +898,10 @@ unsafe extern "C" fn gui_set_size(_plugin: *const clap_plugin_t, width: u32, hei
     width == GUI_WIDTH as u32 && height == GUI_HEIGHT as u32
 }
 
-unsafe extern "C" fn gui_set_parent(plugin: *const clap_plugin_t, window: *const clap_window_t) -> bool {
+unsafe extern "C" fn gui_set_parent(
+    plugin: *const clap_plugin_t,
+    window: *const clap_window_t,
+) -> bool {
     if window.is_null() {
         return false;
     }
@@ -798,7 +914,10 @@ unsafe extern "C" fn gui_set_parent(plugin: *const clap_plugin_t, window: *const
     effect.gui_parent.is_some()
 }
 
-unsafe extern "C" fn gui_set_transient(_plugin: *const clap_plugin_t, _window: *const clap_window_t) -> bool {
+unsafe extern "C" fn gui_set_transient(
+    _plugin: *const clap_plugin_t,
+    _window: *const clap_window_t,
+) -> bool {
     false
 }
 
@@ -811,7 +930,7 @@ unsafe extern "C" fn gui_show(_plugin: *const clap_plugin_t) -> bool {
     if effect.gui_parent.is_some() {
         return open_gui_window(effect);
     }
-    
+
     false
 }
 
@@ -845,7 +964,10 @@ unsafe extern "C" fn get_plugin_count(_factory: *const clap_plugin_factory_t) ->
     1
 }
 
-unsafe extern "C" fn get_plugin_descriptor(_factory: *const clap_plugin_factory_t, index: u32) -> *const clap_plugin_descriptor_t {
+unsafe extern "C" fn get_plugin_descriptor(
+    _factory: *const clap_plugin_factory_t,
+    index: u32,
+) -> *const clap_plugin_descriptor_t {
     if index == 0 {
         &DESCRIPTOR.0
     } else {
@@ -853,7 +975,11 @@ unsafe extern "C" fn get_plugin_descriptor(_factory: *const clap_plugin_factory_
     }
 }
 
-unsafe extern "C" fn create_plugin(_factory: *const clap_plugin_factory_t, host: *const clap_host_t, plugin_id: *const c_char) -> *const clap_plugin_t {
+unsafe extern "C" fn create_plugin(
+    _factory: *const clap_plugin_factory_t,
+    host: *const clap_host_t,
+    plugin_id: *const c_char,
+) -> *const clap_plugin_t {
     if host.is_null() || plugin_id.is_null() {
         return ptr::null();
     }
@@ -915,9 +1041,10 @@ unsafe extern "C" fn entry_get_factory(factory_id: *const c_char) -> *const std:
 }
 
 #[unsafe(no_mangle)]
-pub static clap_entry: clap_sys::entry::clap_plugin_entry_t = clap_sys::entry::clap_plugin_entry_t {
-    clap_version: CLAP_VERSION,
-    init: Some(entry_init),
-    deinit: Some(entry_deinit),
-    get_factory: Some(entry_get_factory),
-};
+pub static clap_entry: clap_sys::entry::clap_plugin_entry_t =
+    clap_sys::entry::clap_plugin_entry_t {
+        clap_version: CLAP_VERSION,
+        init: Some(entry_init),
+        deinit: Some(entry_deinit),
+        get_factory: Some(entry_get_factory),
+    };

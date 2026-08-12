@@ -1,8 +1,8 @@
 //! IEditController and related interfaces
 
-use std::ffi::c_void;
 use crate::base::types::*;
 use crate::vst::types::*;
+use std::ffi::c_void;
 
 // =============================================================================
 // ParameterInfo
@@ -43,11 +43,16 @@ pub mod ParameterFlags {
 #[repr(C)]
 pub struct IEditControllerVtbl {
     pub base: crate::base::IPluginBaseVtbl,
-    pub set_component_state: unsafe extern "system" fn(this: *mut c_void, state: *mut c_void) -> tresult,
+    pub set_component_state:
+        unsafe extern "system" fn(this: *mut c_void, state: *mut c_void) -> tresult,
     pub set_state: unsafe extern "system" fn(this: *mut c_void, state: *mut c_void) -> tresult,
     pub get_state: unsafe extern "system" fn(this: *mut c_void, state: *mut c_void) -> tresult,
     pub get_parameter_count: unsafe extern "system" fn(this: *mut c_void) -> int32,
-    pub get_parameter_info: unsafe extern "system" fn(this: *mut c_void, param_index: int32, info: *mut ParameterInfo) -> tresult,
+    pub get_parameter_info: unsafe extern "system" fn(
+        this: *mut c_void,
+        param_index: int32,
+        info: *mut ParameterInfo,
+    ) -> tresult,
     pub get_param_string_by_value: unsafe extern "system" fn(
         this: *mut c_void,
         id: ParamID,
@@ -70,9 +75,12 @@ pub struct IEditControllerVtbl {
         id: ParamID,
         plain_value: ParamValue,
     ) -> ParamValue,
-    pub get_param_normalized: unsafe extern "system" fn(this: *mut c_void, id: ParamID) -> ParamValue,
-    pub set_param_normalized: unsafe extern "system" fn(this: *mut c_void, id: ParamID, value: ParamValue) -> tresult,
-    pub set_component_handler: unsafe extern "system" fn(this: *mut c_void, handler: *mut c_void) -> tresult,
+    pub get_param_normalized:
+        unsafe extern "system" fn(this: *mut c_void, id: ParamID) -> ParamValue,
+    pub set_param_normalized:
+        unsafe extern "system" fn(this: *mut c_void, id: ParamID, value: ParamValue) -> tresult,
+    pub set_component_handler:
+        unsafe extern "system" fn(this: *mut c_void, handler: *mut c_void) -> tresult,
     pub create_view: unsafe extern "system" fn(this: *mut c_void, name: FIDString) -> *mut c_void,
 }
 
@@ -85,7 +93,11 @@ pub struct IEditControllerVtbl {
 pub struct IComponentHandlerVtbl {
     pub unknown: IUnknownVtbl,
     pub begin_edit: unsafe extern "system" fn(this: *mut c_void, id: ParamID) -> tresult,
-    pub perform_edit: unsafe extern "system" fn(this: *mut c_void, id: ParamID, value_normalized: ParamValue) -> tresult,
+    pub perform_edit: unsafe extern "system" fn(
+        this: *mut c_void,
+        id: ParamID,
+        value_normalized: ParamValue,
+    ) -> tresult,
     pub end_edit: unsafe extern "system" fn(this: *mut c_void, id: ParamID) -> tresult,
     pub restart_component: unsafe extern "system" fn(this: *mut c_void, flags: int32) -> tresult,
 }

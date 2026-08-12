@@ -7,31 +7,32 @@ use winapi::um::oleidl::LPDROPTARGET;
 use winapi::um::winuser::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     GetDpiForWindow, GetFocus, GetMessageW, GetWindowLongPtrW, LoadCursorW, PostMessageW,
-    RegisterClassW, ReleaseCapture, SetCapture, SetCursor, SetFocus, SetProcessDpiAwarenessContext,
-    SetTimer, SetWindowLongPtrW, SetWindowPos, TrackMouseEvent, TranslateMessage, UnregisterClassW,
-    CS_OWNDC, GET_XBUTTON_WPARAM, GWLP_USERDATA, HTCLIENT, IDC_ARROW, MSG, SWP_NOMOVE,
-    SWP_NOZORDER, TRACKMOUSEEVENT, WHEEL_DELTA, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DPICHANGED,
-    WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-    WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSELEAVE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY,
-    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN,
-    WM_SYSKEYUP, WM_TIMER, WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_CAPTION, WS_CHILD,
+    RegisterClassW, ReleaseCapture, SetCapture, SetCursor, SetFocus, SetTimer, SetWindowLongPtrW,
+    SetWindowPos, TrackMouseEvent, TranslateMessage, UnregisterClassW, CS_OWNDC,
+    GET_XBUTTON_WPARAM, GWLP_USERDATA, HTCLIENT, IDC_ARROW, MSG, SWP_NOMOVE, SWP_NOZORDER,
+    TRACKMOUSEEVENT, WHEEL_DELTA, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DPICHANGED, WM_INPUTLANGCHANGE,
+    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
+    WM_MOUSEHWHEEL, WM_MOUSELEAVE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_SETCURSOR, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WM_TIMER, WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_CAPTION, WS_CHILD,
     WS_CLIPSIBLINGS, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUPWINDOW, WS_SIZEBOX, WS_VISIBLE,
     XBUTTON1, XBUTTON2,
 };
 
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::collections::VecDeque;
-use std::ffi::{c_void, OsStr};
+use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::ptr::null_mut;
 use std::rc::Rc;
 
 use raw_window_handle::{
-    HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle, Win32WindowHandle,
-    WindowsDisplayHandle,
+    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawWindowHandle,
+    Win32WindowHandle, WindowHandle as RwhWindowHandle, WindowsDisplayHandle,
 };
 
 const BV_WINDOW_MUST_CLOSE: UINT = WM_USER + 1;
+const BV_WINDOW_MUST_RESIZE: UINT = WM_USER + 2;
 
 use crate::win::hook::{self, KeyboardHookHandle};
 use crate::{
@@ -84,17 +85,29 @@ impl WindowHandle {
     pub fn is_open(&self) -> bool {
         self.is_open.get()
     }
+
+    pub fn resize(&mut self, size: Size) {
+        let Some(hwnd) = self.hwnd else {
+            return;
+        };
+        let width = size.width.round().clamp(1.0, u32::MAX as f64) as usize;
+        let height = size.height.round().clamp(1.0, u32::MAX as f64) as isize;
+        unsafe {
+            PostMessageW(hwnd, BV_WINDOW_MUST_RESIZE, width, height);
+        }
+    }
 }
 
-unsafe impl HasRawWindowHandle for WindowHandle {
-    fn raw_window_handle(&self) -> RawWindowHandle {
+impl HasWindowHandle for WindowHandle {
+    fn window_handle(&self) -> Result<RwhWindowHandle<'_>, HandleError> {
         if let Some(hwnd) = self.hwnd {
-            let mut handle = Win32WindowHandle::empty();
-            handle.hwnd = hwnd as *mut c_void;
-
-            RawWindowHandle::Win32(handle)
+            use std::num::NonZeroIsize;
+            let handle = Win32WindowHandle::new(
+                NonZeroIsize::new(hwnd as isize).expect("HWND must be non-null"),
+            );
+            Ok(unsafe { RwhWindowHandle::borrow_raw(RawWindowHandle::Win32(handle)) })
         } else {
-            RawWindowHandle::Win32(Win32WindowHandle::empty())
+            Err(HandleError::Unavailable)
         }
     }
 }
@@ -107,7 +120,10 @@ impl ParentHandle {
     pub fn new(hwnd: HWND) -> (Self, WindowHandle) {
         let is_open = Rc::new(Cell::new(true));
 
-        let handle = WindowHandle { hwnd: Some(hwnd), is_open: Rc::clone(&is_open) };
+        let handle = WindowHandle {
+            hwnd: Some(hwnd),
+            is_open: Rc::clone(&is_open),
+        };
 
         (Self { is_open }, handle)
     }
@@ -120,7 +136,10 @@ impl Drop for ParentHandle {
 }
 
 pub(crate) unsafe extern "system" fn wnd_proc(
-    hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM,
+    hwnd: HWND,
+    msg: UINT,
+    wparam: WPARAM,
+    lparam: LPARAM,
 ) -> LRESULT {
     if msg == WM_CREATE {
         PostMessageW(hwnd, WM_SHOWWINDOW, 0, 0);
@@ -167,7 +186,11 @@ pub(crate) unsafe extern "system" fn wnd_proc(
 /// Our custom `wnd_proc` handler. If the result contains a value, then this is returned after
 /// handling any deferred tasks. otherwise the default window procedure is invoked.
 unsafe fn wnd_proc_inner(
-    hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM, window_state: &WindowState,
+    hwnd: HWND,
+    msg: UINT,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    window_state: &WindowState,
 ) -> Option<LRESULT> {
     match msg {
         WM_MOUSEMOVE => {
@@ -209,14 +232,24 @@ unsafe fn wnd_proc_inner(
                     .borrow()
                     .get_modifiers_from_mouse_wparam(wparam),
             });
-            window_state.handler.borrow_mut().as_mut().unwrap().on_event(&mut window, move_event);
+            window_state
+                .handler
+                .borrow_mut()
+                .as_mut()
+                .unwrap()
+                .on_event(&mut window, move_event);
             Some(0)
         }
 
         WM_MOUSELEAVE => {
             let mut window = crate::Window::new(window_state.create_window());
             let event = Event::Mouse(MouseEvent::CursorLeft);
-            window_state.handler.borrow_mut().as_mut().unwrap().on_event(&mut window, event);
+            window_state
+                .handler
+                .borrow_mut()
+                .as_mut()
+                .unwrap()
+                .on_event(&mut window, event);
 
             *window_state.mouse_was_outside_window.borrow_mut() = true;
             Some(0)
@@ -240,7 +273,12 @@ unsafe fn wnd_proc_inner(
                     .get_modifiers_from_mouse_wparam(wparam),
             });
 
-            window_state.handler.borrow_mut().as_mut().unwrap().on_event(&mut window, event);
+            window_state
+                .handler
+                .borrow_mut()
+                .as_mut()
+                .unwrap()
+                .on_event(&mut window, event);
 
             Some(0)
         }
@@ -312,7 +350,12 @@ unsafe fn wnd_proc_inner(
             let mut window = crate::Window::new(window_state.create_window());
 
             if wparam == WIN_FRAME_TIMER {
-                window_state.handler.borrow_mut().as_mut().unwrap().on_frame(&mut window);
+                window_state
+                    .handler
+                    .borrow_mut()
+                    .as_mut()
+                    .unwrap()
+                    .on_frame(&mut window);
             }
 
             Some(0)
@@ -338,8 +381,10 @@ unsafe fn wnd_proc_inner(
         | WM_INPUTLANGCHANGE => {
             let mut window = crate::Window::new(window_state.create_window());
 
-            let opt_event =
-                window_state.keyboard_state.borrow_mut().process_message(hwnd, msg, wparam, lparam);
+            let opt_event = window_state
+                .keyboard_state
+                .borrow_mut()
+                .process_message(hwnd, msg, wparam, lparam);
 
             if let Some(event) = opt_event {
                 window_state
@@ -359,8 +404,8 @@ unsafe fn wnd_proc_inner(
         WM_SIZE => {
             let mut window = crate::Window::new(window_state.create_window());
 
-            let width = (lparam & 0xFFFF) as u16 as u32;
-            let height = ((lparam >> 16) & 0xFFFF) as u16 as u32;
+            let width = (lparam as u32 & 0xFFFF) as u32;
+            let height = ((lparam as u32 >> 16) & 0xFFFF) as u32;
 
             let new_window_info = {
                 let mut window_info = window_state.window_info.borrow_mut();
@@ -382,7 +427,10 @@ unsafe fn wnd_proc_inner(
                 .borrow_mut()
                 .as_mut()
                 .unwrap()
-                .on_event(&mut window, Event::Window(WindowEvent::Resized(new_window_info)));
+                .on_event(
+                    &mut window,
+                    Event::Window(WindowEvent::Resized(new_window_info)),
+                );
 
             None
         }
@@ -438,8 +486,10 @@ unsafe fn wnd_proc_inner(
             let mouse_in_window = low_word == HTCLIENT;
             if mouse_in_window {
                 // Here we need to set the cursor back to what the state says, since it can have changed when outside the window
-                let cursor =
-                    LoadCursorW(null_mut(), cursor_to_lpcwstr(window_state.cursor_icon.get()));
+                let cursor = LoadCursorW(
+                    null_mut(),
+                    cursor_to_lpcwstr(window_state.cursor_icon.get()),
+                );
                 unsafe {
                     SetCursor(cursor);
                 }
@@ -453,6 +503,11 @@ unsafe fn wnd_proc_inner(
         //        state
         BV_WINDOW_MUST_CLOSE => {
             DestroyWindow(hwnd);
+            Some(0)
+        }
+        BV_WINDOW_MUST_RESIZE => {
+            let mut window = crate::Window::new(window_state.create_window());
+            window.resize(Size::new(wparam as f64, lparam as f64));
             Some(0)
         }
         _ => None,
@@ -591,14 +646,17 @@ pub struct Window<'a> {
 impl Window<'_> {
     pub fn open_parented<P, H, B>(parent: &P, options: WindowOpenOptions, build: B) -> WindowHandle
     where
-        P: HasRawWindowHandle,
+        P: HasWindowHandle,
         H: WindowHandler + 'static,
         B: FnOnce(&mut crate::Window) -> H,
         B: Send + 'static,
     {
-        let parent = match parent.raw_window_handle() {
-            RawWindowHandle::Win32(h) => h.hwnd as HWND,
-            h => panic!("unsupported parent handle {:?}", h),
+        let parent = match parent.window_handle().ok().and_then(|h| match h.as_raw() {
+            RawWindowHandle::Win32(h) => Some(h.hwnd.get() as HWND),
+            _ => None,
+        }) {
+            Some(hwnd) => hwnd,
+            None => panic!("unsupported parent handle"),
         };
 
         let (window_handle, _) = Self::open(true, parent, options, build);
@@ -631,7 +689,10 @@ impl Window<'_> {
     }
 
     fn open<H, B>(
-        parented: bool, parent: HWND, options: WindowOpenOptions, build: B,
+        parented: bool,
+        parent: HWND,
+        options: WindowOpenOptions,
+        build: B,
     ) -> (WindowHandle, HWND)
     where
         H: WindowHandler + 'static,
@@ -695,12 +756,14 @@ impl Window<'_> {
             let kb_hook = hook::init_keyboard_hook(hwnd);
 
             #[cfg(feature = "opengl")]
-            let gl_context: Option<GlContext> = options.gl_config.map(|gl_config| {
-                let mut handle = Win32WindowHandle::empty();
-                handle.hwnd = hwnd as *mut c_void;
+            let gl_context: Option<GlContext> = options.gl_config.and_then(|gl_config| {
+                use std::num::NonZeroIsize;
+                let handle = Win32WindowHandle::new(
+                    NonZeroIsize::new(hwnd as isize).expect("HWND must be non-null"),
+                );
                 let handle = RawWindowHandle::Win32(handle);
 
-                GlContext::create(&handle, gl_config).expect("Could not create OpenGL context")
+                GlContext::create(&handle, gl_config).ok()
             });
 
             let (parent_handle, window_handle) = ParentHandle::new(hwnd);
@@ -737,10 +800,10 @@ impl Window<'_> {
             };
             *window_state.handler.borrow_mut() = Some(Box::new(handler));
 
-            // Only works on Windows 10 unfortunately.
-            SetProcessDpiAwarenessContext(
-                winapi::shared::windef::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE,
-            );
+            // A plugin editor is embedded in a host process, so changing the
+            // process-wide DPI awareness here would mutate host policy after its
+            // windows already exist. Inherit that policy and query this HWND's
+            // effective DPI instead.
 
             // Now we can get the actual dpi of the window.
             let new_rect = if let WindowScalePolicy::SystemScaleFactor = options.scale {
@@ -773,7 +836,11 @@ impl Window<'_> {
             OleInitialize(null_mut());
             RegisterDragDrop(hwnd, Rc::as_ptr(&drop_target) as LPDROPTARGET);
 
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, Rc::into_raw(window_state) as *const _ as _);
+            SetWindowLongPtrW(
+                hwnd,
+                GWLP_USERDATA,
+                Rc::into_raw(window_state) as *const _ as _,
+            );
             SetTimer(hwnd, WIN_FRAME_TIMER, 15, None);
 
             if let Some(mut new_rect) = new_rect {
@@ -836,21 +903,23 @@ impl Window<'_> {
     }
 }
 
-unsafe impl HasRawWindowHandle for Window<'_> {
-    fn raw_window_handle(&self) -> RawWindowHandle {
-        let mut handle = Win32WindowHandle::empty();
-        handle.hwnd = self.state.hwnd as *mut c_void;
-
-        RawWindowHandle::Win32(handle)
+impl HasWindowHandle for Window<'_> {
+    fn window_handle(&self) -> Result<RwhWindowHandle<'_>, HandleError> {
+        use std::num::NonZeroIsize;
+        let handle = Win32WindowHandle::new(
+            NonZeroIsize::new(self.state.hwnd as isize).expect("HWND must be non-null"),
+        );
+        Ok(unsafe { RwhWindowHandle::borrow_raw(RawWindowHandle::Win32(handle)) })
     }
 }
 
-unsafe impl HasRawDisplayHandle for Window<'_> {
-    fn raw_display_handle(&self) -> RawDisplayHandle {
-        RawDisplayHandle::Windows(WindowsDisplayHandle::empty())
+impl HasDisplayHandle for Window<'_> {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+        let handle = raw_window_handle::RawDisplayHandle::Windows(WindowsDisplayHandle::new());
+        Ok(unsafe { DisplayHandle::borrow_raw(handle) })
     }
 }
 
-pub fn copy_to_clipboard(_data: &str) {
-    todo!()
-}
+/// Clipboard support is not part of the Phase-1 native editor contract.
+/// Keep this entry point non-panicking until the platform clipboard service is implemented.
+pub fn copy_to_clipboard(_data: &str) {}

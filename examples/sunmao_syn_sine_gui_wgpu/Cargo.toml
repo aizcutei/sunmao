@@ -1,0 +1,16 @@
+[package]
+name = "sunmao_syn_sine_gui_wgpu"
+version = "0.1.0"
+edition = "2021"
+description = "Sine synth example with a WGPU GUI using SunMao"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+sunmao = { path = "../../sunmao" }
+sunmao_core = { path = "../../sunmao/core" }
+sunmao_gui = { path = "../../sunmao/gui", default-features = false, features = ["wgpu"] }
+sunmao_macros = { path = "../../sunmao/macros" }
+sunmao_view_baseview = { path = "../../sunmao/view_baseview", default-features = false, features = ["wgpu"] }

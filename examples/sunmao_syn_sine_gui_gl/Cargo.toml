@@ -1,0 +1,16 @@
+[package]
+name = "sunmao_syn_sine_gui_gl"
+version = "0.1.0"
+edition = "2021"
+description = "Sine synth example with an OpenGL GUI using SunMao"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+sunmao = { path = "../../sunmao" }
+sunmao_core = { path = "../../sunmao/core" }
+sunmao_gui = { path = "../../sunmao/gui", features = ["gl"] }
+sunmao_macros = { path = "../../sunmao/macros" }
+sunmao_view_baseview = { path = "../../sunmao/view_baseview" }

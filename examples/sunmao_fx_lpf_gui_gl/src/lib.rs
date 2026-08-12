@@ -7,9 +7,9 @@ use std::f32::consts::PI;
 use std::sync::Arc;
 use sunmao_core::prelude::*;
 use sunmao_gui::gl::GlContext;
-use sunmao_gui::ParameterWidget;
 use sunmao_gui::{
-    Color, Event as GuiEvent, Fill, GuiContext, MouseButton as GuiMouseButton, Rect, Slider, Widget,
+    Color, Event as GuiEvent, Fill, GuiContext, MouseButton as GuiMouseButton, ParameterWidget,
+    Rect, Slider, Widget,
 };
 use sunmao_macros::Params;
 use sunmao_view_baseview::{BaseviewConfig, BaseviewView, ViewState, WindowScalePolicy};
@@ -118,41 +118,18 @@ impl Biquad {
         self.q = q;
     }
 
-    fn process(&mut self, buffer: &mut AudioBuffer) {
-        buffer.copy_input_to_output();
-        let channels = buffer
-            .num_input_channels()
-            .min(buffer.num_output_channels());
-
-        for ch in 0..channels {
-            let output = buffer.output(ch);
-            let mut z1 = self.z1[ch];
-            let mut z2 = self.z2[ch];
-
-            for sample in output.iter_mut() {
-                let x = *sample;
-                let y = self.coeffs.b0 * x + z1;
-                z1 = self.coeffs.b1 * x - self.coeffs.a1 * y + z2;
-                z2 = self.coeffs.b2 * x - self.coeffs.a2 * y;
-                *sample = y;
-            }
-
-            self.z1[ch] = z1;
-            self.z2[ch] = z2;
-        }
-
-        for ch in channels..buffer.num_output_channels() {
-            let output = buffer.output(ch);
-            for sample in output.iter_mut() {
-                *sample = 0.0;
-            }
-        }
+    fn process_sample(&mut self, channel: usize, sample: f32) -> f32 {
+        let output = self.coeffs.b0 * sample + self.z1[channel];
+        self.z1[channel] = self.coeffs.b1 * sample - self.coeffs.a1 * output + self.z2[channel];
+        self.z2[channel] = self.coeffs.b2 * sample - self.coeffs.a2 * output;
+        output
     }
 }
 
 // ============ Plugin Definition ============
 
 #[derive(Params)]
+#[cfg_attr(all(target_os = "macos", feature = "au"), sunmao_au)]
 pub struct LpfParams {
     pub cutoff: FloatParam,
     pub q: FloatParam,
@@ -220,13 +197,50 @@ impl SunmaoPlugin for LpfPlugin {
     fn process(
         &mut self,
         buffer: &mut AudioBuffer,
-        _events: &EventQueue,
+        events: &EventQueue,
         _context: &ProcessContext,
     ) -> ProcessStatus {
-        let cutoff = self.params.cutoff.get();
-        let q = self.params.q.get();
+        let mut cutoff = self.params.cutoff.get();
+        let mut q = self.params.q.get();
         self.filter.update(self.sample_rate, cutoff, q);
-        self.filter.process(buffer);
+        buffer.copy_input_to_output();
+        let channels = buffer
+            .num_input_channels()
+            .min(buffer.num_output_channels())
+            .min(self.filter.z1.len());
+        let mut changes = events
+            .param_changes()
+            .filter(|change| change.id == self.params.cutoff.id || change.id == self.params.q.id)
+            .peekable();
+
+        for sample_index in 0..buffer.num_samples() {
+            let mut coefficients_changed = false;
+            while changes
+                .peek()
+                .is_some_and(|change| change.offset as usize <= sample_index)
+            {
+                let change = changes.next().expect("peeked parameter change");
+                if change.id == self.params.cutoff.id {
+                    cutoff =
+                        denormalize(change.value, self.params.cutoff.min, self.params.cutoff.max);
+                    coefficients_changed = true;
+                } else if change.id == self.params.q.id {
+                    q = denormalize(change.value, self.params.q.min, self.params.q.max);
+                    coefficients_changed = true;
+                }
+            }
+            if coefficients_changed {
+                self.filter.update(self.sample_rate, cutoff, q);
+            }
+
+            for channel in 0..channels {
+                let input = buffer.output(channel)[sample_index];
+                buffer.output(channel)[sample_index] = self.filter.process_sample(channel, input);
+            }
+            for channel in channels..buffer.num_output_channels() {
+                buffer.output(channel)[sample_index] = 0.0;
+            }
+        }
         ProcessStatus::Normal
     }
 
@@ -378,260 +392,10 @@ use sunmao_backend_vst3::SunmaoVst3Wrapper;
 sunmao_backend_vst3::export_vst3_plugin_with_gui!(SunmaoVst3Wrapper<LpfPlugin>);
 
 // ============ AU Export (macOS only) ============
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "au"))]
 mod au_export {
     use super::*;
-    use std::ffi::c_void;
-    use sunmao_backend_au::gui::{
-        flush_context, make_current_context, open_gl_context, set_best_resolution,
-        set_needs_display, set_pixel_format, update_open_gl_view, view_backing_bounds, view_bounds,
-        CocoaObject, GuiConfig, GuiHandler,
-    };
-    use sunmao_backend_au::{
-        au_params, fourcc, get_parameter_local, gl_get_proc_address, set_parameter_local, NSPoint,
-        NSRect, NSSize, PluginInfo,
-    };
-    use sunmao_gui::gl::GlContext;
-    use sunmao_gui::{
-        Color, Event as GuiEvent, Fill, MouseButton as GuiMouseButton, Rect, Slider, Widget,
-    };
-
-    const PARAM_CUTOFF_INDEX: u32 = 0;
-    const PARAM_Q_INDEX: u32 = 1;
-    const SLIDER_MARGIN: f32 = 20.0;
-    const SLIDER_HEIGHT: f32 = 24.0;
-
-    const AU_OPENGL_CONFIG: GuiConfig = GuiConfig {
-        factory_class: "SunmaoAUCocoaViewFactoryLPFGL",
-        view_class: "SunmaoAUCocoaViewLPFGL",
-        view_superclass: "NSOpenGLView",
-        description: "SunMao AU LPF GL",
-    };
-
-    fn normalize_freq(value: f32) -> f32 {
-        normalize(value, FREQ_MIN, FREQ_MAX)
-    }
-
-    fn denormalize_freq(norm: f32) -> f32 {
-        denormalize(norm, FREQ_MIN, FREQ_MAX)
-    }
-
-    fn normalize_q(value: f32) -> f32 {
-        normalize(value, Q_MIN, Q_MAX)
-    }
-
-    fn denormalize_q(norm: f32) -> f32 {
-        denormalize(norm, Q_MIN, Q_MAX)
-    }
-
-    struct AuLpfOpenGlGui {
-        cutoff_slider: Slider,
-        q_slider: Slider,
-        width: f32,
-        height: f32,
-        gl: Option<GlContext>,
-    }
-
-    impl Default for AuLpfOpenGlGui {
-        fn default() -> Self {
-            let cutoff_slider = Slider::new("param0").with_default(normalize_freq(1000.0));
-            let q_slider = Slider::new("param1").with_default(normalize_q(0.707));
-            Self {
-                cutoff_slider,
-                q_slider,
-                width: 420.0,
-                height: 160.0,
-                gl: None,
-            }
-        }
-    }
-
-    impl AuLpfOpenGlGui {
-        fn update_slider_bounds(&mut self) {
-            let width = (self.width - SLIDER_MARGIN * 2.0).max(1.0);
-            let top_y = (self.height * 0.33 - SLIDER_HEIGHT * 0.5).max(4.0);
-            let bottom_y = (self.height * 0.66 - SLIDER_HEIGHT * 0.5).max(4.0);
-            self.cutoff_slider
-                .set_bounds(Rect::new(SLIDER_MARGIN, top_y, width, SLIDER_HEIGHT));
-            self.q_slider
-                .set_bounds(Rect::new(SLIDER_MARGIN, bottom_y, width, SLIDER_HEIGHT));
-        }
-
-        fn refresh_from_au(&mut self, audio_unit: *mut c_void) {
-            if audio_unit.is_null() {
-                return;
-            }
-            if let Ok(value) = get_parameter_local(audio_unit, PARAM_CUTOFF_INDEX) {
-                self.cutoff_slider.set_value(normalize_freq(value));
-            }
-            if let Ok(value) = get_parameter_local(audio_unit, PARAM_Q_INDEX) {
-                self.q_slider.set_value(normalize_q(value));
-            }
-        }
-
-        fn handle_event(&mut self, event: GuiEvent, audio_unit: *mut c_void) -> bool {
-            let cutoff_before = self.cutoff_slider.value();
-            let cutoff_handled = self.cutoff_slider.handle_event(&event);
-            let cutoff_after = self.cutoff_slider.value();
-
-            if cutoff_handled && (cutoff_after - cutoff_before).abs() > f32::EPSILON {
-                let value = denormalize_freq(cutoff_after);
-                if !audio_unit.is_null() {
-                    let _ = set_parameter_local(audio_unit, PARAM_CUTOFF_INDEX, value);
-                }
-                return true;
-            }
-
-            let q_before = self.q_slider.value();
-            let q_handled = self.q_slider.handle_event(&event);
-            let q_after = self.q_slider.value();
-
-            if q_handled && (q_after - q_before).abs() > f32::EPSILON {
-                let value = denormalize_q(q_after);
-                if !audio_unit.is_null() {
-                    let _ = set_parameter_local(audio_unit, PARAM_Q_INDEX, value);
-                }
-                return true;
-            }
-
-            cutoff_handled || q_handled
-        }
-    }
-
-    impl GuiHandler for AuLpfOpenGlGui {
-        fn init(&mut self, view: *mut CocoaObject, size: NSSize, audio_unit: *mut c_void) {
-            self.width = size.width.max(1.0) as f32;
-            self.height = size.height.max(1.0) as f32;
-
-            let attrs = [
-                99,     // NSOPENGLPFA_OPENGL_PROFILE
-                0x3200, // NSOpenGLProfileVersion3_2Core
-                73,     // NSOPENGLPFA_ACCELERATED
-                5,      // NSOPENGLPFA_DOUBLEBUFFER
-                0,
-            ];
-            set_pixel_format(view, &attrs);
-            set_best_resolution(view, true);
-
-            self.update_slider_bounds();
-            self.refresh_from_au(audio_unit);
-        }
-
-        fn draw(&mut self, view: *mut CocoaObject, audio_unit: *mut c_void, _rect: NSRect) {
-            let ctx = open_gl_context(view);
-            if ctx.is_null() {
-                return;
-            }
-            make_current_context(ctx);
-
-            if self.gl.is_none() {
-                self.gl = unsafe {
-                    GlContext::from_loader(
-                        |s| gl_get_proc_address(s) as *const _,
-                        self.width,
-                        self.height,
-                    )
-                    .ok()
-                };
-            }
-
-            let bounds = view_bounds(view);
-            let backing = view_backing_bounds(view);
-            let scale = if bounds.size.width > 0.0 {
-                (backing.size.width / bounds.size.width) as f32
-            } else {
-                1.0
-            };
-            let physical_w = backing.size.width.max(1.0) as u32;
-            let physical_h = backing.size.height.max(1.0) as u32;
-
-            self.width = bounds.size.width.max(1.0) as f32;
-            self.height = bounds.size.height.max(1.0) as f32;
-            self.update_slider_bounds();
-            self.refresh_from_au(audio_unit);
-
-            if let Some(gl) = self.gl.as_mut() {
-                gl.set_scale(scale);
-                gl.set_viewport(physical_w, physical_h);
-                gl.clear(Color::rgb(0.12, 0.12, 0.18));
-                gl.begin_frame();
-
-                gl.fill_rect(
-                    0.0,
-                    0.0,
-                    self.width,
-                    self.height,
-                    Fill::Solid(Color::rgb(0.14, 0.14, 0.2)),
-                );
-                self.cutoff_slider.draw(gl);
-                self.q_slider.draw(gl);
-
-                gl.end_frame();
-            }
-
-            flush_context(ctx);
-        }
-
-        fn reshape(&mut self, view: *mut CocoaObject, _audio_unit: *mut c_void) {
-            update_open_gl_view(view);
-            let bounds = view_bounds(view);
-            self.width = bounds.size.width.max(1.0) as f32;
-            self.height = bounds.size.height.max(1.0) as f32;
-            self.update_slider_bounds();
-            set_needs_display(view);
-        }
-
-        fn mouse_down(
-            &mut self,
-            view: *mut CocoaObject,
-            audio_unit: *mut c_void,
-            point: NSPoint,
-            _flags: u64,
-        ) {
-            let event = GuiEvent::MouseDown {
-                x: point.x as f32,
-                y: point.y as f32,
-                button: GuiMouseButton::Left,
-                modifiers: Default::default(),
-            };
-            self.handle_event(event, audio_unit);
-            set_needs_display(view);
-        }
-
-        fn mouse_dragged(
-            &mut self,
-            view: *mut CocoaObject,
-            audio_unit: *mut c_void,
-            point: NSPoint,
-            _flags: u64,
-        ) {
-            let event = GuiEvent::MouseMove {
-                x: point.x as f32,
-                y: point.y as f32,
-                modifiers: Default::default(),
-            };
-            self.handle_event(event, audio_unit);
-            set_needs_display(view);
-        }
-
-        fn mouse_up(
-            &mut self,
-            view: *mut CocoaObject,
-            _audio_unit: *mut c_void,
-            point: NSPoint,
-            _flags: u64,
-        ) {
-            let event = GuiEvent::MouseUp {
-                x: point.x as f32,
-                y: point.y as f32,
-                button: GuiMouseButton::Left,
-                modifiers: Default::default(),
-            };
-            self.cutoff_slider.handle_event(&event);
-            self.q_slider.handle_event(&event);
-            set_needs_display(view);
-        }
-    }
+    use sunmao_backend_au::{au_params, fourcc, PluginInfo};
 
     const AU_INFO: PluginInfo = PluginInfo {
         name: "SunMao LPF GL",
@@ -646,13 +410,7 @@ mod au_export {
         supports_midi: false,
     };
 
-    sunmao_backend_au::sunmao_export_au!(
-        SunMaoLpfGlFactory,
-        LpfPlugin,
-        AU_INFO,
-        au_params::<LpfParams>(),
-        gui: { handler: AuLpfOpenGlGui, config: AU_OPENGL_CONFIG }
-    );
+    sunmao_backend_au::sunmao_export_au_with_view!(LpfPlugin, AU_INFO, au_params::<LpfParams>());
 }
 
 // ============ CLAP Export ============

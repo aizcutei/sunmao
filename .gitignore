@@ -1,4 +1,8 @@
 /target
 /build
+/build_new
+/build_au
+/build_test
 /debug
+/.phase1-run.*
 .DS_Store

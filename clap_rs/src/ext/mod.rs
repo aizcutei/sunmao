@@ -1,16 +1,16 @@
 pub mod audio_ports;
-pub mod note_ports;
-pub mod params;
-pub mod state;
 pub mod gui;
 pub mod latency;
+pub mod note_ports;
+pub mod params;
+pub mod render;
+pub mod state;
 pub mod tail;
 pub mod voice_info;
-pub mod render;
 
 pub use audio_ports::AudioPortInfo;
+pub use gui::{GuiApi, GuiHandler, GuiResizeHints};
 pub use note_ports::NotePortInfo;
 pub use params::ParameterInfo;
-pub use gui::{GuiApi, GuiResizeHints, GuiHandler};
-pub use voice_info::VoiceInfo;
 pub use render::RenderMode;
+pub use voice_info::VoiceInfo;

@@ -16,6 +16,12 @@ mod window_open_options;
 #[cfg(feature = "opengl")]
 pub mod gl;
 
+#[cfg(all(target_os = "macos", feature = "metal"))]
+pub mod metal_layer;
+
+#[cfg(feature = "webview")]
+pub mod webview;
+
 pub use clipboard::*;
 pub use event::*;
 pub use mouse_cursor::MouseCursor;

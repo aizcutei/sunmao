@@ -1,7 +1,7 @@
 //! IPluginBase and IPluginFactory interfaces
 
-use std::ffi::c_void;
 use crate::base::types::*;
+use std::ffi::c_void;
 
 // =============================================================================
 // Factory Info Structs
@@ -101,9 +101,14 @@ pub struct IPluginBaseVtbl {
 #[repr(C)]
 pub struct IPluginFactoryVtbl {
     pub unknown: IUnknownVtbl,
-    pub get_factory_info: unsafe extern "system" fn(this: *mut c_void, info: *mut PFactoryInfoData) -> tresult,
+    pub get_factory_info:
+        unsafe extern "system" fn(this: *mut c_void, info: *mut PFactoryInfoData) -> tresult,
     pub count_classes: unsafe extern "system" fn(this: *mut c_void) -> int32,
-    pub get_class_info: unsafe extern "system" fn(this: *mut c_void, index: int32, info: *mut PClassInfoData) -> tresult,
+    pub get_class_info: unsafe extern "system" fn(
+        this: *mut c_void,
+        index: int32,
+        info: *mut PClassInfoData,
+    ) -> tresult,
     pub create_instance: unsafe extern "system" fn(
         this: *mut c_void,
         cid: FIDString,
@@ -116,13 +121,22 @@ pub struct IPluginFactoryVtbl {
 #[repr(C)]
 pub struct IPluginFactory2Vtbl {
     pub factory: IPluginFactoryVtbl,
-    pub get_class_info2: unsafe extern "system" fn(this: *mut c_void, index: int32, info: *mut PClassInfo2Data) -> tresult,
+    pub get_class_info2: unsafe extern "system" fn(
+        this: *mut c_void,
+        index: int32,
+        info: *mut PClassInfo2Data,
+    ) -> tresult,
 }
 
 /// IPluginFactory3 vtable (extends IPluginFactory2)
 #[repr(C)]
 pub struct IPluginFactory3Vtbl {
     pub factory2: IPluginFactory2Vtbl,
-    pub get_class_info_unicode: unsafe extern "system" fn(this: *mut c_void, index: int32, info: *mut PClassInfoWData) -> tresult,
-    pub set_host_context: unsafe extern "system" fn(this: *mut c_void, context: *mut c_void) -> tresult,
+    pub get_class_info_unicode: unsafe extern "system" fn(
+        this: *mut c_void,
+        index: int32,
+        info: *mut PClassInfoWData,
+    ) -> tresult,
+    pub set_host_context:
+        unsafe extern "system" fn(this: *mut c_void, context: *mut c_void) -> tresult,
 }

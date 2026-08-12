@@ -1,11 +1,11 @@
 //! Plugin trait definition.
 
-use std::sync::Arc;
-use crate::params::Params;
 use crate::audio::AudioBuffer;
 use crate::events::EventQueue;
-use crate::metadata::{Vst3Info, AuInfo, ClapInfo};
+use crate::metadata::{AuInfo, ClapInfo, Vst3Info};
+use crate::params::Params;
 use crate::view::SunmaoView;
+use std::sync::Arc;
 
 /// Processing status returned by the plugin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,16 +42,27 @@ pub trait SunmaoPlugin: Default + Send + 'static {
     const URL: &'static str;
     /// Plugin version string.
     const VERSION: &'static str = "1.0.0";
+    /// Maximum number of host events accepted in one processing block.
+    ///
+    /// Format adapters allocate this scratch during activation and report a
+    /// processing error instead of growing it on the audio thread.
+    const MAX_EVENTS_PER_BLOCK: usize = 4096;
 
     /// The parameter struct type.
     type Params: Params;
 
     /// Number of input channels (0 for synths).
-    fn input_channels(&self) -> u32 { 2 }
+    fn input_channels(&self) -> u32 {
+        2
+    }
     /// Number of output channels.
-    fn output_channels(&self) -> u32 { 2 }
+    fn output_channels(&self) -> u32 {
+        2
+    }
     /// Whether this plugin accepts MIDI input.
-    fn accepts_midi(&self) -> bool { false }
+    fn accepts_midi(&self) -> bool {
+        false
+    }
 
     /// Get the plugin's parameters.
     fn params(&self) -> Arc<Self::Params>;
@@ -73,7 +84,7 @@ pub trait SunmaoPlugin: Default + Send + 'static {
     ) -> ProcessStatus;
 
     // --- GUI Support ---
-    
+
     /// Create the plugin's editor view.
     ///
     /// Return `Some(view)` if this plugin has a custom GUI.
@@ -85,10 +96,15 @@ pub trait SunmaoPlugin: Default + Send + 'static {
     // --- Format-specific metadata (with defaults) ---
 
     /// VST3-specific metadata.
-    fn vst3_info() -> Vst3Info { Vst3Info::default() }
+    fn vst3_info() -> Vst3Info {
+        Vst3Info::default()
+    }
     /// Audio Unit-specific metadata.
-    fn au_info() -> AuInfo { AuInfo::default() }
+    fn au_info() -> AuInfo {
+        AuInfo::default()
+    }
     /// CLAP-specific metadata.
-    fn clap_info() -> ClapInfo { ClapInfo::default() }
+    fn clap_info() -> ClapInfo {
+        ClapInfo::default()
+    }
 }
-

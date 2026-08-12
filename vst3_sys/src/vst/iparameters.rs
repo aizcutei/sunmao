@@ -1,8 +1,8 @@
 //! IParameterChanges and IParamValueQueue interfaces
 
-use std::ffi::c_void;
 use crate::base::types::*;
 use crate::vst::types::*;
+use std::ffi::c_void;
 
 // =============================================================================
 // IParamValueQueue VTable
@@ -37,7 +37,8 @@ pub struct IParamValueQueueVtbl {
 pub struct IParameterChangesVtbl {
     pub unknown: IUnknownVtbl,
     pub get_parameter_count: unsafe extern "system" fn(this: *mut c_void) -> int32,
-    pub get_parameter_data: unsafe extern "system" fn(this: *mut c_void, index: int32) -> *mut c_void,
+    pub get_parameter_data:
+        unsafe extern "system" fn(this: *mut c_void, index: int32) -> *mut c_void,
     pub add_parameter_data: unsafe extern "system" fn(
         this: *mut c_void,
         id: *const ParamID,

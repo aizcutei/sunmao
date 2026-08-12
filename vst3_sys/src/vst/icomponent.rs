@@ -1,8 +1,8 @@
 //! IComponent interface
 
-use std::ffi::c_void;
 use crate::base::types::*;
 use crate::vst::types::*;
+use std::ffi::c_void;
 
 // =============================================================================
 // Structs
@@ -48,9 +48,14 @@ pub struct RoutingInfo {
 #[repr(C)]
 pub struct IComponentVtbl {
     pub base: crate::base::IPluginBaseVtbl,
-    pub get_controller_class_id: unsafe extern "system" fn(this: *mut c_void, class_id: *mut TUID) -> tresult,
+    pub get_controller_class_id:
+        unsafe extern "system" fn(this: *mut c_void, class_id: *mut TUID) -> tresult,
     pub set_io_mode: unsafe extern "system" fn(this: *mut c_void, mode: IoMode) -> tresult,
-    pub get_bus_count: unsafe extern "system" fn(this: *mut c_void, media_type: MediaType, dir: BusDirection) -> int32,
+    pub get_bus_count: unsafe extern "system" fn(
+        this: *mut c_void,
+        media_type: MediaType,
+        dir: BusDirection,
+    ) -> int32,
     pub get_bus_info: unsafe extern "system" fn(
         this: *mut c_void,
         media_type: MediaType,
@@ -58,8 +63,11 @@ pub struct IComponentVtbl {
         index: int32,
         bus: *mut BusInfo,
     ) -> tresult,
-    pub get_routing_info:
-        unsafe extern "system" fn(this: *mut c_void, in_info: *mut RoutingInfo, out_info: *mut RoutingInfo) -> tresult,
+    pub get_routing_info: unsafe extern "system" fn(
+        this: *mut c_void,
+        in_info: *mut RoutingInfo,
+        out_info: *mut RoutingInfo,
+    ) -> tresult,
     pub activate_bus: unsafe extern "system" fn(
         this: *mut c_void,
         media_type: MediaType,

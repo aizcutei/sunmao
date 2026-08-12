@@ -1,8 +1,7 @@
 use std::marker::PhantomData;
 
 use raw_window_handle::{
-    HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle,
-    DisplayHandle, WindowHandle as RwhWindowHandle, HandleError,
+    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle as RwhWindowHandle,
 };
 
 use crate::event::{Event, EventStatus};
@@ -24,7 +23,10 @@ pub struct WindowHandle {
 
 impl WindowHandle {
     fn new(window_handle: platform::WindowHandle) -> Self {
-        Self { window_handle, phantom: PhantomData }
+        Self {
+            window_handle,
+            phantom: PhantomData,
+        }
     }
 
     /// Close the window
@@ -36,6 +38,17 @@ impl WindowHandle {
     /// if the window was closed/dropped.
     pub fn is_open(&self) -> bool {
         self.window_handle.is_open()
+    }
+
+    /// Resize the native window in logical pixels.
+    pub fn resize(&mut self, size: Size) {
+        self.window_handle.resize(size);
+    }
+}
+
+impl Drop for WindowHandle {
+    fn drop(&mut self) {
+        self.close();
     }
 }
 
@@ -60,12 +73,18 @@ pub struct Window<'a> {
 impl<'a> Window<'a> {
     #[cfg(target_os = "windows")]
     pub(crate) fn new(window: platform::Window<'a>) -> Window<'a> {
-        Window { window, phantom: PhantomData }
+        Window {
+            window,
+            phantom: PhantomData,
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
     pub(crate) fn new(window: platform::Window) -> Window {
-        Window { window, phantom: PhantomData }
+        Window {
+            window,
+            phantom: PhantomData,
+        }
     }
 
     pub fn open_parented<P, H, B>(parent: &P, options: WindowOpenOptions, build: B) -> WindowHandle
@@ -116,6 +135,23 @@ impl<'a> Window<'a> {
     #[cfg(feature = "opengl")]
     pub fn gl_context(&self) -> Option<&crate::gl::GlContext> {
         self.window.gl_context()
+    }
+
+    /// If a Metal layer was requested, returns a reference to it.
+    /// This can be used to create a wgpu surface.
+    #[cfg(all(target_os = "macos", feature = "metal"))]
+    pub fn metal_layer(&self) -> Option<&crate::metal_layer::MetalLayer> {
+        self.window.metal_layer()
+    }
+
+    /// Get the raw NSView pointer (macOS only).
+    #[cfg(target_os = "macos")]
+    pub fn ns_view_ptr(&self) -> *mut std::ffi::c_void {
+        let handle = self.window_handle().expect("Failed to get window handle");
+        match handle.as_raw() {
+            raw_window_handle::RawWindowHandle::AppKit(h) => h.ns_view.as_ptr(),
+            _ => std::ptr::null_mut(),
+        }
     }
 }
 

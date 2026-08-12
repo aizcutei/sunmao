@@ -13,7 +13,14 @@ pub struct clap_plugin_invalidation_source_t {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct clap_plugin_invalidation_factory_t {
-    pub count: Option<unsafe extern "C" fn(factory: *const clap_plugin_invalidation_factory_t) -> u32>,
-    pub get: Option<unsafe extern "C" fn(factory: *const clap_plugin_invalidation_factory_t, index: u32) -> *const clap_plugin_invalidation_source_t>,
-    pub refresh: Option<unsafe extern "C" fn(factory: *const clap_plugin_invalidation_factory_t) -> bool>,
+    pub count:
+        Option<unsafe extern "C" fn(factory: *const clap_plugin_invalidation_factory_t) -> u32>,
+    pub get: Option<
+        unsafe extern "C" fn(
+            factory: *const clap_plugin_invalidation_factory_t,
+            index: u32,
+        ) -> *const clap_plugin_invalidation_source_t,
+    >,
+    pub refresh:
+        Option<unsafe extern "C" fn(factory: *const clap_plugin_invalidation_factory_t) -> bool>,
 }

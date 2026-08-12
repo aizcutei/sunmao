@@ -1,0 +1,392 @@
+name: Phase 1
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase1-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # The binding layers intentionally retain upstream C/C++ naming and still
+  # contain many Rust 2024 unsafe-op warnings. Keep CI output focused on errors.
+  RUSTFLAGS: -Awarnings
+
+jobs:
+  native-vst3-clap:
+    name: ${{ matrix.name }} VST3 + CLAP
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-latest
+            plugin-binary: target/debug/libsunmao_fx_gain.so
+            synth-binary: target/debug/libsunmao_syn_sine.so
+            gl-binary: target/debug/libsunmao_fx_gain_gui_gl.so
+            wgpu-binary: target/debug/libsunmao_fx_gain_gui_wgpu.so
+            webview-binary: target/debug/libsunmao_fx_gain_gui_webview.so
+            synth-gl-binary: target/debug/libsunmao_syn_sine_gui_gl.so
+            synth-wgpu-binary: target/debug/libsunmao_syn_sine_gui_wgpu.so
+            synth-webview-binary: target/debug/libsunmao_syn_sine_gui_webview.so
+            lpf-binary: target/debug/libsunmao_fx_lpf_gui_gl.so
+            daw-binary: target/debug/libsunmao_daw_info_gui.so
+            executable-suffix: ""
+          - name: macOS native
+            os: macos-latest
+            plugin-binary: target/debug/libsunmao_fx_gain.dylib
+            synth-binary: target/debug/libsunmao_syn_sine.dylib
+            gl-binary: target/debug/libsunmao_fx_gain_gui_gl.dylib
+            wgpu-binary: target/debug/libsunmao_fx_gain_gui_wgpu.dylib
+            webview-binary: target/debug/libsunmao_fx_gain_gui_webview.dylib
+            synth-gl-binary: target/debug/libsunmao_syn_sine_gui_gl.dylib
+            synth-wgpu-binary: target/debug/libsunmao_syn_sine_gui_wgpu.dylib
+            synth-webview-binary: target/debug/libsunmao_syn_sine_gui_webview.dylib
+            lpf-binary: target/debug/libsunmao_fx_lpf_gui_gl.dylib
+            daw-binary: target/debug/libsunmao_daw_info_gui.dylib
+            executable-suffix: ""
+          - name: Windows x86_64
+            os: windows-latest
+            plugin-binary: target/debug/sunmao_fx_gain.dll
+            synth-binary: target/debug/sunmao_syn_sine.dll
+            gl-binary: target/debug/sunmao_fx_gain_gui_gl.dll
+            wgpu-binary: target/debug/sunmao_fx_gain_gui_wgpu.dll
+            webview-binary: target/debug/sunmao_fx_gain_gui_webview.dll
+            synth-gl-binary: target/debug/sunmao_syn_sine_gui_gl.dll
+            synth-wgpu-binary: target/debug/sunmao_syn_sine_gui_wgpu.dll
+            synth-webview-binary: target/debug/sunmao_syn_sine_gui_webview.dll
+            lpf-binary: target/debug/sunmao_fx_lpf_gui_gl.dll
+            daw-binary: target/debug/sunmao_daw_info_gui.dll
+            executable-suffix: .exe
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux GUI build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            libasound2-dev \
+            libgl1-mesa-dev \
+            libwebkit2gtk-4.1-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxtst6 \
+            libvulkan1 \
+            mesa-vulkan-drivers \
+            xvfb \
+            xauth \
+            pkg-config
+
+      - name: Configure Linux GUI runtime
+        if: runner.os == 'Linux'
+        run: |
+          runtime_dir="$RUNNER_TEMP/sunmao-xdg"
+          mkdir -p "$runtime_dir"
+          chmod 700 "$runtime_dir"
+          echo "XDG_RUNTIME_DIR=$runtime_dir" >> "$GITHUB_ENV"
+
+      - name: Validate metadata and formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --no-deps --format-version 1 >/dev/null
+          cargo fmt --all -- --check
+          git diff --check
+
+      - name: Test format adapters and host
+        run: >-
+          cargo test --locked
+          -p clap_sys
+          -p clap_rs
+          -p vst3_sys
+          -p vst3_rs
+          -p sunmao_core
+          -p sunmao_macros
+          -p sunmao_backend_clap
+          -p sunmao_backend_vst3
+          -p sunmao_packager
+          -p sunmao_gui
+          -p sunmao_gui_wgpu
+          -p sunmao_view_baseview
+          -p sunmao_unittest_runner
+          -p sunmao_fx_gain
+          -p sunmao_syn_sine
+          -p sunmao_syn_sine_gui_gl
+          -p sunmao_syn_sine_gui_wgpu
+          -p sunmao_syn_sine_gui_webview
+
+      - name: Test standalone runtime (non-blocking follow-up)
+        continue-on-error: true
+        run: cargo test --locked -p sunmao_runtime
+
+      - name: Test macOS system-capture linkage (non-blocking follow-up)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "13.0"
+        run: cargo test --locked -p sunmao_runtime --features system-capture
+
+      - name: Check baseview feature combinations
+        run: |
+          cargo test --locked -p baseview --all-features
+          cargo check --locked -p baseview --all-features --examples
+
+      - name: Test realtime callback allocation matrix
+        run: >-
+          cargo test --release --locked
+          -p clap_rs_fx_gain
+          -p clap_rs_syn_sine
+          -p vst3_rs_fx_gain
+          -p vst3_rs_syn_sine
+          -p clap_sys_fx_gain
+          -p clap_sys_syn_sine
+          -p vst3_sys_fx_gain
+          -p vst3_sys_syn_sine
+          -p sunmao_backend_clap
+          -p sunmao_backend_vst3
+
+      - name: Build cross-platform examples and tools
+        run: >-
+          cargo build --locked
+          -p sunmao_fx_gain
+          -p sunmao_syn_sine
+          -p sunmao_fx_gain_gui_gl
+          -p sunmao_fx_gain_gui_webview
+          -p sunmao_fx_gain_gui_wgpu
+          -p sunmao_syn_sine_gui_gl
+          -p sunmao_syn_sine_gui_wgpu
+          -p sunmao_syn_sine_gui_webview
+          -p sunmao_fx_lpf_gui_gl
+          -p sunmao_daw_info_gui
+          -p sunmao_packager
+
+      - name: Build test runner separately
+        run: cargo build --locked -p sunmao_unittest_runner
+
+      - name: Assert default macOS binaries are AU-free
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for binary in \
+            target/debug/libsunmao_fx_gain.dylib \
+            target/debug/libsunmao_syn_sine.dylib \
+            target/debug/libsunmao_fx_gain_gui_gl.dylib \
+            target/debug/libsunmao_fx_gain_gui_wgpu.dylib \
+            target/debug/libsunmao_fx_gain_gui_webview.dylib \
+            target/debug/libsunmao_syn_sine_gui_gl.dylib \
+            target/debug/libsunmao_syn_sine_gui_wgpu.dylib \
+            target/debug/libsunmao_syn_sine_gui_webview.dylib \
+            target/debug/libsunmao_fx_lpf_gui_gl.dylib \
+            target/debug/libsunmao_daw_info_gui.dylib; do
+            test -f "$binary"
+            symbols="$(nm "$binary")"
+            if grep -Eq 'RustAUFactory|au_component_factory|SunmaoAUCocoa' <<<"$symbols"; then
+              echo "AU symbols leaked into default Phase-1 binary: $binary" >&2
+              exit 1
+            fi
+          done
+          runner=target/debug/sunmao_unittest_runner
+          test -f "$runner"
+          symbols="$(nm "$runner")"
+          if grep -Eq 'RustAUFactory|au_component_factory|SunmaoAUCocoa' <<<"$symbols"; then
+            echo "Plugin-only AU symbols leaked into the test runner: $runner" >&2
+            exit 1
+          fi
+
+      - name: Package and load VST3 + CLAP
+        shell: bash
+        run: |
+          set -euo pipefail
+          packager="target/debug/sunmao_packager${{ matrix.executable-suffix }}"
+          runner="target/debug/sunmao_unittest_runner${{ matrix.executable-suffix }}"
+          output="target/phase1-artifacts/SunMaoGain"
+          synth_output="target/phase1-artifacts/SunMaoSine"
+
+          "$packager" vst3 \
+            --binary "${{ matrix.plugin-binary }}" \
+            --out "$output" \
+            --name "SunMao Gain" \
+            --bundle-id com.sunmao.fx.gain \
+            --version 1.0.0
+          "$packager" clap \
+            --binary "${{ matrix.plugin-binary }}" \
+            --out "$output" \
+            --name "SunMao Gain" \
+            --bundle-id com.sunmao.fx.gain \
+            --version 1.0.0
+          "$packager" vst3 \
+            --binary "${{ matrix.synth-binary }}" \
+            --out "$synth_output" \
+            --name "SunMao Sine Synth" \
+            --bundle-id com.sunmao.synth.sine \
+            --version 1.0.0
+          "$packager" clap \
+            --binary "${{ matrix.synth-binary }}" \
+            --out "$synth_output" \
+            --name "SunMao Sine Synth" \
+            --bundle-id com.sunmao.synth.sine \
+            --version 1.0.0
+
+          {
+            echo "commit=${GITHUB_SHA:-unknown}"
+            echo "ref=${GITHUB_REF:-unknown}"
+            echo "os=${RUNNER_OS} arch=${RUNNER_ARCH}"
+            echo "packager=$packager"
+            echo
+            echo "Packaged gain/sine VST3+CLAP bundles:"
+            ls -la "$output.vst3" "$output.clap" "$synth_output.vst3" "$synth_output.clap"
+          } > target/phase1-artifacts/packager-validation.txt
+
+          "$runner" test "$output.vst3" 2>&1 | tee "$output.vst3.test.log"
+          "$runner" test "$output.clap" 2>&1 | tee "$output.clap.test.log"
+          "$runner" test "$synth_output.vst3" 2>&1 | tee "$synth_output.vst3.test.log"
+          "$runner" test "$synth_output.clap" 2>&1 | tee "$synth_output.clap.test.log"
+
+          if "$runner" test "target/phase1-artifacts/missing.clap" 2>&1 | tee "target/phase1-artifacts/missing.clap.test.log"; then
+            echo "runner unexpectedly accepted a missing plugin" >&2
+            exit 1
+          fi
+
+      - name: Package and exercise native GUI backends
+        shell: bash
+        run: |
+          set -euo pipefail
+          packager="target/debug/sunmao_packager${{ matrix.executable-suffix }}"
+          runner="target/debug/sunmao_unittest_runner${{ matrix.executable-suffix }}"
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            gui_runner=(xvfb-run -a env GDK_BACKEND=x11 WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 "$runner")
+          else
+            gui_runner=("$runner")
+          fi
+
+          run_gui_test() {
+            local log="$1"
+            shift
+            if "${gui_runner[@]}" "$@" 2>&1 | tee "$log"; then
+              if [ "${{ runner.os }}" = "macOS" ]; then sleep 1; fi
+              return 0
+            fi
+            if [ "${{ runner.os }}" != "macOS" ]; then
+              return 1
+            fi
+            echo "macOS GUI host failed; retrying once after WindowServer cooldown" >&2
+            sleep 5
+            if "${gui_runner[@]}" "$@" 2>&1 | tee "$log"; then
+              sleep 1
+              return 0
+            fi
+            return 1
+          }
+
+          package_and_test_gui() {
+            local output_name="$1" binary="$2" display_name="$3" bundle_id="$4"
+            local drag_from="$5" drag_to="$6"
+            local output="target/phase1-artifacts/${output_name}"
+            "$packager" vst3 \
+              --binary "$binary" \
+              --out "$output" \
+              --name "$display_name" \
+              --bundle-id "$bundle_id" \
+              --version 1.0.0
+            "$packager" clap \
+              --binary "$binary" \
+              --out "$output" \
+              --name "$display_name" \
+              --bundle-id "$bundle_id" \
+              --version 1.0.0
+            "$runner" test "$output.vst3" 2>&1 | tee "$output.vst3.test.log"
+            "$runner" test "$output.clap" 2>&1 | tee "$output.clap.test.log"
+            run_gui_test "$output.vst3.gui-test.log" gui-test --auto-close --verify-pixels --verify-input \
+              --drag-from "$drag_from" --drag-to "$drag_to" "$output.vst3"
+            run_gui_test "$output.clap.gui-test.log" gui-test --auto-close --verify-pixels --verify-input \
+              --drag-from "$drag_from" --drag-to "$drag_to" "$output.clap"
+          }
+
+          package_and_test_gui SunMaoGainGL "${{ matrix.gl-binary }}" \
+            "SunMao Gain GL" com.sunmao.fx.gain.gl 64,110 456,110
+          package_and_test_gui SunMaoGainWGPU "${{ matrix.wgpu-binary }}" \
+            "SunMao Gain WGPU" com.sunmao.fx.gain.wgpu 64,110 456,110
+          package_and_test_gui SunMaoGainWebView "${{ matrix.webview-binary }}" \
+            "SunMao Gain WebView" com.sunmao.fx.gain.webview 120,132 400,132
+          package_and_test_gui SunMaoSineGL "${{ matrix.synth-gl-binary }}" \
+            "SunMao Sine Synth GL" com.sunmao.synth.sine.gl 64,110 456,110
+          package_and_test_gui SunMaoSineWGPU "${{ matrix.synth-wgpu-binary }}" \
+            "SunMao Sine Synth WGPU" com.sunmao.synth.sine.wgpu 64,110 456,110
+          package_and_test_gui SunMaoSineWebView "${{ matrix.synth-webview-binary }}" \
+            "SunMao Sine Synth WebView" com.sunmao.synth.sine.webview 120,124 400,124
+
+          package_and_test_gui_lifecycle() {
+            local backend="$1" binary="$2" display_name="$3" bundle_suffix="$4"
+            local output="target/phase1-artifacts/SunMao${backend}"
+            "$packager" vst3 \
+              --binary "$binary" \
+              --out "$output" \
+              --name "$display_name" \
+              --bundle-id "com.sunmao.$bundle_suffix" \
+              --version 1.0.0
+            "$packager" clap \
+              --binary "$binary" \
+              --out "$output" \
+              --name "$display_name" \
+              --bundle-id "com.sunmao.$bundle_suffix" \
+              --version 1.0.0
+            "$runner" test "$output.vst3" 2>&1 | tee "$output.vst3.test.log"
+            "$runner" test "$output.clap" 2>&1 | tee "$output.clap.test.log"
+            run_gui_test "$output.vst3.gui-test.log" gui-test --auto-close --verify-pixels "$output.vst3"
+            run_gui_test "$output.clap.gui-test.log" gui-test --auto-close --verify-pixels "$output.clap"
+          }
+
+          package_and_test_gui_lifecycle LPFGL "${{ matrix.lpf-binary }}" "SunMao LPF GL" fx.lpf.gl
+          package_and_test_gui_lifecycle DAWInfoGUI "${{ matrix.daw-binary }}" "SunMao DAW Info GUI" daw.info.gui
+
+      - name: Exercise repository packaging helper
+        shell: bash
+        run: tools/package_examples.sh --debug --test
+
+      - name: Upload packaged smoke-test plugins
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase1-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            target/phase1-artifacts/SunMaoGain.vst3
+            target/phase1-artifacts/SunMaoGain.clap
+            target/phase1-artifacts/SunMaoSine.vst3
+            target/phase1-artifacts/SunMaoSine.clap
+            target/phase1-artifacts/SunMaoGainGL.vst3
+            target/phase1-artifacts/SunMaoGainGL.clap
+            target/phase1-artifacts/SunMaoGainWGPU.vst3
+            target/phase1-artifacts/SunMaoGainWGPU.clap
+            target/phase1-artifacts/SunMaoGainWebView.vst3
+            target/phase1-artifacts/SunMaoGainWebView.clap
+            target/phase1-artifacts/SunMaoSineGL.vst3
+            target/phase1-artifacts/SunMaoSineGL.clap
+            target/phase1-artifacts/SunMaoSineWGPU.vst3
+            target/phase1-artifacts/SunMaoSineWGPU.clap
+            target/phase1-artifacts/SunMaoSineWebView.vst3
+            target/phase1-artifacts/SunMaoSineWebView.clap
+            target/phase1-artifacts/SunMaoLPFGL.vst3
+            target/phase1-artifacts/SunMaoLPFGL.clap
+            target/phase1-artifacts/SunMaoDAWInfoGUI.vst3
+            target/phase1-artifacts/SunMaoDAWInfoGUI.clap
+            target/phase1-artifacts/*.test.log
+            target/phase1-artifacts/*.gui-test.log
+            target/phase1-artifacts/*.validation.txt
+          if-no-files-found: error

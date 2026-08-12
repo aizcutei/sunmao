@@ -6,18 +6,20 @@ use baseview::{
     Event, EventStatus, MouseButton, MouseEvent, PhySize, Point, Size, Window, WindowEvent,
     WindowHandler, WindowOpenOptions, WindowScalePolicy,
 };
-use clap_rs::{Plugin, PluginInfo, ParameterInfo, AudioPortInfo, HostHandle, CLAP_PROCESS_CONTINUE};
+use clap_rs::events::Event as ClapEvent;
 use clap_rs::ext::{GuiApi, GuiHandler, GuiResizeHints};
 use clap_rs::process::ProcessContext;
-use raw_window_handle::{
-    HasWindowHandle, HasDisplayHandle, RawDisplayHandle, RawWindowHandle,
+use clap_rs::{
+    AudioPortInfo, AudioProcessor, CLAP_PROCESS_CONTINUE, HostHandle, ParameterInfo, Plugin,
+    PluginInfo,
 };
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use softbuffer::{Context, Surface};
 use std::ffi::{c_char, c_void};
 use std::num::NonZeroU32;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const GUI_WIDTH: f64 = 400.0;
 const GUI_HEIGHT: f64 = 120.0;
@@ -35,8 +37,12 @@ struct GainGui {
     gui_open: bool,
 }
 
+struct GainGuiProcessor {
+    gain_bits: Arc<AtomicU64>,
+}
+
 impl Plugin for GainGui {
-    type AudioProcessor = ();
+    type AudioProcessor = GainGuiProcessor;
 
     fn new(host: HostHandle) -> Self {
         Self {
@@ -48,19 +54,29 @@ impl Plugin for GainGui {
         }
     }
 
-    fn declare_parameters(&self) -> Vec<ParameterInfo> {
-        vec![
-            ParameterInfo {
-                id: 0,
-                name: "Gain".to_string(),
-                module: "".to_string(),
-                min_value: 0.0,
-                max_value: 2.0,
-                default_value: 1.0,
-            }
-        ]
+    fn activate(
+        &mut self,
+        _sample_rate: f64,
+        _min_frames: u32,
+        _max_frames: u32,
+    ) -> Option<Self::AudioProcessor> {
+        Some(GainGuiProcessor {
+            gain_bits: self.gain_bits.clone(),
+        })
     }
-    
+
+    fn declare_parameters(&self) -> Vec<ParameterInfo> {
+        vec![ParameterInfo {
+            id: 0,
+            name: "Gain".to_string(),
+            module: "".to_string(),
+            min_value: 0.0,
+            max_value: 2.0,
+            default_value: 1.0,
+            is_stepped: false,
+        }]
+    }
+
     fn audio_ports_config(&self) -> Vec<AudioPortInfo> {
         vec![
             AudioPortInfo {
@@ -90,22 +106,52 @@ impl Plugin for GainGui {
 
     fn set_parameter(&mut self, id: u32, value: f64) {
         if id == 0 {
-            self.gain_bits.store(value.clamp(0.0, 2.0).to_bits(), Ordering::Relaxed);
+            self.gain_bits
+                .store(value.clamp(0.0, 2.0).to_bits(), Ordering::Relaxed);
         }
     }
+}
 
+impl AudioProcessor for GainGuiProcessor {
     fn process(&mut self, mut ctx: ProcessContext) -> clap_rs::clap_process_status {
         let frames = ctx.frames_count as usize;
-        let gain = f64::from_bits(self.gain_bits.load(Ordering::Relaxed)).clamp(0.0, 2.0) as f32;
-        
-        for (input, output) in ctx.audio_inputs.iter().zip(ctx.audio_outputs.iter_mut()) {
-            let len = input.len().min(output.len()).min(frames);
-            for i in 0..len {
-                output[i] = input[i] * gain;
+        let mut gain =
+            f64::from_bits(self.gain_bits.load(Ordering::Relaxed)).clamp(0.0, 2.0) as f32;
+        let mut cursor = 0;
+
+        for event in ctx.events() {
+            let ClapEvent::ParamValue(event) = event else {
+                continue;
+            };
+            if event.param_id != 0 || event.time as usize >= frames {
+                continue;
             }
+            let event_time = (event.time as usize).max(cursor);
+            process_gain_range(&mut ctx, cursor, event_time, gain);
+            gain = event.value.clamp(0.0, 2.0) as f32;
+            self.set_parameter(event.param_id, event.value);
+            cursor = event_time;
         }
-        
+        process_gain_range(&mut ctx, cursor, frames, gain);
+
         CLAP_PROCESS_CONTINUE
+    }
+
+    fn set_parameter(&mut self, id: u32, value: f64) {
+        if id == 0 {
+            self.gain_bits
+                .store(value.clamp(0.0, 2.0).to_bits(), Ordering::Relaxed);
+        }
+    }
+}
+
+fn process_gain_range(ctx: &mut ProcessContext<'_>, start: usize, end: usize, gain: f32) {
+    for (input, output) in ctx.audio_inputs.iter().zip(ctx.audio_outputs.iter_mut()) {
+        let end = end.min(input.len()).min(output.len());
+        let start = start.min(end);
+        for i in start..end {
+            output[i] = input[i] * gain;
+        }
     }
 }
 
@@ -113,17 +159,25 @@ impl Plugin for GainGui {
 
 impl GuiHandler for GainGui {
     fn is_api_supported(&self, api: GuiApi, is_floating: bool) -> bool {
-        if is_floating { return false; }
+        if is_floating {
+            return false;
+        }
         matches!(api, GuiApi::Cocoa | GuiApi::Win32 | GuiApi::X11)
     }
 
     fn preferred_api(&self) -> Option<(GuiApi, bool)> {
         #[cfg(target_os = "macos")]
-        { Some((GuiApi::Cocoa, false)) }
+        {
+            Some((GuiApi::Cocoa, false))
+        }
         #[cfg(target_os = "windows")]
-        { Some((GuiApi::Win32, false)) }
+        {
+            Some((GuiApi::Win32, false))
+        }
         #[cfg(all(unix, not(target_os = "macos")))]
-        { Some((GuiApi::X11, false)) }
+        {
+            Some((GuiApi::X11, false))
+        }
     }
 
     fn gui_create(&mut self, _api: GuiApi, _is_floating: bool) -> bool {
@@ -138,7 +192,7 @@ impl GuiHandler for GainGui {
         if let Some(mut handle) = self.gui_handle.take() {
             handle.close();
         }
-        self.gui_parent = None;  // Clear parent so next cycle starts fresh
+        self.gui_parent = None; // Clear parent so next cycle starts fresh
         self.gui_open = false;
     }
 
@@ -146,7 +200,9 @@ impl GuiHandler for GainGui {
         Some((GUI_WIDTH as u32, GUI_HEIGHT as u32))
     }
 
-    fn gui_can_resize(&self) -> bool { false }
+    fn gui_can_resize(&self) -> bool {
+        false
+    }
 
     fn gui_get_resize_hints(&self) -> GuiResizeHints {
         GuiResizeHints {
@@ -225,17 +281,20 @@ impl GainGui {
 
         struct ParentWindow(RawWindowHandle);
         impl HasWindowHandle for ParentWindow {
-            fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+            fn window_handle(
+                &self,
+            ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError>
+            {
                 Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(self.0) })
             }
         }
 
         let parent = ParentWindow(parent_handle);
-        let options = WindowOpenOptions {
-            title: "ClapRS Gain GUI".to_string(),
-            size: Size::new(GUI_WIDTH, GUI_HEIGHT),
-            scale: WindowScalePolicy::SystemScaleFactor,
-        };
+        let options = WindowOpenOptions::new(
+            "ClapRS Gain GUI",
+            Size::new(GUI_WIDTH, GUI_HEIGHT),
+            WindowScalePolicy::SystemScaleFactor,
+        );
         let gain_bits = self.gain_bits.clone();
         let window_handle = Window::open_parented(&parent, options, move |window| {
             GainGuiHandler::new(window, gain_bits)
@@ -254,13 +313,17 @@ struct WrappedWindow {
 }
 
 impl HasWindowHandle for WrappedWindow {
-    fn window_handle(&self) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
         Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(self.raw_window_handle) })
     }
 }
 
 impl HasDisplayHandle for WrappedWindow {
-    fn display_handle(&self) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(self.raw_display_handle) })
     }
 }
@@ -291,12 +354,18 @@ impl GainGuiHandler {
     }
 
     fn ensure_resources(&mut self, window: &Window) {
-        if self.surface.is_some() { return; }
+        if self.surface.is_some() {
+            return;
+        }
 
         // Extract raw handles from baseview window (raw-window-handle 0.6)
-        let Ok(window_handle) = window.window_handle() else { return; };
-        let Ok(display_handle) = window.display_handle() else { return; };
-        
+        let Ok(window_handle) = window.window_handle() else {
+            return;
+        };
+        let Ok(display_handle) = window.display_handle() else {
+            return;
+        };
+
         let mut raw_window = window_handle.as_raw();
         let raw_display = display_handle.as_raw();
 
@@ -323,7 +392,7 @@ impl GainGuiHandler {
         if let Ok(Ok(mut s)) = result {
             if let (Some(width), Some(height)) = (
                 NonZeroU32::new(self.physical_size.width),
-                NonZeroU32::new(self.physical_size.height)
+                NonZeroU32::new(self.physical_size.height),
             ) {
                 let _ = s.resize(width, height);
             }
@@ -366,10 +435,12 @@ impl GainGuiHandler {
 
     fn draw(&mut self, window: &Window) {
         self.ensure_resources(window);
-        
+
         let width = self.physical_size.width as usize;
         let height = self.physical_size.height as usize;
-        if width == 0 || height == 0 { return; }
+        if width == 0 || height == 0 {
+            return;
+        }
 
         let gain = self.gain_value();
         let track = self.slider_rect();
@@ -380,8 +451,24 @@ impl GainGuiHandler {
         if let Some(surface) = &mut self.surface {
             if let Ok(mut buffer) = surface.buffer_mut() {
                 buffer.fill(0xFF202020);
-                fill_rect(&mut buffer, width, height, track, scale_x, scale_y, 0xFF3A3A3A);
-                fill_rect(&mut buffer, width, height, knob, scale_x, scale_y, 0xFF1BA1E2);
+                fill_rect(
+                    &mut buffer,
+                    width,
+                    height,
+                    track,
+                    scale_x,
+                    scale_y,
+                    0xFF3A3A3A,
+                );
+                fill_rect(
+                    &mut buffer,
+                    width,
+                    height,
+                    knob,
+                    scale_x,
+                    scale_y,
+                    0xFF1BA1E2,
+                );
                 let _ = buffer.present();
             }
         }
@@ -401,7 +488,7 @@ impl WindowHandler for GainGuiHandler {
                 self.logical_size = info.logical_size();
                 if let (Some(width), Some(height)) = (
                     NonZeroU32::new(new_size.width),
-                    NonZeroU32::new(new_size.height)
+                    NonZeroU32::new(new_size.height),
                 ) {
                     if let Some(surface) = &mut self.surface {
                         let _ = surface.resize(width, height);
@@ -414,13 +501,19 @@ impl WindowHandler for GainGuiHandler {
                     self.set_gain_from_position(position);
                 }
             }
-            Event::Mouse(MouseEvent::ButtonPressed { button: MouseButton::Left, .. }) => {
+            Event::Mouse(MouseEvent::ButtonPressed {
+                button: MouseButton::Left,
+                ..
+            }) => {
                 if Self::point_in_rect(self.cursor, self.slider_rect()) {
                     self.dragging = true;
                     self.set_gain_from_position(self.cursor);
                 }
             }
-            Event::Mouse(MouseEvent::ButtonReleased { button: MouseButton::Left, .. }) => {
+            Event::Mouse(MouseEvent::ButtonReleased {
+                button: MouseButton::Left,
+                ..
+            }) => {
                 self.dragging = false;
             }
             _ => {}
@@ -461,16 +554,20 @@ unsafe impl Sync for SyncFeatures {}
 static FEATURES: SyncFeatures = SyncFeatures([
     b"audio-effect\0".as_ptr() as *const c_char,
     b"stereo\0".as_ptr() as *const c_char,
-    std::ptr::null()
+    std::ptr::null(),
 ]);
 
-export_clap_plugin_with_gui!(GainGui, PluginInfo {
-    id: "com.sunmao.clap_rs.fx_gain_gui_baseview\0",
-    name: "Clap Rs Fx Gain Gui Baseview\0",
-    vendor: "aizcutei\0",
-    url: "https://aizcutei.github.io/sunmao\0",
-    manual_url: "https://aizcutei.github.io/sunmao/manual\0",
-    support_url: "https://aizcutei.github.io/sunmao/support\0",
-    version: "0.1\0",
-    description: "A gain plugin with GUI using clap_rs\0",
-}, FEATURES.0);
+export_clap_plugin_with_gui!(
+    GainGui,
+    PluginInfo {
+        id: "com.sunmao.clap_rs.fx_gain_gui_baseview",
+        name: "Clap Rs Fx Gain Gui Baseview",
+        vendor: "aizcutei",
+        url: "https://aizcutei.github.io/sunmao",
+        manual_url: "https://aizcutei.github.io/sunmao/manual",
+        support_url: "https://aizcutei.github.io/sunmao/support",
+        version: "0.1",
+        description: "A gain plugin with GUI using clap_rs",
+    },
+    FEATURES.0
+);

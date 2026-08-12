@@ -38,37 +38,43 @@ impl ParamInfo {
             flags: ParamFlags::CAN_AUTOMATE,
         }
     }
-    
+
     /// Set the value range (plain units)
     pub fn range(mut self, min: f64, max: f64) -> Self {
         self.min = min;
         self.max = max;
         self
     }
-    
+
     /// Set default value (normalized 0-1)
     pub fn default(mut self, value: f64) -> Self {
         self.default = value;
         self
     }
-    
+
     /// Set units label
     pub fn units(mut self, units: &'static str) -> Self {
         self.units = units;
         self
     }
-    
+
     /// Set short name
     pub fn short_name(mut self, name: &'static str) -> Self {
         self.short_name = name;
         self
     }
-    
+
+    /// Set the number of intervals for a discrete parameter (zero is continuous).
+    pub fn step_count(mut self, step_count: i32) -> Self {
+        self.step_count = step_count.max(0);
+        self
+    }
+
     /// Convert normalized value (0-1) to plain value
     pub fn to_plain(&self, normalized: f64) -> f64 {
         self.min + normalized * (self.max - self.min)
     }
-    
+
     /// Convert plain value to normalized (0-1)
     pub fn to_normalized(&self, plain: f64) -> f64 {
         if (self.max - self.min).abs() < f64::EPSILON {

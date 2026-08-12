@@ -397,8 +397,14 @@ impl KeyboardState {
             let stash_vk = None;
             let stash_utf16 = Vec::new();
             let has_altgr = false;
-            let mut result =
-                KeyboardState { hkl, key_vals, dead_keys, has_altgr, stash_vk, stash_utf16 };
+            let mut result = KeyboardState {
+                hkl,
+                key_vals,
+                dead_keys,
+                has_altgr,
+                stash_vk,
+                stash_utf16,
+            };
             result.load_keyboard_layout();
             result
         }
@@ -437,7 +443,11 @@ impl KeyboardState {
     /// a valid `HKL` reference in the `WM_INPUTLANGCHANGE` message. Actual danger
     /// is likely low, though.
     pub(crate) unsafe fn process_message(
-        &mut self, hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM,
+        &mut self,
+        hwnd: HWND,
+        msg: UINT,
+        wparam: WPARAM,
+        lparam: LPARAM,
     ) -> Option<KeyboardEvent> {
         match msg {
             WM_KEYDOWN | WM_SYSKEYDOWN => {

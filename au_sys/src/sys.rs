@@ -327,6 +327,14 @@ pub const kAudioUnitProperty_PresentPreset: AudioUnitPropertyID = 36;
 
 pub const kAudioUnitParameterUnit_Generic: AudioUnitParameterUnit = 0;
 pub const kAudioUnitParameterUnit_LinearGain: AudioUnitParameterUnit = 13;
+pub const kAudioUnitParameterUnit_Indexed: AudioUnitParameterUnit = 6;
+
+// AudioUnit component types
+pub const kAudioUnitType_Effect: OSType = 0x61756678; // 'aufx'
+pub const kAudioUnitType_MusicEffect: OSType = 0x61756D66; // 'aumf'
+pub const kAudioUnitType_MusicDevice: OSType = 0x61756D75; // 'aumu'
+pub const kAudioUnitType_Generator: OSType = 0x6175676E; // 'augn'
+pub const kAudioUnitType_MIDIProcessor: OSType = 0x61756D69; // 'aumi'
 pub const kAudioUnitParameterFlag_IsWritable: AudioUnitParameterOptions = 1 << 31;
 pub const kAudioUnitParameterFlag_IsReadable: AudioUnitParameterOptions = 1 << 30;
 
@@ -385,8 +393,22 @@ unsafe extern "C" {
         value: *const c_void,
     ) -> CFNumberRef;
     pub fn CFBundleGetBundleWithIdentifier(bundle_id: CFStringRef) -> CFBundleRef;
+    pub fn CFBundleCreate(allocator: CFAllocatorRef, url: CFURLRef) -> CFBundleRef;
     pub fn CFBundleCopyBundleURL(bundle: CFBundleRef) -> CFURLRef;
+    pub fn CFURLCreateWithFileSystemPath(
+        allocator: CFAllocatorRef,
+        file_path: CFStringRef,
+        path_style: i32,
+        is_directory: bool,
+    ) -> CFURLRef;
     pub fn CFRelease(obj: CFTypeRef);
+    pub fn CFStringGetCString(
+        the_string: CFStringRef,
+        buffer: *mut c_char,
+        buffer_size: CFIndex,
+        encoding: u32,
+    ) -> bool;
+    pub fn CFStringGetLength(the_string: CFStringRef) -> CFIndex;
 }
 
 #[link(name = "AudioUnit", kind = "framework")]
@@ -414,6 +436,58 @@ unsafe extern "C" {
         in_value: AudioUnitParameterValue,
         in_buffer_offset_in_frames: UInt32,
     ) -> OSStatus;
+    pub fn AudioUnitSetProperty(
+        in_unit: AudioUnit,
+        in_id: AudioUnitPropertyID,
+        in_scope: AudioUnitScope,
+        in_element: AudioUnitElement,
+        in_data: *const c_void,
+        in_data_size: UInt32,
+    ) -> OSStatus;
+    pub fn AudioUnitGetPropertyInfo(
+        in_unit: AudioUnit,
+        in_id: AudioUnitPropertyID,
+        in_scope: AudioUnitScope,
+        in_element: AudioUnitElement,
+        out_data_size: *mut UInt32,
+        out_writable: *mut Boolean,
+    ) -> OSStatus;
+    pub fn AudioUnitInitialize(in_unit: AudioUnit) -> OSStatus;
+    pub fn AudioUnitUninitialize(in_unit: AudioUnit) -> OSStatus;
+    pub fn AudioUnitReset(
+        in_unit: AudioUnit,
+        in_scope: AudioUnitScope,
+        in_element: AudioUnitElement,
+    ) -> OSStatus;
+    pub fn AudioUnitRender(
+        in_unit: AudioUnit,
+        io_action_flags: *mut UInt32,
+        in_time_stamp: *const AudioTimeStamp,
+        in_output_bus_number: UInt32,
+        in_number_frames: UInt32,
+        io_data: *mut AudioBufferList,
+    ) -> OSStatus;
+}
+
+#[link(name = "AudioToolbox", kind = "framework")]
+unsafe extern "C" {
+    pub fn AudioComponentFindNext(
+        in_component: AudioComponent,
+        in_desc: *const AudioComponentDescription,
+    ) -> AudioComponent;
+    pub fn AudioComponentCopyName(
+        in_component: AudioComponent,
+        out_name: *mut CFStringRef,
+    ) -> OSStatus;
+    pub fn AudioComponentGetDescription(
+        in_component: AudioComponent,
+        out_desc: *mut AudioComponentDescription,
+    ) -> OSStatus;
+    pub fn AudioComponentInstanceNew(
+        in_component: AudioComponent,
+        out_instance: *mut AudioComponentInstance,
+    ) -> OSStatus;
+    pub fn AudioComponentInstanceDispose(in_instance: AudioComponentInstance) -> OSStatus;
 }
 
 pub const kCFStringEncodingUTF8: u32 = 0x08000100;

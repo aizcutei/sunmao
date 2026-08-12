@@ -331,8 +331,15 @@ impl KeyboardState {
                     }
                 }
             };
-            let event =
-                KeyboardEvent { code, key, location, modifiers, state, is_composing, repeat };
+            let event = KeyboardEvent {
+                code,
+                key,
+                location,
+                modifiers,
+                state,
+                is_composing,
+                repeat,
+            };
             Some(event)
         }
     }
@@ -343,7 +350,10 @@ const MODIFIER_MAP: &[(NSEventModifierFlags, Modifiers)] = &[
     (NSEventModifierFlags::NSAlternateKeyMask, Modifiers::ALT),
     (NSEventModifierFlags::NSControlKeyMask, Modifiers::CONTROL),
     (NSEventModifierFlags::NSCommandKeyMask, Modifiers::META),
-    (NSEventModifierFlags::NSAlphaShiftKeyMask, Modifiers::CAPS_LOCK),
+    (
+        NSEventModifierFlags::NSAlphaShiftKeyMask,
+        Modifiers::CAPS_LOCK,
+    ),
 ];
 
 pub(crate) fn make_modifiers(raw: NSEventModifierFlags) -> Modifiers {

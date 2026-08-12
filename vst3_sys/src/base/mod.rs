@@ -1,12 +1,12 @@
 //! Base module - fundamental types and interfaces
 
-pub mod types;
-pub mod ipluginbase;
 pub mod ibstream;
+pub mod ipluginbase;
+pub mod types;
 
-pub use types::*;
-pub use ipluginbase::*;
 pub use ibstream::*;
+pub use ipluginbase::*;
+pub use types::*;
 
 // =============================================================================
 // Interface IIDs

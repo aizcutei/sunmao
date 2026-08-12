@@ -107,6 +107,7 @@ mod cocoa_ui {
     }
 
     pub fn init_cocoa_view_factory() {
+        au_cocoa_stubs::ensure_linked();
         au_init_cocoa_view_factory(
             CocoaViewConfig {
                 factory_class: "RustGainGuiViewFactory",
@@ -114,6 +115,10 @@ mod cocoa_ui {
                 view_superclass: "NSOpenGLView",
                 description: "Rust Gain GUI",
                 view_init: Some(view_init),
+                preferred_size: Some(NSSize {
+                    width: 400.0,
+                    height: 200.0,
+                }),
             },
             ViewCallbacks {
                 draw: Some(draw_rect),

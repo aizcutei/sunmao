@@ -1,0 +1,10 @@
+[package]
+name = "au_cocoa_stubs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AU-only Objective-C Cocoa view class stubs"
+build = "build.rs"
+
+[lib]
+crate-type = ["rlib"]

@@ -1,5 +1,5 @@
 //! AU RS Fx Gain with Metal-backed GUI
-//! 
+//!
 //! A gain effect with a slider rendered using safe CALayer API on MTKView.
 //! This example demonstrates how to create GUI plugins without any unsafe code.
 
@@ -75,10 +75,10 @@ mod gui {
     use std::ffi::c_void;
 
     use au_rs::{
-        NSPoint, NSRect, NSSize,
-        gui::{GuiConfig, GuiHandler, set_needs_display, view_bounds},
+        NSPoint, NSRect, NSSize, get_parameter_local,
         gui::layer::{Layer, TransactionGuard, get_view_layer},
-        get_parameter_local, set_parameter_local,
+        gui::{GuiConfig, GuiHandler, set_needs_display, view_bounds},
+        set_parameter_local,
     };
     use objc::runtime::Object;
 
@@ -136,16 +136,17 @@ mod gui {
             if self.knob_layer.is_null() {
                 return;
             }
-            
+
             let slider_width = self.width - 2.0 * SLIDER_MARGIN - KNOB_WIDTH;
             let normalized = (self.gain / 2.0).clamp(0.0, 1.0) as f64;
             let knob_x = SLIDER_MARGIN + normalized * slider_width;
             let knob_height = SLIDER_HEIGHT * 2.0;
             let knob_y = (self.height - knob_height) / 2.0;
-            
+
             // Use TransactionGuard to disable animations (RAII pattern)
             let _guard = TransactionGuard::begin_no_animation();
-            self.knob_layer.set_frame(knob_x, knob_y, KNOB_WIDTH, knob_height);
+            self.knob_layer
+                .set_frame(knob_x, knob_y, KNOB_WIDTH, knob_height);
         }
     }
 
@@ -166,19 +167,24 @@ mod gui {
             if root_layer.is_null() {
                 return;
             }
-            
+
             // Set background color
             root_layer.set_background_color(BG_COLOR.0, BG_COLOR.1, BG_COLOR.2, BG_COLOR.3);
-            
+
             // Create and configure track layer
             let track_layer = Layer::new();
             let track_width = self.width - 2.0 * SLIDER_MARGIN;
             let track_y = (self.height - SLIDER_HEIGHT) / 2.0;
             track_layer.set_frame(SLIDER_MARGIN, track_y, track_width, SLIDER_HEIGHT);
-            track_layer.set_background_color(TRACK_COLOR.0, TRACK_COLOR.1, TRACK_COLOR.2, TRACK_COLOR.3);
+            track_layer.set_background_color(
+                TRACK_COLOR.0,
+                TRACK_COLOR.1,
+                TRACK_COLOR.2,
+                TRACK_COLOR.3,
+            );
             root_layer.add_sublayer(&track_layer);
             self.track_layer = track_layer;
-            
+
             // Create and configure knob layer
             let knob_layer = Layer::new();
             let knob_height = SLIDER_HEIGHT * 2.0;
@@ -203,16 +209,17 @@ mod gui {
             let bounds = view_bounds(view);
             self.width = bounds.size.width.max(1.0);
             self.height = bounds.size.height.max(1.0);
-            
+
             // Update track layer size
             if !self.track_layer.is_null() {
                 let track_width = self.width - 2.0 * SLIDER_MARGIN;
                 let track_y = (self.height - SLIDER_HEIGHT) / 2.0;
-                
+
                 let _guard = TransactionGuard::begin_no_animation();
-                self.track_layer.set_frame(SLIDER_MARGIN, track_y, track_width, SLIDER_HEIGHT);
+                self.track_layer
+                    .set_frame(SLIDER_MARGIN, track_y, track_width, SLIDER_HEIGHT);
             }
-            
+
             self.update_knob_position();
             set_needs_display(view);
         }
@@ -272,6 +279,10 @@ mod gui {
         view_class: "RustAUCocoaViewWgpu",
         view_superclass: "MTKView",
         description: "Rust AU Metal",
+        preferred_size: Some(NSSize {
+            width: 400.0,
+            height: 100.0,
+        }),
     };
 }
 

@@ -16,11 +16,11 @@ impl Color {
     pub const fn rgba(r: f32, g: f32, b: f32, a: f32) -> Self {
         Self { r, g, b, a }
     }
-    
+
     pub const fn rgb(r: f32, g: f32, b: f32) -> Self {
         Self { r, g, b, a: 1.0 }
     }
-    
+
     // Common colors
     pub const WHITE: Color = Color::rgb(1.0, 1.0, 1.0);
     pub const BLACK: Color = Color::rgb(0.0, 0.0, 0.0);
@@ -28,7 +28,7 @@ impl Color {
     pub const GREEN: Color = Color::rgb(0.0, 1.0, 0.0);
     pub const BLUE: Color = Color::rgb(0.0, 0.0, 1.0);
     pub const TRANSPARENT: Color = Color::rgba(0.0, 0.0, 0.0, 0.0);
-    
+
     // UI colors
     pub const BACKGROUND: Color = Color::rgb(0.15, 0.15, 0.18);
     pub const FOREGROUND: Color = Color::rgb(0.9, 0.9, 0.9);
@@ -112,61 +112,95 @@ impl Fill {
 pub trait GuiContext {
     /// Get the current viewport size
     fn size(&self) -> (f32, f32);
-    
+
     /// Get the current scale factor (for HiDPI)
-    fn scale_factor(&self) -> f32 { 1.0 }
-    
+    fn scale_factor(&self) -> f32 {
+        1.0
+    }
+
     // --- Drawing primitives ---
-    
+
     /// Fill a rectangle
     fn fill_rect(&mut self, x: f32, y: f32, width: f32, height: f32, fill: Fill);
-    
+
     /// Stroke a rectangle outline
     fn stroke_rect(&mut self, x: f32, y: f32, width: f32, height: f32, stroke: Stroke);
-    
+
     /// Fill a rounded rectangle
-    fn fill_rounded_rect(&mut self, x: f32, y: f32, width: f32, height: f32, radius: f32, fill: Fill);
-    
+    fn fill_rounded_rect(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        radius: f32,
+        fill: Fill,
+    );
+
     /// Stroke a rounded rectangle
-    fn stroke_rounded_rect(&mut self, x: f32, y: f32, width: f32, height: f32, radius: f32, stroke: Stroke);
-    
+    fn stroke_rounded_rect(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        radius: f32,
+        stroke: Stroke,
+    );
+
     /// Fill a circle
     fn fill_circle(&mut self, cx: f32, cy: f32, radius: f32, fill: Fill);
-    
+
     /// Stroke a circle outline
     fn stroke_circle(&mut self, cx: f32, cy: f32, radius: f32, stroke: Stroke);
-    
+
     /// Draw a line
     fn stroke_line(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, stroke: Stroke);
-    
+
     /// Draw an arc (for knobs)
-    fn stroke_arc(&mut self, cx: f32, cy: f32, radius: f32, start_angle: f32, end_angle: f32, stroke: Stroke);
-    
+    fn stroke_arc(
+        &mut self,
+        cx: f32,
+        cy: f32,
+        radius: f32,
+        start_angle: f32,
+        end_angle: f32,
+        stroke: Stroke,
+    );
+
     /// Fill an arc segment
-    fn fill_arc(&mut self, cx: f32, cy: f32, radius: f32, start_angle: f32, end_angle: f32, fill: Fill);
-    
+    fn fill_arc(
+        &mut self,
+        cx: f32,
+        cy: f32,
+        radius: f32,
+        start_angle: f32,
+        end_angle: f32,
+        fill: Fill,
+    );
+
     // --- Text rendering ---
-    
+
     /// Draw text
     fn draw_text(&mut self, text: &str, x: f32, y: f32, size: f32, color: Color, align: TextAlign);
-    
+
     /// Measure text width
     fn measure_text(&self, text: &str, size: f32) -> f32;
-    
+
     // --- State management ---
-    
+
     /// Save the current transform state
     fn save(&mut self);
-    
+
     /// Restore the previous transform state
     fn restore(&mut self);
-    
+
     /// Translate the coordinate system
     fn translate(&mut self, x: f32, y: f32);
-    
+
     /// Set a clipping rectangle
     fn clip(&mut self, x: f32, y: f32, width: f32, height: f32);
-    
+
     /// Clear the clipping region
     fn reset_clip(&mut self);
 }
@@ -184,7 +218,9 @@ impl NullContext {
 }
 
 impl GuiContext for NullContext {
-    fn size(&self) -> (f32, f32) { (self.width, self.height) }
+    fn size(&self) -> (f32, f32) {
+        (self.width, self.height)
+    }
     fn fill_rect(&mut self, _: f32, _: f32, _: f32, _: f32, _: Fill) {}
     fn stroke_rect(&mut self, _: f32, _: f32, _: f32, _: f32, _: Stroke) {}
     fn fill_rounded_rect(&mut self, _: f32, _: f32, _: f32, _: f32, _: f32, _: Fill) {}
@@ -195,7 +231,9 @@ impl GuiContext for NullContext {
     fn stroke_arc(&mut self, _: f32, _: f32, _: f32, _: f32, _: f32, _: Stroke) {}
     fn fill_arc(&mut self, _: f32, _: f32, _: f32, _: f32, _: f32, _: Fill) {}
     fn draw_text(&mut self, _: &str, _: f32, _: f32, _: f32, _: Color, _: TextAlign) {}
-    fn measure_text(&self, _: &str, _: f32) -> f32 { 0.0 }
+    fn measure_text(&self, _: &str, _: f32) -> f32 {
+        0.0
+    }
     fn save(&mut self) {}
     fn restore(&mut self) {}
     fn translate(&mut self, _: f32, _: f32) {}

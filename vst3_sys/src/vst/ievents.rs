@@ -1,8 +1,8 @@
 //! IEventList and Event structs
 
-use std::ffi::c_void;
 use crate::base::types::*;
 use crate::vst::types::*;
+use std::ffi::c_void;
 
 // =============================================================================
 // Event Types
@@ -157,7 +157,9 @@ impl Default for Event {
             ppq_position: 0.0,
             flags: 0,
             type_: 0,
-            event: EventData { note_on: NoteOnEvent::default() },
+            event: EventData {
+                note_on: NoteOnEvent::default(),
+            },
         }
     }
 }
@@ -171,6 +173,7 @@ impl Default for Event {
 pub struct IEventListVtbl {
     pub unknown: IUnknownVtbl,
     pub get_event_count: unsafe extern "system" fn(this: *mut c_void) -> int32,
-    pub get_event: unsafe extern "system" fn(this: *mut c_void, index: int32, e: *mut Event) -> tresult,
+    pub get_event:
+        unsafe extern "system" fn(this: *mut c_void, index: int32, e: *mut Event) -> tresult,
     pub add_event: unsafe extern "system" fn(this: *mut c_void, e: *mut Event) -> tresult,
 }

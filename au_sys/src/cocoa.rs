@@ -18,6 +18,33 @@ use std::os::raw::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Mutex, OnceLock};
 
+#[repr(C)]
+struct DlInfo {
+    dli_fname: *const libc::c_char,
+    dli_fbase: *mut libc::c_void,
+    dli_sname: *const libc::c_char,
+    dli_saddr: *mut libc::c_void,
+}
+
+unsafe extern "C" {
+    fn dladdr(addr: *const libc::c_void, info: *mut DlInfo) -> libc::c_int;
+    fn dlsym(handle: *mut libc::c_void, symbol: *const libc::c_char) -> *mut libc::c_void;
+    fn class_replaceMethod(
+        cls: *mut Class,
+        name: Sel,
+        imp: *const libc::c_void,
+        types: *const libc::c_char,
+    ) -> *const libc::c_void;
+    fn class_getInstanceMethod(cls: *const Class, name: Sel) -> *mut libc::c_void;
+    fn method_setImplementation(
+        method: *mut libc::c_void,
+        imp: *const libc::c_void,
+    ) -> *const libc::c_void;
+    fn objc_getMetaClass(name: *const libc::c_char) -> *const Class;
+}
+
+const RTLD_DEFAULT: *mut libc::c_void = std::ptr::null_mut();
+
 #[link(name = "AppKit", kind = "framework")]
 unsafe extern "C" {}
 
@@ -39,6 +66,7 @@ pub struct CocoaViewConfig {
     pub view_superclass: &'static str,
     pub description: &'static str,
     pub view_init: Option<fn(*mut Object, NSSize, *mut c_void)>,
+    pub preferred_size: Option<NSSize>,
 }
 
 #[derive(Clone, Copy)]
@@ -116,8 +144,16 @@ unsafe impl Encode for NSRect {
 
 pub fn init_cocoa_view_factory(config: CocoaViewConfig, callbacks: ViewCallbacks) {
     let factory_key = config.factory_class.to_string();
+    au_debug_log(&format!(
+        "init_cocoa_view_factory: registering {}",
+        factory_key
+    ));
     let mut map = registry().lock().expect("GUI registry lock poisoned");
     if map.contains_key(&factory_key) {
+        au_debug_log(&format!(
+            "init_cocoa_view_factory: {} already registered, skipping",
+            factory_key
+        ));
         return;
     }
     map.insert(
@@ -134,15 +170,137 @@ pub fn init_cocoa_view_factory(config: CocoaViewConfig, callbacks: ViewCallbacks
     }
 }
 
-pub fn cocoa_view_info() -> AudioUnitCocoaViewInfo {
+/// Find the .component bundle URL for the AU plugin binary.
+///
+/// Uses `dladdr` on a function pointer from the plugin binary to find the binary path,
+/// then walks up the directory tree to find the `.component` bundle.
+///
+/// This is needed because `NSBundle bundleForClass:` returns the main bundle for
+/// dynamically registered ObjC classes, not the plugin bundle. AU hosts like Logic Pro
+/// need the correct bundle URL to load the CocoaUI factory class.
+///
+/// # Safety
+/// `binary_fn` must be a valid function pointer to a function in the AU plugin binary.
+unsafe fn find_plugin_bundle_url_from_fn(binary_fn: *const c_void) -> *mut c_void {
+    if binary_fn.is_null() {
+        au_debug_log("find_plugin_bundle_url: null function pointer");
+        return std::ptr::null_mut();
+    }
+
+    // Use dladdr to find the binary path from the function pointer
+    let mut info = DlInfo {
+        dli_fname: std::ptr::null(),
+        dli_fbase: std::ptr::null_mut(),
+        dli_sname: std::ptr::null(),
+        dli_saddr: std::ptr::null_mut(),
+    };
+    if dladdr(binary_fn as *const libc::c_void, &mut info) == 0 || info.dli_fname.is_null() {
+        au_debug_log("find_plugin_bundle_url: dladdr failed");
+        return std::ptr::null_mut();
+    }
+
+    let binary_path = std::ffi::CStr::from_ptr(info.dli_fname)
+        .to_string_lossy()
+        .into_owned();
+    au_debug_log(&format!(
+        "find_plugin_bundle_url: binary_path={}",
+        binary_path
+    ));
+
+    // Walk up from the binary path to find the .component bundle
+    // Binary is at: <name>.component/Contents/MacOS/<binary>
+    let mut current = std::path::Path::new(&binary_path);
+    let bundle_url = loop {
+        if let Some(parent) = current.parent() {
+            if parent.extension().and_then(|e| e.to_str()) == Some("component") {
+                break Some(parent);
+            }
+            current = parent;
+        } else {
+            break None;
+        }
+    };
+
+    let Some(bundle_path) = bundle_url else {
+        au_debug_log(&format!(
+            "find_plugin_bundle_url: no .component bundle found for {}",
+            binary_path
+        ));
+        return std::ptr::null_mut();
+    };
+
+    let path_str = bundle_path.to_str().unwrap_or("");
+    au_debug_log(&format!("find_plugin_bundle_url: bundle_path={}", path_str));
+
+    // Create CFURL from the bundle path
+    let path_cstr = match CString::new(path_str) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let path_cf = CFStringCreateWithCString(
+        kCFAllocatorDefault,
+        path_cstr.as_ptr(),
+        kCFStringEncodingUTF8,
+    );
+    if path_cf.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let url = crate::CFURLCreateWithFileSystemPath(kCFAllocatorDefault, path_cf, 0, true);
+    crate::CFRelease(path_cf as crate::CFTypeRef);
+    if url.is_null() {
+        au_debug_log("find_plugin_bundle_url: CFURLCreateWithFileSystemPath failed");
+        return std::ptr::null_mut();
+    }
+
+    let bundle = crate::CFBundleCreate(kCFAllocatorDefault, url);
+    crate::CFRelease(url as crate::CFTypeRef);
+    if bundle.is_null() {
+        au_debug_log("find_plugin_bundle_url: CFBundleCreate failed");
+        return std::ptr::null_mut();
+    }
+
+    let bundle_url = crate::CFBundleCopyBundleURL(bundle);
+    crate::CFRelease(bundle as crate::CFTypeRef);
+    if bundle_url.is_null() {
+        au_debug_log("find_plugin_bundle_url: CFBundleCopyBundleURL failed");
+        return std::ptr::null_mut();
+    }
+
+    au_debug_log("find_plugin_bundle_url: success");
+    bundle_url as *mut c_void
+}
+
+/// Find the .component bundle URL using `dlsym` to locate the `RustAUFactory` symbol.
+/// Falls back gracefully if the symbol is not found.
+unsafe fn find_plugin_bundle_url() -> *mut c_void {
+    // Use dladdr on a function known to be in the same dylib (init_cocoa_view_factory
+    // is in au_sys which is statically linked into each plugin). dlsym("RustAUFactory")
+    // fails because the symbol may not be exported from the dylib.
+    find_plugin_bundle_url_from_fn(init_cocoa_view_factory as *const c_void)
+}
+
+/// Build the `AudioUnitCocoaViewInfo` for the registered CocoaUI factory.
+///
+/// Uses the provided `factory_fn` pointer (from the plugin binary) to locate the
+/// correct `.component` bundle URL via `dladdr`. Falls back to `dlsym` and then
+/// `NSBundle bundleForClass:` if needed.
+fn build_cocoa_view_info(factory_fn: Option<*const c_void>) -> AudioUnitCocoaViewInfo {
     init_if_needed();
     let map = registry().lock().expect("GUI registry lock poisoned");
-    let factory = last_factory()
-        .lock()
-        .ok()
-        .and_then(|last| last.clone())
+    let last = last_factory().lock().ok().and_then(|last| last.clone());
+    au_debug_log(&format!(
+        "build_cocoa_view_info: last_factory={:?}, registry_keys={:?}",
+        last,
+        map.keys().collect::<Vec<_>>()
+    ));
+    let factory = last
         .or_else(|| map.keys().next().cloned())
         .expect("Cocoa view factory is not initialized");
+    au_debug_log(&format!(
+        "build_cocoa_view_info: selected factory={}",
+        factory
+    ));
     let entry = map
         .get(&factory)
         .expect("Cocoa view factory is not initialized");
@@ -152,14 +310,49 @@ pub fn cocoa_view_info() -> AudioUnitCocoaViewInfo {
         let name_ptr = class_getName(cls) as *const i8;
         let class_name =
             CFStringCreateWithCString(kCFAllocatorDefault, name_ptr, kCFStringEncodingUTF8);
-        let bundle: *mut Object = msg_send![class!(NSBundle), bundleForClass: cls];
-        let url: *mut Object = msg_send![bundle, bundleURL];
-        let url: *mut Object = msg_send![url, retain];
+
+        // Try to find the correct bundle URL using the factory function pointer.
+        // For dynamically registered ObjC classes, bundleForClass: returns the main
+        // bundle (the host app), not the plugin's .component bundle. AU hosts like
+        // Logic Pro need the correct bundle URL to load the CocoaUI factory class.
+        let url = if let Some(fn_ptr) = factory_fn {
+            find_plugin_bundle_url_from_fn(fn_ptr)
+        } else {
+            find_plugin_bundle_url()
+        };
+
+        if url.is_null() {
+            au_debug_log(
+                "build_cocoa_view_info: bundle lookup failed, falling back to bundleForClass:",
+            );
+            let bundle: *mut Object = msg_send![class!(NSBundle), bundleForClass: cls];
+            let url: *mut Object = msg_send![bundle, bundleURL];
+            let url: *mut Object = msg_send![url, retain];
+            return AudioUnitCocoaViewInfo {
+                mCocoaAUViewBundleLocation: url as *const c_void,
+                mCocoaAUViewClass: [class_name],
+            };
+        }
         AudioUnitCocoaViewInfo {
             mCocoaAUViewBundleLocation: url as *const c_void,
             mCocoaAUViewClass: [class_name],
         }
     }
+}
+
+pub fn cocoa_view_info() -> AudioUnitCocoaViewInfo {
+    build_cocoa_view_info(None)
+}
+
+/// Build `AudioUnitCocoaViewInfo` using a function pointer from the plugin binary
+/// to locate the correct `.component` bundle URL via `dladdr`.
+///
+/// This is the preferred entry point for AU hosts (like Logic Pro) that need the
+/// correct bundle URL to load the CocoaUI factory class. The `factory_fn` should
+/// be a pointer to a function defined in the AU component binary (e.g., the
+/// `RustAUFactory` entry point).
+pub fn cocoa_view_info_for_plugin(factory_fn: *const c_void) -> AudioUnitCocoaViewInfo {
+    build_cocoa_view_info(Some(factory_fn))
 }
 
 pub fn gl_get_proc_address(name: &str) -> *const c_void {
@@ -195,6 +388,7 @@ fn init_if_needed() {
                 view_superclass: "NSView",
                 description: "Rust Audio Unit",
                 view_init: None,
+                preferred_size: None,
             },
             ViewCallbacks {
                 draw: None,
@@ -209,8 +403,53 @@ fn init_if_needed() {
     }
 }
 
+/// Replace a method implementation on an existing class.
+/// Uses class_getInstanceMethod + method_setImplementation for existing methods,
+/// or class_replaceMethod for new methods.
+unsafe fn replace_method(cls: &Class, sel: Sel, imp: *const c_void) {
+    let method = class_getInstanceMethod(cls, sel);
+    if !method.is_null() {
+        method_setImplementation(method, imp);
+    } else {
+        // Method doesn't exist yet, add it with class_replaceMethod (no type info)
+        class_replaceMethod(
+            cls as *const Class as *mut Class,
+            sel,
+            imp,
+            std::ptr::null(),
+        );
+    }
+}
+
 unsafe fn register_view_class(config: &CocoaViewConfig) {
-    if Class::get(config.view_class).is_some() {
+    if let Some(cls) = Class::get(config.view_class) {
+        // Class already exists (from compiled ObjC stub). Replace method implementations.
+        replace_method(cls, sel!(drawRect:), draw_rect as *const c_void);
+        replace_method(cls, sel!(reshape), reshape as *const c_void);
+        replace_method(cls, sel!(setFrameSize:), set_frame_size as *const c_void);
+        replace_method(cls, sel!(setFrame:), set_frame as *const c_void);
+        replace_method(
+            cls,
+            sel!(intrinsicContentSize),
+            intrinsic_content_size as *const c_void,
+        );
+        replace_method(cls, sel!(isFlipped), is_flipped as *const c_void);
+        replace_method(cls, sel!(mouseDown:), mouse_down as *const c_void);
+        replace_method(cls, sel!(mouseDragged:), mouse_dragged as *const c_void);
+        replace_method(cls, sel!(mouseUp:), mouse_up as *const c_void);
+        replace_method(cls, sel!(keyDown:), key_down as *const c_void);
+        replace_method(cls, sel!(dealloc), dealloc as *const c_void);
+        replace_method(
+            cls,
+            sel!(acceptsFirstResponder),
+            accepts_first_responder as *const c_void,
+        );
+        replace_method(
+            cls,
+            sel!(viewDidMoveToWindow),
+            view_did_move_to_window as *const c_void,
+        );
+        replace_method(cls, sel!(au_tick:), au_tick as *const c_void);
         return;
     }
     let superclass = Class::get(config.view_superclass).expect("View superclass not found");
@@ -223,6 +462,7 @@ unsafe fn register_view_class(config: &CocoaViewConfig) {
     view_decl.add_ivar::<*const c_void>("au_callbacks");
     view_decl.add_ivar::<u8>("au_is_opengl");
     view_decl.add_ivar::<*mut Object>("au_timer");
+    view_decl.add_ivar::<NSSize>("au_preferred_size");
     view_decl.add_method(
         sel!(drawRect:),
         draw_rect as extern "C" fn(&Object, Sel, NSRect),
@@ -277,7 +517,48 @@ unsafe fn register_view_class(config: &CocoaViewConfig) {
 }
 
 unsafe fn register_factory_class(config: &CocoaViewConfig) {
-    if Class::get(config.factory_class).is_some() {
+    if let Some(cls) = Class::get(config.factory_class) {
+        // Class already exists (from compiled ObjC stub). Replace method implementations.
+        replace_method(
+            cls,
+            sel!(uiViewForAudioUnit:withSize:),
+            ui_view_for_audio_unit_instance as *const c_void,
+        );
+        replace_method(
+            cls,
+            sel!(uiViewForAudioUnit:preferredSize:),
+            ui_view_for_audio_unit_preferred_instance as *const c_void,
+        );
+        replace_method(
+            cls,
+            sel!(interfaceVersion),
+            interface_version_instance as *const c_void,
+        );
+        replace_method(
+            cls,
+            sel!(description),
+            description_instance as *const c_void,
+        );
+        // Class methods: get the metaclass and replace
+        let meta = objc_getMetaClass(class_getName(cls));
+        if !meta.is_null() {
+            replace_method(
+                &*meta,
+                sel!(uiViewForAudioUnit:withSize:),
+                ui_view_for_audio_unit as *const c_void,
+            );
+            replace_method(
+                &*meta,
+                sel!(uiViewForAudioUnit:preferredSize:),
+                ui_view_for_audio_unit_preferred as *const c_void,
+            );
+            replace_method(
+                &*meta,
+                sel!(interfaceVersion),
+                interface_version as *const c_void,
+            );
+            replace_method(&*meta, sel!(description), description as *const c_void);
+        }
         return;
     }
     let superclass = class!(NSObject);
@@ -324,13 +605,35 @@ unsafe fn register_factory_class(config: &CocoaViewConfig) {
     decl.register();
 }
 
+fn au_debug_log(msg: &str) {
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/sunmao_au_gui.log")
+    {
+        let _ = writeln!(f, "[cocoa] {}", msg);
+    }
+}
+
 fn build_view(factory_class: &str, size: NSSize, audio_unit: *mut c_void) -> *mut Object {
+    au_debug_log(&format!(
+        "build_view called: factory={}, size={}x{}, au={:?}, main_thread={}",
+        factory_class,
+        size.width,
+        size.height,
+        audio_unit,
+        is_main_thread()
+    ));
     let entry = {
         let map = registry().lock().expect("GUI registry lock poisoned");
+        let found = map.contains_key(factory_class);
+        au_debug_log(&format!("build_view: registry contains key={}", found));
         map.get(factory_class)
             .map(|entry| (entry.config, &entry.callbacks as *const ViewCallbacks))
     };
     let Some((config, callbacks_ptr)) = entry else {
+        au_debug_log("build_view: entry not found in registry!");
         return std::ptr::null_mut();
     };
 
@@ -410,26 +713,47 @@ fn build_view_inner(
     size: NSSize,
     audio_unit: *mut c_void,
 ) -> *mut Object {
+    au_debug_log(&format!(
+        "build_view_inner: start, factory={}, view_class={}",
+        factory_class, config.view_class
+    ));
     unsafe {
         let pool: *mut Object = msg_send![class!(NSAutoreleasePool), new];
-        let size = if size.width < 50.0 || size.height < 50.0 {
-            NSSize {
+        au_debug_log("build_view_inner: autoreleasepool created");
+        let mut size = size;
+        if size.width <= 1.0 || size.height <= 1.0 {
+            if let Some(preferred) = config.preferred_size {
+                size = preferred;
+            }
+        }
+        if size.width <= 1.0 || size.height <= 1.0 {
+            size = NSSize {
                 width: 400.0,
                 height: 200.0,
-            }
-        } else {
-            size
-        };
+            };
+        }
+        au_debug_log(&format!(
+            "build_view_inner: size={}x{}",
+            size.width, size.height
+        ));
         let view_class = Class::get(config.view_class).expect("Cocoa view class is missing");
+        au_debug_log("build_view_inner: view_class found");
         let view: *mut Object = msg_send![view_class, alloc];
+        au_debug_log("build_view_inner: alloc done");
         let rect = NSRect {
             origin: NSPoint { x: 0.0, y: 0.0 },
             size,
         };
         let view: *mut Object = msg_send![view, initWithFrame: rect];
+        au_debug_log(&format!(
+            "build_view_inner: initWithFrame done, view={:?}",
+            view
+        ));
         (*view).set_ivar("au_unit", audio_unit);
+        au_debug_log("build_view_inner: set_ivar au_unit done");
         let instance_ptr = crate::instance_ptr_for_unit(audio_unit);
         let _ = instance_ptr;
+        au_debug_log("build_view_inner: instance_ptr_for_unit done");
         (*view).set_ivar("au_instance", audio_unit);
         (*view).set_ivar("au_user_data", std::ptr::null_mut::<c_void>());
         (*view).set_ivar("au_callbacks", callbacks_ptr as *const c_void);
@@ -442,15 +766,28 @@ fn build_view_inner(
         };
         (*view).set_ivar("au_is_opengl", is_opengl);
         (*view).set_ivar("au_timer", std::ptr::null_mut::<Object>());
+        (*view).set_ivar("au_preferred_size", size);
         let _: () = msg_send![view, setAutoresizingMask: 0x3f_u64];
         let _: () = msg_send![view, setAutoresizesSubviews: YES];
         // Allow host AutoLayout constraints to resize this view.
         let _: () = msg_send![view, setTranslatesAutoresizingMaskIntoConstraints: NO];
+        au_debug_log(&format!(
+            "build_view_inner: about to call view_init, fn_ptr={:?}",
+            config.view_init.map(|f| f as *const u8)
+        ));
         if let Some(init) = config.view_init {
+            au_debug_log(&format!(
+                "build_view_inner: calling view_init with view={:?}, size={}x{}, au={:?}",
+                view, size.width, size.height, audio_unit
+            ));
             init(view, size, audio_unit);
+            au_debug_log("build_view_inner: view_init returned");
+        } else {
+            au_debug_log("build_view_inner: no view_init callback");
         }
         let _: () = msg_send![view, setNeedsDisplay: YES];
         let _: () = msg_send![pool, drain];
+        au_debug_log("build_view_inner: done, returning view");
         view
     }
 }
@@ -480,6 +817,24 @@ fn callbacks_for_view(this: &Object) -> Option<&'static ViewCallbacks> {
 
 fn is_opengl_view(this: &Object) -> bool {
     unsafe { *this.get_ivar::<u8>("au_is_opengl") != 0 }
+}
+
+fn view_preferred_size(this: &Object) -> Option<NSSize> {
+    unsafe {
+        let size = *this.get_ivar::<NSSize>("au_preferred_size");
+        if size.width > 1.0 && size.height > 1.0 {
+            Some(size)
+        } else {
+            None
+        }
+    }
+}
+
+fn set_view_preferred_size(this: &Object, size: NSSize) {
+    unsafe {
+        let this_mut = this as *const _ as *mut Object;
+        (*this_mut).set_ivar("au_preferred_size", size);
+    }
 }
 
 fn view_timer(this: &Object) -> *mut Object {
@@ -630,6 +985,8 @@ extern "C" fn set_frame_size(this: &Object, _sel: Sel, size: NSSize) {
         if is_opengl_view(this) {
             let _: () = msg_send![this, update];
         }
+        set_view_preferred_size(this, size);
+        let _: () = msg_send![this, invalidateIntrinsicContentSize];
         let _: () = msg_send![this, setNeedsDisplay: YES];
     }
 }
@@ -647,14 +1004,20 @@ extern "C" fn set_frame(this: &Object, _sel: Sel, rect: NSRect) {
         if is_opengl_view(this) {
             let _: () = msg_send![this, update];
         }
+        set_view_preferred_size(this, rect.size);
+        let _: () = msg_send![this, invalidateIntrinsicContentSize];
         let _: () = msg_send![this, setNeedsDisplay: YES];
     }
 }
 
 extern "C" fn intrinsic_content_size(_this: &Object, _sel: Sel) -> NSSize {
-    NSSize {
-        width: -1.0,
-        height: -1.0,
+    if let Some(size) = view_preferred_size(_this) {
+        size
+    } else {
+        NSSize {
+            width: -1.0,
+            height: -1.0,
+        }
     }
 }
 

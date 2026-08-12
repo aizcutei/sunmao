@@ -1,5 +1,5 @@
-use crate::plugin::clap_plugin_t;
 use crate::host::clap_host_t;
+use crate::plugin::clap_plugin_t;
 
 pub const CLAP_EXT_AMBISONIC: &str = "clap.ambisonic/3\0";
 pub const CLAP_EXT_AMBISONIC_COMPAT: &str = "clap.ambisonic.draft/3\0";
@@ -24,8 +24,20 @@ pub struct clap_ambisonic_config_t {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct clap_plugin_ambisonic_t {
-    pub is_config_supported: Option<unsafe extern "C" fn(plugin: *const clap_plugin_t, config: *const clap_ambisonic_config_t) -> bool>,
-    pub get_config: Option<unsafe extern "C" fn(plugin: *const clap_plugin_t, is_input: bool, port_index: u32, config: *mut clap_ambisonic_config_t) -> bool>,
+    pub is_config_supported: Option<
+        unsafe extern "C" fn(
+            plugin: *const clap_plugin_t,
+            config: *const clap_ambisonic_config_t,
+        ) -> bool,
+    >,
+    pub get_config: Option<
+        unsafe extern "C" fn(
+            plugin: *const clap_plugin_t,
+            is_input: bool,
+            port_index: u32,
+            config: *mut clap_ambisonic_config_t,
+        ) -> bool,
+    >,
 }
 
 #[repr(C)]

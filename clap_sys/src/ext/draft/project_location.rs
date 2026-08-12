@@ -1,5 +1,5 @@
-use crate::plugin::clap_plugin_t;
 use crate::color::clap_color_t;
+use crate::plugin::clap_plugin_t;
 use crate::string_sizes::{CLAP_NAME_SIZE, CLAP_PATH_SIZE};
 use std::ffi::c_char;
 
@@ -35,5 +35,11 @@ pub struct clap_project_location_element_t {
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct clap_plugin_project_location_t {
-    pub set: Option<unsafe extern "C" fn(plugin: *const clap_plugin_t, path: *const clap_project_location_element_t, num_elements: u32)>,
+    pub set: Option<
+        unsafe extern "C" fn(
+            plugin: *const clap_plugin_t,
+            path: *const clap_project_location_element_t,
+            num_elements: u32,
+        ),
+    >,
 }
