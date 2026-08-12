@@ -20,8 +20,9 @@
 
 ## 当前基线
 
-- 本地分支：`phase1/vst3-clap-cross-platform`（从 `main` / `0206936c849803f58bc286f2a55e492861bb243c` 创建）。
-- 工作树已准备本地 checkpoint；**未 push**，因此 hosted CI 仍未启动。
+- 本地分支：`phase1/vst3-clap-cross-platform`。
+- 本地 checkpoint：`d3675941204cd375f570a12d50904fe1d54463ef`（从 `main` / `0206936c849803f58bc286f2a55e492861bb243c` 创建）。
+- **未 push**，因此 hosted CI 仍未启动。
 - `cargo metadata --locked --no-deps`、`cargo fmt --all -- --check`、`git diff --check` 已在本机通过。
 - 默认 VST3/CLAP 二进制经 `nm` 确认无 `RustAUFactory|au_component_factory|SunmaoAUCocoa`。
 

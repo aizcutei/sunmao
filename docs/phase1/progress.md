@@ -73,7 +73,7 @@
 
 ### 2026-08-12 — 本地 Phase-1 checkpoint（等待 push）
 
-- Command/platform: macOS native；分支 `phase1/vst3-clap-cross-platform`（从 `main` / `0206936c849803f58bc286f2a55e492861bb243c` 创建）。未 push。
+- Command/platform: macOS native；分支 `phase1/vst3-clap-cross-platform`；本地 checkpoint `d3675941204cd375f570a12d50904fe1d54463ef`（从 `main` / `0206936c849803f58bc286f2a55e492861bb243c` 创建）。未 push。
 - 源码改动（本轮补齐）：
   - `sunmao_unittest_runner gui-test` 在 close 后 recreate，并再次校验非空像素。
   - macOS WebView 输入：从 hit-test 子视图沿 superview/子树找到 `WKWebView`，用 DOM gesture 驱动 `input[type=range]`；`elementFromPoint` 未命中时回退到 `querySelector`。
