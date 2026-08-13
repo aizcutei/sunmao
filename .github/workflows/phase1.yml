@@ -107,7 +107,6 @@ jobs:
             libxrandr-dev \
             libxrender-dev \
             libxss-dev \
-            libxscrnsaver-dev \
             libxft-dev \
             libxt-dev \
             libxtst-dev \

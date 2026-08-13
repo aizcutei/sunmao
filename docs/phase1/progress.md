@@ -165,6 +165,21 @@
 - Local result: Windows MSVC target check for baseview, runner, view and Gain GL passed; runner tests and formatting/diff checks passed.
 - Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
 
+### 2026-08-13 — hosted CI #6 failure and final-round adjustments
+
+- Command/platform: push `98b2c31f74d9897a59fcf6beab6292d9a5a126bb` 后 GitHub Actions Phase 1 #6：https://github.com/aizcutei/sunmao/actions/runs/31670494262
+- Result:
+  - Linux stopped at apt installation because `libxscrnsaver-dev` is not an Ubuntu 24.04 package; tests did not run.
+  - macOS reached GUI testing but after recreate the renderer probe reported a valid two-color, high-contrast frame that was rejected by the four-color threshold.
+  - Windows test/build/package passed, but GL GUI fallback reached a legacy context without `glCreateProgram`; `glow` then panicked and VST3 attach failed.
+- Fix:
+  - Remove the invalid `libxscrnsaver-dev` package; retain the valid `libxss-dev`/X11 development packages.
+  - Drain the native event loop for 256 ms after closing an editor before recreating it.
+  - Treat two high-contrast colors as non-empty pixel evidence while continuing to reject uniform and low-contrast frames; add a regression test.
+  - GL fixture view states now draw through `GuiContext`; when Windows native GL cannot load modern shader entry points, `BaseviewView` falls back to the WGPU renderer on the same hosted child window. GL remains the first renderer attempted.
+- Local result: Gain GL VST3 recreate passed with the settle delay and in-process probe; runner tests, Windows MSVC target check, and format/diff gates passed.
+- Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
+
 ## 待记录
 
 后续每次执行按以下格式追加：

@@ -6,7 +6,6 @@
 use std::f32::consts::PI;
 use std::sync::Arc;
 use sunmao_core::prelude::*;
-use sunmao_gui::gl::GlContext;
 use sunmao_gui::{
     Color, Event as GuiEvent, Fill, GuiContext, MouseButton as GuiMouseButton, ParameterWidget,
     Rect, Slider, Widget,
@@ -335,7 +334,7 @@ impl LpfViewState {
 }
 
 impl ViewState for LpfViewState {
-    fn draw(&mut self, ctx: &mut GlContext, width: f32, height: f32) {
+    fn draw(&mut self, ctx: &mut dyn GuiContext, width: f32, height: f32) {
         self.sync_from_params();
         ctx.fill_rect(
             0.0,

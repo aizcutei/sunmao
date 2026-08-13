@@ -1381,6 +1381,18 @@ fn gui_test_render_delay(plugin: &mut dyn HostPlugin) -> Result<(), String> {
     Ok(())
 }
 
+fn gui_test_settle_after_close() {
+    // Baseview closes embedded child windows asynchronously. Give the native
+    // event loop time to deliver the close before recreating the editor on
+    // the same host container, especially on hosted macOS WindowServer.
+    for _ in 0..32 {
+        if !gui_window::PluginGuiWindow::pump_events() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(8));
+    }
+}
+
 fn gui_test_verify_pixels(
     plugin: &mut dyn HostPlugin,
     window: &gui_window::PluginGuiWindow,
@@ -1795,6 +1807,7 @@ fn cmd_gui_test(args: &[String]) -> bool {
     println!();
     println!("Recreating GUI...");
     plugin.close_gui();
+    gui_test_settle_after_close();
     match plugin.open_gui(&window) {
         Ok(()) => println!("GUI recreated successfully"),
         Err(error) => {

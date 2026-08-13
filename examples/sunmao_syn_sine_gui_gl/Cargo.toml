@@ -13,4 +13,4 @@ sunmao = { path = "../../sunmao" }
 sunmao_core = { path = "../../sunmao/core" }
 sunmao_gui = { path = "../../sunmao/gui", features = ["gl"] }
 sunmao_macros = { path = "../../sunmao/macros" }
-sunmao_view_baseview = { path = "../../sunmao/view_baseview" }
+sunmao_view_baseview = { path = "../../sunmao/view_baseview", features = ["wgpu"] }

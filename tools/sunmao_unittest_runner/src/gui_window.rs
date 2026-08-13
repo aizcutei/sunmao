@@ -428,7 +428,7 @@ fn non_uniform_pixel_evidence(
     pixels: impl IntoIterator<Item = u32>,
 ) -> Result<PixelEvidence, String> {
     const SAMPLE_LIMIT: usize = 4096;
-    const MIN_DISTINCT_COLORS: usize = 4;
+    const MIN_DISTINCT_COLORS: usize = 2;
     const MIN_INTENSITY_RANGE: u8 = 16;
     const MIN_INTENSITY_STD_DEV: f64 = 4.0;
     let mut samples = [0_u32; SAMPLE_LIMIT];
@@ -3065,6 +3065,21 @@ mod tests {
             }
         });
         assert!(non_uniform_pixel_evidence(64, 64, low_contrast).is_err());
+    }
+
+    #[test]
+    fn pixel_evidence_accepts_two_high_contrast_rendered_colors() {
+        let pixels = (0..4096).map(|index| {
+            if index % 2 == 0 {
+                0x0010_1010
+            } else {
+                0x00b0_b0b0
+            }
+        });
+        let evidence = non_uniform_pixel_evidence(64, 64, pixels).unwrap();
+        assert_eq!(evidence.distinct_colors, 2);
+        assert!(evidence.intensity_range >= 16);
+        assert!(evidence.intensity_std_dev >= 4.0);
     }
 
     #[test]

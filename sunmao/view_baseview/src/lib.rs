@@ -23,7 +23,8 @@ use raw_window_handle::{HasWindowHandle, RawWindowHandle, WindowHandle};
 
 use sunmao_core::{ParentWindow, SunmaoView, ViewContext, ViewHandle};
 use sunmao_gui::{
-    Color, Event as GuiEvent, KeyCode as GuiKeyCode, Modifiers, MouseButton as GuiMouseButton,
+    Color, Event as GuiEvent, GuiContext, KeyCode as GuiKeyCode, Modifiers,
+    MouseButton as GuiMouseButton,
 };
 
 mod pixel_probe;
@@ -254,13 +255,21 @@ fn dispatch_keyboard_event(
 
 #[cfg(feature = "gl")]
 mod gl_backend {
+    #[cfg(all(feature = "wgpu", target_os = "windows"))]
+    use super::wgpu_backend::{WgpuHandler, WgpuViewState};
     use super::*;
     use baseview::gl::GlConfig;
     use sunmao_gui::gl::GlContext;
+    #[cfg(all(feature = "wgpu", target_os = "windows"))]
+    use sunmao_gui::wgpu::WgpuContext;
 
-    /// Trait for custom view state that receives events and draws the UI using OpenGL.
+    /// Trait for custom view state that receives events and draws the UI.
+    ///
+    /// The normal renderer is OpenGL. When a hosted Windows driver exposes
+    /// only legacy WGL, the same state may be rendered by the optional WGPU
+    /// compatibility path without changing plugin code.
     pub trait ViewState: Send + 'static {
-        fn draw(&mut self, ctx: &mut GlContext, width: f32, height: f32);
+        fn draw(&mut self, ctx: &mut dyn GuiContext, width: f32, height: f32);
         fn on_mouse_event(&mut self, event: &GuiEvent) -> bool;
         fn on_keyboard_event(&mut self, _event: &GuiEvent) -> bool {
             false
@@ -312,13 +321,29 @@ mod gl_backend {
             let initialized = Arc::new(AtomicBool::new(false));
             let initialized_in_builder = Arc::clone(&initialized);
             let mut handle = Window::open_parented(&parent_wrapper, options, move |window| {
-                let handler = GlHandler::new(state, background, window);
-                if handler.gl.is_some() {
-                    initialized_in_builder.store(true, Ordering::Release);
-                } else {
-                    window.close();
+                match GlHandler::try_new(state, background, window) {
+                    Ok(handler) => {
+                        initialized_in_builder.store(true, Ordering::Release);
+                        BaseviewHandler::Gl(handler)
+                    }
+                    Err(state) => {
+                        #[cfg(all(feature = "wgpu", target_os = "windows"))]
+                        {
+                            if let Some(handler) = pollster::block_on(WgpuHandler::new(
+                                WgpuFallbackState(state),
+                                background,
+                                config.width,
+                                config.height,
+                                window,
+                            )) {
+                                initialized_in_builder.store(true, Ordering::Release);
+                                return BaseviewHandler::Wgpu(handler);
+                            }
+                        }
+                        window.close();
+                        BaseviewHandler::Failed
+                    }
                 }
-                handler
             });
 
             if initialized.load(Ordering::Acquire) && handle.is_open() {
@@ -327,6 +352,55 @@ mod gl_backend {
                 handle.close();
                 None
             }
+        }
+    }
+
+    enum BaseviewHandler<S: ViewState> {
+        Gl(GlHandler<S>),
+        #[cfg(all(feature = "wgpu", target_os = "windows"))]
+        Wgpu(WgpuHandler<WgpuFallbackState<S>>),
+        Failed,
+    }
+
+    impl<S: ViewState> WindowHandler for BaseviewHandler<S> {
+        fn on_frame(&mut self, window: &mut Window) {
+            match self {
+                Self::Gl(handler) => handler.on_frame(window),
+                #[cfg(all(feature = "wgpu", target_os = "windows"))]
+                Self::Wgpu(handler) => handler.on_frame(window),
+                Self::Failed => window.close(),
+            }
+        }
+
+        fn on_event(&mut self, window: &mut Window, event: Event) -> EventStatus {
+            match self {
+                Self::Gl(handler) => handler.on_event(window, event),
+                #[cfg(all(feature = "wgpu", target_os = "windows"))]
+                Self::Wgpu(handler) => handler.on_event(window, event),
+                Self::Failed => EventStatus::Ignored,
+            }
+        }
+    }
+
+    #[cfg(all(feature = "wgpu", target_os = "windows"))]
+    struct WgpuFallbackState<S: ViewState>(S);
+
+    #[cfg(all(feature = "wgpu", target_os = "windows"))]
+    impl<S: ViewState> WgpuViewState for WgpuFallbackState<S> {
+        fn draw(&mut self, ctx: &mut WgpuContext, width: f32, height: f32) {
+            self.0.draw(ctx, width, height);
+        }
+
+        fn on_mouse_event(&mut self, event: &GuiEvent) -> bool {
+            self.0.on_mouse_event(event)
+        }
+
+        fn on_keyboard_event(&mut self, event: &GuiEvent) -> bool {
+            self.0.on_keyboard_event(event)
+        }
+
+        fn on_resize(&mut self, width: f32, height: f32) {
+            self.0.on_resize(width, height);
         }
     }
 
@@ -342,32 +416,45 @@ mod gl_backend {
     }
 
     impl<S: ViewState> GlHandler<S> {
-        fn new(state: S, background: Color, window: &mut Window) -> Self {
-            let gl = if let Some(gl_ctx) = window.gl_context() {
-                unsafe {
-                    gl_ctx.make_current();
-                    match GlContext::from_loader(|s| gl_ctx.get_proc_address(s), 400.0, 300.0) {
-                        Ok(ctx) => Some(ctx),
-                        Err(e) => {
-                            eprintln!("Failed to create GL context: {}", e);
-                            None
-                        }
-                    }
+        fn try_new(state: S, background: Color, window: &mut Window) -> Result<Self, S> {
+            let Some(gl_ctx) = window.gl_context() else {
+                return Err(state);
+            };
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                gl_ctx.make_current();
+                if ["glCreateShader", "glCreateProgram"]
+                    .iter()
+                    .any(|symbol| gl_ctx.get_proc_address(symbol).is_null())
+                {
+                    gl_ctx.make_not_current();
+                    return Err("required modern OpenGL entry points are unavailable".into());
                 }
-            } else {
-                None
+                GlContext::from_loader(|s| gl_ctx.get_proc_address(s), 400.0, 300.0)
+            }));
+            let gl = match result {
+                Ok(Ok(ctx)) => ctx,
+                Ok(Err(error)) => {
+                    eprintln!("Failed to create GL renderer: {error}");
+                    unsafe { gl_ctx.make_not_current() };
+                    return Err(state);
+                }
+                Err(_) => {
+                    eprintln!("GL renderer initialization panicked; trying compatibility renderer");
+                    unsafe { gl_ctx.make_not_current() };
+                    return Err(state);
+                }
             };
 
-            Self {
+            Ok(Self {
                 state,
-                gl,
+                gl: Some(gl),
                 background,
                 width: 400.0,
                 height: 300.0,
                 scale_factor: 1.0,
                 mouse_x: 0.0,
                 mouse_y: 0.0,
-            }
+            })
         }
     }
 
@@ -442,7 +529,7 @@ pub use gl_backend::{BaseviewView, ViewState};
 // ============ wgpu Backend ============
 
 #[cfg(feature = "wgpu")]
-mod wgpu_backend {
+pub(crate) mod wgpu_backend {
     use super::*;
     use sunmao_gui::wgpu::WgpuContext;
 
@@ -528,7 +615,7 @@ mod wgpu_backend {
         Failed,
     }
 
-    struct WgpuHandler<S: WgpuViewState> {
+    pub(super) struct WgpuHandler<S: WgpuViewState> {
         state: S,
         wgpu_ctx: WgpuContext,
         surface: wgpu::Surface<'static>,
@@ -542,7 +629,7 @@ mod wgpu_backend {
     }
 
     impl<S: WgpuViewState> WgpuHandler<S> {
-        async fn new(
+        pub(super) async fn new(
             state: S,
             background: Color,
             width: u32,

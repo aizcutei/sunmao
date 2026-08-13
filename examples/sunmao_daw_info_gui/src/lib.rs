@@ -8,7 +8,6 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 use sunmao_core::prelude::*;
-use sunmao_gui::gl::GlContext;
 use sunmao_gui::{Color, Fill, GuiContext, Stroke};
 use sunmao_macros::Params;
 use sunmao_view_baseview::{BaseviewConfig, BaseviewView, ViewState, WindowScalePolicy};
@@ -141,7 +140,7 @@ impl DawInfoViewState {
 }
 
 impl ViewState for DawInfoViewState {
-    fn draw(&mut self, ctx: &mut GlContext, width: f32, height: f32) {
+    fn draw(&mut self, ctx: &mut dyn GuiContext, width: f32, height: f32) {
         self.width = width.max(1.0);
         self.height = height.max(1.0);
         let snapshot = read_snapshot(&self.transport);
@@ -160,7 +159,7 @@ impl ViewState for DawInfoViewState {
 
 // ============ Drawing Helpers ============
 
-fn draw_daw_info(ctx: &mut GlContext, width: f32, height: f32, snapshot: TransportSnapshot) {
+fn draw_daw_info(ctx: &mut dyn GuiContext, width: f32, height: f32, snapshot: TransportSnapshot) {
     ctx.fill_rect(
         0.0,
         0.0,
@@ -253,7 +252,7 @@ fn draw_daw_info(ctx: &mut GlContext, width: f32, height: f32, snapshot: Transpo
 }
 
 fn draw_number(
-    ctx: &mut GlContext,
+    ctx: &mut dyn GuiContext,
     x: f32,
     y: f32,
     width: f32,
@@ -284,7 +283,7 @@ fn draw_number(
     }
 }
 
-fn draw_digit(ctx: &mut GlContext, x: f32, y: f32, w: f32, h: f32, ch: char) {
+fn draw_digit(ctx: &mut dyn GuiContext, x: f32, y: f32, w: f32, h: f32, ch: char) {
     let on = Color::rgb(0.86, 0.9, 0.98);
     let off = Color::rgb(0.18, 0.2, 0.25);
     let t = (w.min(h) * 0.18).max(2.0);
@@ -326,7 +325,13 @@ fn draw_digit(ctx: &mut GlContext, x: f32, y: f32, w: f32, h: f32, ch: char) {
     draw_seg(ctx, seg[6], bot, on, off);
 }
 
-fn draw_seg(ctx: &mut GlContext, enabled: bool, rect: (f32, f32, f32, f32), on: Color, off: Color) {
+fn draw_seg(
+    ctx: &mut dyn GuiContext,
+    enabled: bool,
+    rect: (f32, f32, f32, f32),
+    on: Color,
+    off: Color,
+) {
     let (x, y, w, h) = rect;
     let color = if enabled { on } else { off };
     ctx.fill_rect(x, y, w, h, Fill::Solid(color));

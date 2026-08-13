@@ -5,7 +5,6 @@
 
 use std::sync::Arc;
 use sunmao_core::prelude::*;
-use sunmao_gui::gl::GlContext;
 use sunmao_gui::ParameterWidget;
 use sunmao_gui::{
     Color, Event as GuiEvent, Fill, GuiContext, MouseButton as GuiMouseButton, Rect, Slider, Widget,
@@ -146,7 +145,7 @@ impl GainViewState {
 }
 
 impl ViewState for GainViewState {
-    fn draw(&mut self, ctx: &mut GlContext, width: f32, height: f32) {
+    fn draw(&mut self, ctx: &mut dyn GuiContext, width: f32, height: f32) {
         self.sync_from_params();
         ctx.fill_rect(
             0.0,
