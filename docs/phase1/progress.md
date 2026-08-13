@@ -223,6 +223,14 @@
 - Local result: runner tests, Windows target checks, GL/WGPU-enabled fixture checks, and format/diff gates passed.
 - Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
 
+### 2026-08-13 — hosted CI #11 GTK runtime initialization fix
+
+- Command/platform: push `d6cc9645f7f6a647675104a50b51a3510057088e` 后 GitHub Actions Phase 1 #11：https://github.com/aizcutei/sunmao/actions/runs/31674003019
+- Result: Linux selected tests/builds passed through initial WebView pixel/input, but WebView recreate still hit GTK's thread assertion because `gtk::set_initialized()` also rejects a globally initialized runtime on another thread. macOS/Windows GUI steps were progressing successfully before the Linux failure.
+- Fix: enable GTK's `unsafe-assume-initialized` assertion mode for baseview and call the raw `gtk_init_check()` exactly once through a process `OnceLock`; each baseview WebView event thread then uses the already initialized runtime without re-running GTK initialization.
+- Local result: `baseview --all-features`, view-baseview, runner tests and formatting/diff gates passed.
+- Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
+
 ## 待记录
 
 后续每次执行按以下格式追加：

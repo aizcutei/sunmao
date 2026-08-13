@@ -2,8 +2,12 @@
 
 use raw_window_handle::HasWindowHandle;
 use std::error::Error;
+#[cfg(target_os = "linux")]
+use std::ffi::CString;
 use std::fmt;
 use std::sync::mpsc;
+#[cfg(target_os = "linux")]
+use std::sync::OnceLock;
 use wry::dpi::{LogicalPosition, LogicalSize};
 use wry::{Rect, WebViewBuilder};
 
@@ -45,6 +49,33 @@ pub struct WebView {
     webview: wry::WebView,
 }
 
+#[cfg(target_os = "linux")]
+static GTK_INITIALIZED: OnceLock<Result<(), String>> = OnceLock::new();
+
+#[cfg(target_os = "linux")]
+fn ensure_gtk_initialized() -> Result<(), WebViewError> {
+    GTK_INITIALIZED
+        .get_or_init(|| {
+            let program = CString::new(
+                std::env::args()
+                    .next()
+                    .unwrap_or_else(|| "sunmao".to_string()),
+            )
+            .map_err(|error| format!("invalid GTK program name: {error}"))?;
+            let mut argc = 1;
+            let mut argv = vec![program.as_ptr().cast_mut(), std::ptr::null_mut()];
+            let mut argv_ptr = argv.as_mut_ptr();
+            let initialized = unsafe { gtk::ffi::gtk_init_check(&mut argc, &mut argv_ptr) };
+            if initialized == 0 {
+                Err("GTK could not initialize on the X11 display".to_string())
+            } else {
+                Ok(())
+            }
+        })
+        .clone()
+        .map_err(WebViewError::Initialization)
+}
+
 impl WebView {
     pub fn new<W: HasWindowHandle>(
         parent: &W,
@@ -60,17 +91,8 @@ impl WebView {
         }
 
         #[cfg(target_os = "linux")]
-        if !gtk::is_initialized() {
-            gtk::init().map_err(|error| {
-                WebViewError::Initialization(format!("failed to initialize GTK: {error}"))
-            })?;
-        } else if !gtk::is_initialized_main_thread() {
-            // Baseview owns one event thread per embedded window. GTK has
-            // already been initialized by the previous WebView thread during
-            // a close/recreate cycle; re-running gtk::init() would panic.
-            // All GTK/WebKit calls for this new child remain on this thread.
-            unsafe { gtk::set_initialized() };
-        }
+        #[cfg(target_os = "linux")]
+        ensure_gtk_initialized()?;
 
         let (sender, receiver) = mpsc::channel();
         let bridge = format!(
