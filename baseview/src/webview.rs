@@ -60,9 +60,17 @@ impl WebView {
         }
 
         #[cfg(target_os = "linux")]
-        gtk::init().map_err(|error| {
-            WebViewError::Initialization(format!("failed to initialize GTK: {error}"))
-        })?;
+        if !gtk::is_initialized() {
+            gtk::init().map_err(|error| {
+                WebViewError::Initialization(format!("failed to initialize GTK: {error}"))
+            })?;
+        } else if !gtk::is_initialized_main_thread() {
+            // Baseview owns one event thread per embedded window. GTK has
+            // already been initialized by the previous WebView thread during
+            // a close/recreate cycle; re-running gtk::init() would panic.
+            // All GTK/WebKit calls for this new child remain on this thread.
+            unsafe { gtk::set_initialized() };
+        }
 
         let (sender, receiver) = mpsc::channel();
         let bridge = format!(

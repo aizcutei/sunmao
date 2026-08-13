@@ -31,7 +31,8 @@
 - Hosted CI #7（`6b9a8bc`）：失败，https://github.com/aizcutei/sunmao/actions/runs/31671132074
 - Hosted CI #8（`1cac6e2`）：失败，https://github.com/aizcutei/sunmao/actions/runs/31672115274
 - Hosted CI #9（`bebd200`）：失败，https://github.com/aizcutei/sunmao/actions/runs/31672658169
-- 当前正在推送针对 #9 的修复；**Phase 1 仍未完成**。
+- Hosted CI #10（`e1a75ac`）：失败，https://github.com/aizcutei/sunmao/actions/runs/31673224274
+- 当前正在推送针对 #10 的修复；**Phase 1 仍未完成**。
 - `cargo metadata --locked --no-deps`、`cargo fmt --all -- --check`、`git diff --check` 已在本机通过。
 - 默认 VST3/CLAP 二进制经 `nm` 确认无 `RustAUFactory|au_component_factory|SunmaoAUCocoa`。
 
@@ -47,7 +48,7 @@
 | macOS GUI | 本机 GL/WGPU/WebView × VST3/CLAP 全绿，含 520x220、输入、gesture、close/recreate | `.phase1-run.gui.9d55cbf2/*.gui-test.log`（未跟踪） | hosted macOS job |
 | Linux GUI | 未在本机运行；macOS cross 缺少 X11 sysroot | 无 Ubuntu hosted 证据 | Ubuntu hosted job |
 | Windows GUI | 仅有 x86_64 MSVC cross-check，无原生 GUI runtime | 无 Windows hosted 证据 | Windows hosted job |
-| hosted CI | #9 失败，修复待复验 | [run 31672658169](https://github.com/aizcutei/sunmao/actions/runs/31672658169) | 等待新 run |
+| hosted CI | #10 失败，修复待复验 | [run 31673224274](https://github.com/aizcutei/sunmao/actions/runs/31673224274) | 等待新 run |
 
 ## 当前验证摘要
 

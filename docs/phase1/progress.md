@@ -212,6 +212,17 @@
 - Local result: runner tests, Windows target checks, GL/WGPU-enabled fixture checks, and format/diff gates passed.
 - Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
 
+### 2026-08-13 — hosted CI #10 Linux WebView recreate fix
+
+- Command/platform: push `e1a75acf28a277879eac8f48288981c0a6d44506` 后 GitHub Actions Phase 1 #10：https://github.com/aizcutei/sunmao/actions/runs/31673224274
+- Result:
+  - Linux all selected tests, builds, packaging, and initial Gain WebView pixel/input verification passed.
+  - Linux WebView recreate failed because GTK's second baseview event thread called `gtk::init()` after GTK had been initialized on the first thread.
+  - macOS and Windows native GUI steps passed on this commit; their packaging-helper steps were still running when Linux was diagnosed.
+- Fix: on Linux, initialize GTK only once; for a later baseview WebView thread, mark the already-initialized GTK runtime for that thread instead of calling `gtk::init()` again.
+- Local result: runner tests, Windows target checks, GL/WGPU-enabled fixture checks, and format/diff gates passed.
+- Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
+
 ## 待记录
 
 后续每次执行按以下格式追加：
