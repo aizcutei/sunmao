@@ -204,6 +204,14 @@
 - Local result: runner/view tests, Windows target checks, GL/WGPU-enabled fixture checks, and format/diff gates passed.
 - Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
 
+### 2026-08-13 — hosted CI #9 Linux WebView input geometry
+
+- Command/platform: push `bebd200af457502a0ffa77b49b36f8a26cacc38d` 后 GitHub Actions Phase 1 #9：https://github.com/aizcutei/sunmao/actions/runs/31672658169
+- Result: Linux selected tests and GL framebuffer creation progressed; Gain WebView pixels passed, but the configured horizontal drag at `y=132` stayed above the actual resized WebKit range control and Gain remained `0.5`. macOS and Windows GUI steps passed WebView on the preceding matrix run before their later packaging-helper steps.
+- Fix: move the Gain WebView acceptance drag to `y=150`, matching the resized HTML layout; keep Sine WebView at its separate `y=124` geometry. Update both hosted CI and `tools/package_examples.sh`.
+- Local result: runner tests, Windows target checks, GL/WGPU-enabled fixture checks, and format/diff gates passed.
+- Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
+
 ## 待记录
 
 后续每次执行按以下格式追加：

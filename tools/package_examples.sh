@@ -257,7 +257,7 @@ if [ "$GUI_TEST" -eq 1 ]; then
         GUI_COMMAND+=(--verify-input --drag-from 64,110 --drag-to 456,110)
         ;;
       sunmao_fx_gain_gui_webview)
-        GUI_COMMAND+=(--verify-input --drag-from 120,132 --drag-to 400,132)
+        GUI_COMMAND+=(--verify-input --drag-from 120,150 --drag-to 400,150)
         ;;
       sunmao_syn_sine_gui_webview)
         # The synth panel has a taller value readout; after the standard
