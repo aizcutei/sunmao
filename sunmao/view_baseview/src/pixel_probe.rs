@@ -64,9 +64,6 @@ pub fn store_sampled(width: u32, height: u32, mut pixel: impl FnMut(u32, u32) ->
     if pixels.iter().all(|value| *value == 0) {
         return;
     }
-    let _keep: unsafe extern "C" fn(*mut u32, *mut u32, *mut u32, usize) -> i32 =
-        sunmao_debug_read_frame;
-    let _ = std::hint::black_box(_keep);
     if let Ok(mut slot) = LAST_FRAME.lock() {
         *slot = Some((cols, rows, pixels));
     }

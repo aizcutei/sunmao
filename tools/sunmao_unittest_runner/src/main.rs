@@ -1387,6 +1387,14 @@ fn gui_test_verify_pixels(
 ) -> Result<gui_window::PixelEvidence, String> {
     let deadline = std::time::Instant::now() + env_duration_ms("SUNMAO_GUI_PIXEL_TIMEOUT_MS", 3000);
     loop {
+        if std::env::var_os("SUNMAO_GUI_PIXEL_PROBE").is_some() {
+            if let Some(library) = plugin.plugin_library() {
+                if let Ok(evidence) = gui_window::read_plugin_pixel_probe(library) {
+                    println!("GUI pixels verified via in-process renderer probe");
+                    return Ok(evidence);
+                }
+            }
+        }
         let os_error = match window.verify_non_uniform_pixels() {
             Ok(evidence) => return Ok(evidence),
             Err(error) => error,

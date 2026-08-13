@@ -102,8 +102,12 @@ jobs:
             libxinerama-dev \
             libxkbcommon-dev \
             libxkbcommon-x11-dev \
+            libxmu-dev \
+            libxpresent-dev \
             libxrandr-dev \
             libxrender-dev \
+            libxss-dev \
+            libxt-dev \
             libxtst6 \
             libxxf86vm-dev \
             mesa-vulkan-drivers \
@@ -131,32 +135,35 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tests=(
-            cargo
-            test
-            --locked
-            -p clap_sys
-            -p clap_rs
-            -p vst3_sys
-            -p vst3_rs
-            -p sunmao_core
-            -p sunmao_macros
-            -p sunmao_backend_clap
-            -p sunmao_backend_vst3
-            -p sunmao_packager
-            -p sunmao_gui
-            -p sunmao_gui_wgpu
-            -p sunmao_view_baseview
-            -p sunmao_unittest_runner
-            -p sunmao_fx_gain
-            -p sunmao_syn_sine
+          mkdir -p target/phase1-artifacts
+          packages=(
+            clap_sys
+            clap_rs
+            vst3_sys
+            vst3_rs
+            sunmao_core
+            sunmao_macros
+            sunmao_backend_clap
+            sunmao_backend_vst3
+            sunmao_packager
+            sunmao_gui
+            sunmao_gui_wgpu
+            sunmao_view_baseview
+            sunmao_unittest_runner
+            sunmao_fx_gain
+            sunmao_syn_sine
           )
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            # `--` stops xvfb-run from consuming cargo's `-p` flags.
-            xvfb-run -a -- "${tests[@]}"
-          else
-            "${tests[@]}"
-          fi
+          for package in "${packages[@]}"; do
+            echo "::group::cargo test -p $package"
+            if [ "${{ runner.os }}" = "Linux" ]; then
+              # `--` stops xvfb-run from consuming cargo's `-p` flags.
+              command=(xvfb-run -a -- cargo test --locked -p "$package")
+            else
+              command=(cargo test --locked -p "$package")
+            fi
+            "${command[@]}" 2>&1 | tee -a target/phase1-artifacts/format-tests.log
+            echo "::endgroup::"
+          done
 
       - name: Test standalone runtime (non-blocking follow-up)
         continue-on-error: true
@@ -439,3 +446,11 @@ jobs:
             target/phase1-artifacts/*.gui-test.log
             target/phase1-artifacts/*.validation.txt
           if-no-files-found: error
+
+      - name: Upload Phase 1 failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase1-failure-${{ runner.os }}-${{ runner.arch }}
+          path: target/phase1-artifacts
+          if-no-files-found: ignore

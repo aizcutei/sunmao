@@ -124,6 +124,20 @@
 - 本机 macOS：`cargo test --locked` 覆盖 backend_vst3/gui/view_baseview/runner；Gain GL VST3 `gui-test --verify-pixels --verify-input` 仍通过（OS 截图路径）。
 - Unresolved: 修复尚未经新的 hosted run 验证；不能把 Phase 1 标为完成。
 
+### 2026-08-13 — hosted CI #3 失败与下一轮修复
+
+- Command/platform: push `d172c775cb4d61f861100defe3211b08a32d6c73` 后 GitHub Actions Phase 1 #3：https://github.com/aizcutei/sunmao/actions/runs/31664299209
+- Result: `Validate metadata and formatting`、process/package 等前置步骤通过，但三个 native jobs 仍失败；公开 annotations 未提供具体测试输出。
+  - Linux：`Test format adapters and host` 仍退出 101。
+  - macOS：native GUI 步骤约 41 秒后失败。
+  - Windows：native GUI 步骤约 1 秒后失败；前置 process/package 通过。
+- Follow-up:
+  - runner 在启用 `SUNMAO_GUI_PIXEL_PROBE` 时优先读取插件进程内 GL/WGPU renderer frame，避免先等待受宿主 WindowServer/GDI 权限影响的桌面截图；本机 Gain GL VST3 验证通过，包含 resize、输入、gesture 和 recreate。
+  - Linux selected tests 改为逐 package 执行并写入 `format-tests.log`，以保留第一个失败 package；X11 apt 依赖补全到 XFixes/Xinerama/Xmu/XPresent/XRandR/XRender/XSS/XT/XTst/XXF86VM。
+  - 增加失败时上传 `target/phase1-artifacts` 的诊断 artifact。
+- Local result: macOS `cargo test --locked`（backend_clap/backend_vst3、view_baseview、runner、gain/sine）通过；Windows MSVC target `cargo check --locked` 的 runner、view_baseview、Gain GL/WGPU 通过。
+- Unresolved: 本轮修复尚未经 hosted CI 验证；不能把 Phase 1 标为完成。
+
 ## 待记录
 
 后续每次执行按以下格式追加：
