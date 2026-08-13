@@ -2596,7 +2596,12 @@ mod macos {
         content_view: *mut c_void,
     ) -> Result<PixelEvidence, String> {
         let _pool = AutoreleasePool::new();
-        let (surface, _) = plugin_surface(content_view)?;
+        let javascript_webview = find_javascript_webview(content_view);
+        let surface = if javascript_webview.is_null() {
+            plugin_surface(content_view)?.0
+        } else {
+            javascript_webview
+        };
         let bounds_selector = sel_registerName(b"bounds\0".as_ptr().cast());
         let bounds = msg_send_rect0(surface, bounds_selector);
         if bounds.size.width <= 0.0 || bounds.size.height <= 0.0 {

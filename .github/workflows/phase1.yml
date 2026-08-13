@@ -107,7 +107,10 @@ jobs:
             libxrandr-dev \
             libxrender-dev \
             libxss-dev \
+            libxscrnsaver-dev \
+            libxft-dev \
             libxt-dev \
+            libxtst-dev \
             libxtst6 \
             libxxf86vm-dev \
             mesa-vulkan-drivers \
@@ -166,7 +169,8 @@ jobs:
             status=${PIPESTATUS[0]}
             set -e
             if [ "$status" -ne 0 ]; then
-              echo "::error title=Phase 1 package test failed::cargo test -p $package exited with status $status"
+              summary="$(tail -n 25 target/phase1-artifacts/format-tests.log | tr '\n' ' ' | cut -c1-1200)"
+              echo "::error title=Phase 1 package test failed::cargo test -p $package exited with status $status: $summary"
               exit "$status"
             fi
             echo "::endgroup::"
@@ -352,7 +356,7 @@ jobs:
               return 0
             fi
             local summary
-            summary="$(tr '\n' ' ' < "$log" | cut -c1-500)"
+            summary="$(tail -n 25 "$log" | tr '\n' ' ' | cut -c1-1200)"
             echo "::error title=Phase 1 GUI test failed::$summary"
             if [ "${{ runner.os }}" != "macOS" ]; then
               return "$status"
@@ -367,7 +371,7 @@ jobs:
               sleep 1
               return 0
             fi
-            summary="$(tr '\n' ' ' < "$log" | cut -c1-500)"
+            summary="$(tail -n 25 "$log" | tr '\n' ' ' | cut -c1-1200)"
             echo "::error title=Phase 1 GUI retry failed::$summary"
             return "$status"
           }

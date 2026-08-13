@@ -151,6 +151,20 @@
 - Local result: macOS runner/view_baseview tests、Windows MSVC target check、format/diff gates 通过。
 - Unresolved: 仍缺具体 hosted Linux package 和 Windows/macOS GUI error 文本；Phase 1 未完成。
 
+### 2026-08-13 — hosted CI #5 失败与平台修复
+
+- Command/platform: push `51db6b8564e17ec8871147e427e0ad45baeb6cce` 后 GitHub Actions Phase 1 #5：https://github.com/aizcutei/sunmao/actions/runs/31669974672
+- Result:
+  - Linux failure annotation now identifies `sunmao_view_baseview` as the first failing package; other jobs did not reach later stages.
+  - macOS Gain GL VST3 reached in-process pixel/input/gesture verification, then failed during GUI recreate.
+  - Windows Gain GL VST3 failed immediately from `IPlugView::attached() failed: 1`, indicating the embedded baseview view did not initialize.
+- Fix:
+  - Windows baseview OpenGL now falls back to a legacy WGL context when ARB context/pixel-format entry points or selection are unavailable; the SunMao GL shader path already supports GLSL 1.20.
+  - Linux apt list adds the remaining X11 development packages; package-test annotations now include the last 25 failure-log lines.
+  - macOS bitmap fallback targets the actual WKWebView when present and flushes `displayIfNeeded` before caching pixels.
+- Local result: Windows MSVC target check for baseview, runner, view and Gain GL passed; runner tests and formatting/diff checks passed.
+- Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
+
 ## 待记录
 
 后续每次执行按以下格式追加：
