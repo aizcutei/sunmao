@@ -193,6 +193,17 @@
 - Local result: Windows target checks, runner tests, GL/WGPU-enabled GUI fixture checks, and formatting/diff gates passed.
 - Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
 
+### 2026-08-13 — hosted CI #8 Xvfb GL configuration fix
+
+- Command/platform: push `1cac6e2b9a24fba6cfb49d380d1971a3e1dcaf17` 后 GitHub Actions Phase 1 #8：https://github.com/aizcutei/sunmao/actions/runs/31672115274
+- Result:
+  - Linux selected tests, baseview feature checks, realtime matrix, and builds passed.
+  - Linux GUI stopped when Xvfb/Mesa rejected the requested GLX framebuffer configuration (`InvalidFBConfig`); the runner then received `IPlugView::attached() failed: 1`.
+  - macOS and Windows reached native GUI testing successfully on this commit; their later packaging-helper steps were still running when the Linux failure was diagnosed.
+- Fix: disable the optional sRGB framebuffer request for the baseview GL config. Ordinary RGBA GL remains requested, while Xvfb/Mesa is no longer filtered to a missing sRGB FBConfig.
+- Local result: runner/view tests, Windows target checks, GL/WGPU-enabled fixture checks, and format/diff gates passed.
+- Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
+
 ## 待记录
 
 后续每次执行按以下格式追加：

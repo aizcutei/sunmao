@@ -313,7 +313,11 @@ mod gl_backend {
                 baseview::Size::new(config.width as f64, config.height as f64),
                 config.scale_policy,
             );
-            options.gl_config = Some(GlConfig::default());
+            let mut gl_config = GlConfig::default();
+            // Hosted Xvfb/Mesa and the Windows basic driver may expose no
+            // sRGB framebuffer even though ordinary RGBA GL is available.
+            gl_config.srgb = false;
+            options.gl_config = Some(gl_config);
 
             let parent_wrapper = ParentWindowWrapper(parent);
             let background = config.background;
