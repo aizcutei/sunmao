@@ -846,6 +846,10 @@ impl HostPlugin for ClapHostPlugin {
             .gui_window
             .store(ptr::null_mut(), Ordering::Release);
     }
+
+    fn plugin_library(&self) -> Option<&libloading::Library> {
+        Some(&self._lib)
+    }
 }
 
 impl Drop for ClapHostPlugin {

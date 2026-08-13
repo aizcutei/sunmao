@@ -403,6 +403,25 @@ pub struct PixelEvidence {
     pub intensity_std_dev: f64,
 }
 
+pub fn read_plugin_pixel_probe(library: &libloading::Library) -> Result<PixelEvidence, String> {
+    type ProbeFn = unsafe extern "C" fn(*mut u32, *mut u32, *mut u32, usize) -> i32;
+    let probe = unsafe {
+        library
+            .get::<ProbeFn>(b"sunmao_debug_read_frame\0")
+            .map_err(|error| format!("plugin does not export sunmao_debug_read_frame: {error}"))?
+    };
+    let mut width = 0_u32;
+    let mut height = 0_u32;
+    let mut pixels = vec![0_u32; 64 * 64];
+    let count = unsafe { probe(&mut width, &mut height, pixels.as_mut_ptr(), pixels.len()) };
+    if count <= 0 || width == 0 || height == 0 {
+        return Err("in-process GUI pixel probe has no captured frame".into());
+    }
+    let count = count as usize;
+    pixels.truncate(count.min(pixels.len()));
+    non_uniform_pixel_evidence(width, height, pixels)
+}
+
 fn non_uniform_pixel_evidence(
     width: u32,
     height: u32,
@@ -664,7 +683,7 @@ mod windows {
     use windows_sys::Win32::Graphics::Gdi::{
         BitBlt, ClientToScreen, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
         GetDC, GetDIBits, ReleaseDC, ScreenToClient, SelectObject, BITMAPINFO, BITMAPINFOHEADER,
-        BI_RGB, CAPTUREBLT, DIB_RGB_COLORS, SRCCOPY,
+        BI_RGB, CAPTUREBLT, DIB_RGB_COLORS, HDC, SRCCOPY,
     };
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
@@ -687,6 +706,11 @@ mod windows {
     static CLASS_REGISTRATION: OnceLock<Result<(), u32>> = OnceLock::new();
     static CLASS_NAME: OnceLock<Vec<u16>> = OnceLock::new();
     static CONTENT_VIEWS: Mutex<Option<HashMap<usize, usize>>> = Mutex::new(None);
+
+    extern "system" {
+        fn PrintWindow(hwnd: HWND, hdc_blt: HDC, flags: u32) -> i32;
+    }
+    const PW_RENDERFULLCONTENT: u32 = 0x0000_0002;
 
     fn class_name() -> &'static [u16] {
         CLASS_NAME.get_or_init(|| {
@@ -1088,6 +1112,11 @@ mod windows {
                 origin.y,
                 SRCCOPY | CAPTUREBLT,
             )
+        };
+        let copied = if copied == 0 {
+            unsafe { PrintWindow(content_view, memory, PW_RENDERFULLCONTENT) }
+        } else {
+            copied
         };
         let mut pixels = vec![0_u32; width as usize * height as usize];
         let mut info = BITMAPINFO {
@@ -2465,6 +2494,26 @@ mod macos {
         window: *mut c_void,
         content_view: *mut c_void,
     ) -> Result<PixelEvidence, String> {
+        let screenshot = screenshot_non_uniform_pixels(window, content_view);
+        if screenshot.is_ok() {
+            return screenshot;
+        }
+        match unsafe { bitmap_non_uniform_pixels(content_view) } {
+            Ok(evidence) => Ok(evidence),
+            Err(bitmap_error) => Err(format!(
+                "{}; {}",
+                screenshot
+                    .err()
+                    .unwrap_or_else(|| "CoreGraphics capture failed".into()),
+                bitmap_error
+            )),
+        }
+    }
+
+    fn screenshot_non_uniform_pixels(
+        window: *mut c_void,
+        content_view: *mut c_void,
+    ) -> Result<PixelEvidence, String> {
         if window.is_null() || content_view.is_null() {
             return Err("macOS GUI window or content view is null".into());
         }
@@ -2541,6 +2590,71 @@ mod macos {
                 })
             });
         non_uniform_pixel_evidence(content_width, content_height, pixels)
+    }
+
+    unsafe fn bitmap_non_uniform_pixels(
+        content_view: *mut c_void,
+    ) -> Result<PixelEvidence, String> {
+        let _pool = AutoreleasePool::new();
+        let (surface, _) = plugin_surface(content_view)?;
+        let bounds_selector = sel_registerName(b"bounds\0".as_ptr().cast());
+        let bounds = msg_send_rect0(surface, bounds_selector);
+        if bounds.size.width <= 0.0 || bounds.size.height <= 0.0 {
+            return Err("macOS plugin surface bounds are empty".into());
+        }
+        let bitmap_selector =
+            sel_registerName(b"bitmapImageRepForCachingDisplayInRect:\0".as_ptr().cast());
+        let rep = msg_send_rect(surface, bitmap_selector, bounds);
+        if rep.is_null() {
+            return Err("NSView bitmapImageRepForCachingDisplayInRect returned null".into());
+        }
+        let cache_selector =
+            sel_registerName(b"cacheDisplayInRect:toBitmapImageRep:\0".as_ptr().cast());
+        let cache: unsafe extern "C" fn(*mut c_void, *mut c_void, NSRect, *mut c_void) =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        cache(surface, cache_selector, bounds, rep);
+
+        let wide_selector = sel_registerName(b"pixelsWide\0".as_ptr().cast());
+        let high_selector = sel_registerName(b"pixelsHigh\0".as_ptr().cast());
+        let size_fn: unsafe extern "C" fn(*mut c_void, *mut c_void) -> isize =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        let width = u32::try_from(size_fn(rep, wide_selector).max(0))
+            .map_err(|_| "cached GUI width is too large")?;
+        let height = u32::try_from(size_fn(rep, high_selector).max(0))
+            .map_err(|_| "cached GUI height is too large")?;
+        if width == 0 || height == 0 {
+            return Err("cached macOS GUI bitmap is empty".into());
+        }
+        let row_selector = sel_registerName(b"bytesPerRow\0".as_ptr().cast());
+        let bpp_selector = sel_registerName(b"bitsPerPixel\0".as_ptr().cast());
+        let bytes_per_row = usize::try_from(size_fn(rep, row_selector).max(0))
+            .map_err(|_| "cached GUI bytes-per-row is too large")?;
+        let bits_per_pixel = size_fn(rep, bpp_selector).max(0) as usize;
+        let bytes_per_pixel = bits_per_pixel.saturating_add(7) / 8;
+        if bytes_per_pixel < 3 {
+            return Err(format!(
+                "unsupported NSBitmapImageRep pixel format: {bits_per_pixel} bits per pixel"
+            ));
+        }
+        let data_selector = sel_registerName(b"bitmapData\0".as_ptr().cast());
+        let data = msg_send0(rep, data_selector) as *const u8;
+        if data.is_null() {
+            return Err("NSBitmapImageRep bitmapData returned null".into());
+        }
+        let step_x = (width / 64).max(1) as usize;
+        let step_y = (height / 64).max(1) as usize;
+        let pixels = (0..height as usize).step_by(step_y).flat_map(|row| {
+            (0..width as usize)
+                .step_by(step_x)
+                .filter_map(move |column| {
+                    let offset = row
+                        .checked_mul(bytes_per_row)?
+                        .checked_add(column.checked_mul(bytes_per_pixel)?)?;
+                    let bytes = unsafe { std::slice::from_raw_parts(data.add(offset), 3) };
+                    Some(u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], 0]))
+                })
+        });
+        non_uniform_pixel_evidence(width, height, pixels)
     }
 
     pub(super) fn drag_slider(
@@ -2814,6 +2928,18 @@ mod macos {
         if !delegate.is_null() {
             msg_send1(window, sel_set_delegate, delegate);
         }
+
+        let sel_sharing = sel_registerName(b"setSharingType:\0".as_ptr() as *const _);
+        let set_sharing: unsafe extern "C" fn(*mut c_void, *mut c_void, usize) =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        const NS_WINDOW_SHARING_READ_ONLY: usize = 1;
+        set_sharing(window, sel_sharing, NS_WINDOW_SHARING_READ_ONLY);
+        let sel_visible = sel_registerName(b"setIsVisible:\0".as_ptr() as *const _);
+        let set_visible: unsafe extern "C" fn(*mut c_void, *mut c_void, bool) =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        set_visible(window, sel_visible, true);
+        let sel_center = sel_registerName(b"center\0".as_ptr() as *const _);
+        msg_send_void(window, sel_center);
 
         msg_send1(window, sel_make_key, ptr::null_mut());
         msg_send_void(window, sel_order_front_regardless);

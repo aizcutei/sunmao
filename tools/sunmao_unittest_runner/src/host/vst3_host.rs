@@ -1096,6 +1096,10 @@ impl HostPlugin for Vst3HostPlugin {
             }
         }
     }
+
+    fn plugin_library(&self) -> Option<&libloading::Library> {
+        Some(&self._lib)
+    }
 }
 
 unsafe fn query_bus_channels(

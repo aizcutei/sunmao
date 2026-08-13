@@ -1387,11 +1387,25 @@ fn gui_test_verify_pixels(
 ) -> Result<gui_window::PixelEvidence, String> {
     let deadline = std::time::Instant::now() + env_duration_ms("SUNMAO_GUI_PIXEL_TIMEOUT_MS", 3000);
     loop {
-        match window.verify_non_uniform_pixels() {
+        let os_error = match window.verify_non_uniform_pixels() {
             Ok(evidence) => return Ok(evidence),
-            Err(error) if std::time::Instant::now() >= deadline => return Err(error),
-            Err(_) => gui_test_render_delay(plugin)?,
+            Err(error) => error,
+        };
+        let probe_error = match plugin
+            .plugin_library()
+            .ok_or_else(|| "plugin module is unavailable for in-process pixel probe".to_string())
+            .and_then(gui_window::read_plugin_pixel_probe)
+        {
+            Ok(evidence) => {
+                println!("GUI pixels verified via in-process renderer probe");
+                return Ok(evidence);
+            }
+            Err(error) => error,
+        };
+        if std::time::Instant::now() >= deadline {
+            return Err(format!("{os_error}; {probe_error}"));
         }
+        gui_test_render_delay(plugin)?;
     }
 }
 
@@ -1567,6 +1581,9 @@ fn cmd_gui_test(args: &[String]) -> bool {
             return false;
         }
     };
+    if options.verify_pixels {
+        std::env::set_var("SUNMAO_GUI_PIXEL_PROBE", "1");
+    }
     if let Err(error) = gui_window::initialize_platform() {
         eprintln!("Failed to initialize native GUI support: {error}");
         return false;

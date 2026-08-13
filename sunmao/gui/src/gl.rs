@@ -256,6 +256,29 @@ void main() {
         }
     }
 
+    /// Read the current color buffer as tightly packed RGBA8 bytes.
+    pub fn read_rgba_bytes(&self) -> Result<(u32, u32, Vec<u8>), String> {
+        let width = (self.width * self.scale).round().max(1.0) as i32;
+        let height = (self.height * self.scale).round().max(1.0) as i32;
+        if width <= 0 || height <= 0 {
+            return Err("OpenGL color buffer is empty".into());
+        }
+        let mut bytes = vec![0_u8; width as usize * height as usize * 4];
+        unsafe {
+            self.gl.pixel_store_i32(glow::PACK_ALIGNMENT, 1);
+            self.gl.read_pixels(
+                0,
+                0,
+                width,
+                height,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(bytes.as_mut_slice())),
+            );
+        }
+        Ok((width as u32, height as u32, bytes))
+    }
+
     fn set_color(&self, color: Color) {
         unsafe {
             self.gl

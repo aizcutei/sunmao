@@ -109,6 +109,21 @@
   - Windows host window 增加 `WS_VISIBLE`。
 - Unresolved: 修复尚未经新的 hosted run 验证。
 
+### 2026-08-13 — hosted CI #2 失败与修复
+
+- Command/platform: push `750fae3090010669b5cc31bedead08ee9c9076d2` 后 GitHub Actions Phase 1 #2：https://github.com/aizcutei/sunmao/actions/runs/31661879049
+- Result: 三个 native jobs 仍失败。
+  - Linux：`Test format adapters and host` 约 55s 后退出 101。根因是 `sunmao_backend_vst3` 仅在 macOS/Windows 导入 `c_void`，Linux 上 unit tests 无法编译；同时 `xvfb-run -a cargo test -p ...` 可能把 `-p` 当成自己的 xauth protocol 选项。
+  - Windows：GUI 步骤 0s 失败。根因是 Git Bash `[ -f dll ]` 存在性检查；process/package 仍绿。
+  - macOS：process/package 绿，GUI 约 42s 后失败，符合 hosted WindowServer/TCC 无法用 CoreGraphics 截到非均匀像素。
+- 修复：
+  - `sunmao_backend_vst3` 无条件导入 `c_void`。
+  - Linux `xvfb-run -a -- cargo test ...`；apt 再补 `libgl-dev`/`libxrandr-dev` 等后续 GUI 构建依赖。
+  - GUI 二进制检查改用 `[ -e ]` 并打印 `target/debug`。
+  - GL/WGPU 在 `SUNMAO_GUI_PIXEL_PROBE` 下写入 `sunmao_debug_read_frame`；runner 在 OS 截图失败时 `dlsym` 该探针。macOS 增加 AppKit bitmap 回退，Windows 增加 `PrintWindow`。
+- 本机 macOS：`cargo test --locked` 覆盖 backend_vst3/gui/view_baseview/runner；Gain GL VST3 `gui-test --verify-pixels --verify-input` 仍通过（OS 截图路径）。
+- Unresolved: 修复尚未经新的 hosted run 验证；不能把 Phase 1 标为完成。
+
 ## 待记录
 
 后续每次执行按以下格式追加：

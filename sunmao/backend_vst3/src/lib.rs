@@ -4,7 +4,6 @@
 
 use raw_window_handle::RawWindowHandle;
 use std::collections::HashMap;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::ffi::c_void;
 use std::sync::Arc;
 use sunmao_core::events::MidiMessage;

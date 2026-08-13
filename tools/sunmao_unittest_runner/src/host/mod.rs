@@ -232,6 +232,11 @@ pub trait HostPlugin: Send {
 
     /// Close the plugin's native GUI.
     fn close_gui(&mut self) {}
+
+    /// Loaded plugin module, used for in-process GUI pixel probes.
+    fn plugin_library(&self) -> Option<&libloading::Library> {
+        None
+    }
 }
 
 pub(crate) fn process_frame_count(

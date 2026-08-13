@@ -1,6 +1,6 @@
 # Phase 1 状态
 
-更新时间：2026-08-12
+更新时间：2026-08-13
 
 ## 目标与边界
 
@@ -23,7 +23,8 @@
 - 本地分支：`phase1/vst3-clap-cross-platform`。
 - 已 push：https://github.com/aizcutei/sunmao/tree/phase1/vst3-clap-cross-platform
 - Hosted CI #1（`0b0319e`）：失败，https://github.com/aizcutei/sunmao/actions/runs/31660899211
-- 当前正在推送针对该失败的修复；**Phase 1 仍未完成**。
+- Hosted CI #2（`750fae3`）：失败，https://github.com/aizcutei/sunmao/actions/runs/31661879049
+- 当前正在推送针对 #2 的修复；**Phase 1 仍未完成**。
 - `cargo metadata --locked --no-deps`、`cargo fmt --all -- --check`、`git diff --check` 已在本机通过。
 - 默认 VST3/CLAP 二进制经 `nm` 确认无 `RustAUFactory|au_component_factory|SunmaoAUCocoa`。
 
@@ -39,7 +40,7 @@
 | macOS GUI | 本机 GL/WGPU/WebView × VST3/CLAP 全绿，含 520x220、输入、gesture、close/recreate | `.phase1-run.gui.9d55cbf2/*.gui-test.log`（未跟踪） | hosted macOS job |
 | Linux GUI | 未在本机运行；macOS cross 缺少 X11 sysroot | 无 Ubuntu hosted 证据 | Ubuntu hosted job |
 | Windows GUI | 仅有 x86_64 MSVC cross-check，无原生 GUI runtime | 无 Windows hosted 证据 | Windows hosted job |
-| hosted CI | #1 失败，修复待复验 | [run 31660899211](https://github.com/aizcutei/sunmao/actions/runs/31660899211) | 等待新 run |
+| hosted CI | #2 失败，修复待复验 | [run 31661879049](https://github.com/aizcutei/sunmao/actions/runs/31661879049) | 等待新 run |
 
 ## 当前验证摘要
 

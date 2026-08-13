@@ -26,6 +26,12 @@ use sunmao_gui::{
     Color, Event as GuiEvent, KeyCode as GuiKeyCode, Modifiers, MouseButton as GuiMouseButton,
 };
 
+mod pixel_probe;
+
+#[used]
+static _SUNMAO_DEBUG_READ_FRAME: unsafe extern "C" fn(*mut u32, *mut u32, *mut u32, usize) -> i32 =
+    pixel_probe::sunmao_debug_read_frame;
+
 fn resize_baseview_window(handle: &mut baseview::WindowHandle, width: u32, height: u32) -> bool {
     handle.resize(baseview::Size::new(width as f64, height as f64));
     true
@@ -384,6 +390,11 @@ mod gl_backend {
                     self.state.draw(gl, self.width, self.height);
 
                     gl.end_frame();
+                    if crate::pixel_probe::enabled() {
+                        if let Ok((width, height, bytes)) = gl.read_rgba_bytes() {
+                            crate::pixel_probe::store_sampled_rgba(width, height, &bytes, 4, false);
+                        }
+                    }
                 }
 
                 gl_ctx.swap_buffers();
@@ -628,6 +639,107 @@ mod wgpu_backend {
                 self.wgpu_ctx.set_scale(self.scale_factor);
             }
         }
+
+        fn capture_pixel_probe(&mut self) {
+            if !crate::pixel_probe::enabled() {
+                return;
+            }
+            let width = 128_u32;
+            let height = 128_u32;
+            let format = self.surface_config.format;
+            let texture = self
+                .wgpu_ctx
+                .device()
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("sunmao-gui-pixel-probe"),
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                    view_formats: &[],
+                });
+            let probe_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.wgpu_ctx
+                .end_frame_with_clear(&probe_view, self.background);
+
+            let unpadded_bytes_per_row = width * 4;
+            let bytes_per_row =
+                unpadded_bytes_per_row.next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+            let buffer = self
+                .wgpu_ctx
+                .device()
+                .create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("sunmao-gui-pixel-probe-buffer"),
+                    size: u64::from(bytes_per_row) * u64::from(height),
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                });
+            let mut encoder =
+                self.wgpu_ctx
+                    .device()
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("sunmao-gui-pixel-probe-copy"),
+                    });
+            encoder.copy_texture_to_buffer(
+                wgpu::ImageCopyTexture {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::ImageCopyBuffer {
+                    buffer: &buffer,
+                    layout: wgpu::ImageDataLayout {
+                        offset: 0,
+                        bytes_per_row: Some(bytes_per_row),
+                        rows_per_image: Some(height),
+                    },
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            self.wgpu_ctx.queue().submit(Some(encoder.finish()));
+            let slice = buffer.slice(..);
+            let (sender, receiver) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |result| {
+                let _ = sender.send(result);
+            });
+            self.wgpu_ctx.device().poll(wgpu::Maintain::Wait);
+            if receiver.recv().ok().and_then(Result::ok).is_none() {
+                return;
+            }
+            let data = slice.get_mapped_range();
+            let bgra = matches!(
+                format,
+                wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+            );
+            let mut packed = Vec::with_capacity((width * height) as usize);
+            for row in 0..height as usize {
+                let start = row * bytes_per_row as usize;
+                let row_bytes = &data[start..start + unpadded_bytes_per_row as usize];
+                for pixel in row_bytes.chunks_exact(4) {
+                    packed.push(if bgra {
+                        u32::from_ne_bytes([pixel[2], pixel[1], pixel[0], 0])
+                    } else {
+                        u32::from_ne_bytes([pixel[0], pixel[1], pixel[2], 0])
+                    });
+                }
+            }
+            drop(data);
+            buffer.unmap();
+            crate::pixel_probe::store_sampled(width, height, |x, y| {
+                packed[(y * width + x) as usize]
+            });
+        }
     }
 
     impl<S: WgpuViewState> WindowHandler for WgpuHandler<S> {
@@ -648,6 +760,7 @@ mod wgpu_backend {
             self.wgpu_ctx.begin_frame();
             self.state.draw(&mut self.wgpu_ctx, self.width, self.height);
             self.wgpu_ctx.end_frame_with_clear(&view, self.background);
+            self.capture_pixel_probe();
 
             output.present();
         }

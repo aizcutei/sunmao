@@ -82,7 +82,11 @@ jobs:
           sudo apt-get install --yes \
             libasound2-dev \
             libegl1-mesa-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            libgl-dev \
             libgl1-mesa-dev \
+            libglx-dev \
             libgtk-3-dev \
             libvulkan-dev \
             libvulkan1 \
@@ -93,10 +97,15 @@ jobs:
             libxcb1-dev \
             libxcursor-dev \
             libxext-dev \
+            libxfixes-dev \
             libxi-dev \
+            libxinerama-dev \
             libxkbcommon-dev \
             libxkbcommon-x11-dev \
+            libxrandr-dev \
+            libxrender-dev \
             libxtst6 \
+            libxxf86vm-dev \
             mesa-vulkan-drivers \
             xvfb \
             xauth \
@@ -123,7 +132,9 @@ jobs:
         run: |
           set -euo pipefail
           tests=(
-            cargo test --locked
+            cargo
+            test
+            --locked
             -p clap_sys
             -p clap_rs
             -p vst3_sys
@@ -141,7 +152,8 @@ jobs:
             -p sunmao_syn_sine
           )
           if [ "${{ runner.os }}" = "Linux" ]; then
-            xvfb-run -a "${tests[@]}"
+            # `--` stops xvfb-run from consuming cargo's `-p` flags.
+            xvfb-run -a -- "${tests[@]}"
           else
             "${tests[@]}"
           fi
@@ -284,11 +296,14 @@ jobs:
         env:
           SUNMAO_GUI_RENDER_MS: "1500"
           SUNMAO_GUI_PIXEL_TIMEOUT_MS: "10000"
+          SUNMAO_GUI_PIXEL_PROBE: "1"
         run: |
           set -euo pipefail
           packager="target/debug/sunmao_packager${{ matrix.executable-suffix }}"
           runner="target/debug/sunmao_unittest_runner${{ matrix.executable-suffix }}"
           mkdir -p target/phase1-artifacts
+          echo "GUI/plugin artifacts in target/debug:"
+          ls -la target/debug | sed -n '1,80p' || true
           for binary in \
             "${{ matrix.gl-binary }}" \
             "${{ matrix.wgpu-binary }}" \
@@ -298,14 +313,15 @@ jobs:
             "${{ matrix.synth-webview-binary }}" \
             "${{ matrix.lpf-binary }}" \
             "${{ matrix.daw-binary }}"; do
-            if [ ! -f "$binary" ]; then
+            if [ ! -e "$binary" ]; then
               echo "GUI binary missing: $binary" >&2
-              ls -la target/debug || true
+              ls -la "$(dirname "$binary")" || true
               exit 1
             fi
+            ls -la "$binary"
           done
           if [ "${{ runner.os }}" = "Linux" ]; then
-            gui_runner=(xvfb-run -a env GDK_BACKEND=x11 WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 "$runner")
+            gui_runner=(xvfb-run -a -- env GDK_BACKEND=x11 WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 "$runner")
           else
             gui_runner=("$runner")
           fi
