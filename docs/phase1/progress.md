@@ -180,6 +180,19 @@
 - Local result: Gain GL VST3 recreate passed with the settle delay and in-process probe; runner tests, Windows MSVC target check, and format/diff gates passed.
 - Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
 
+### 2026-08-13 — hosted CI #7 Linux/X11 and Windows WebView fixes
+
+- Command/platform: push `6b9a8bc8761205bc8c7d151e34185bafefa0ea86` 后 GitHub Actions Phase 1 #7：https://github.com/aizcutei/sunmao/actions/runs/31671132074
+- Result:
+  - macOS native GUI step passed, including GL/WGPU/WebView and recreate; remaining packaging-helper/upload steps were still running.
+  - Linux `sunmao_view_baseview` compile failed in `baseview/src/x11/window.rs`: x11rb `get_input_focus()` and `reply()` now return different error types, so the earlier `.and_then()` no longer type-checks.
+  - Windows GL/WGPU paths passed far enough to reach WebView input; UI Automation found the slider at `(216,285)-(528,293)` while the requested horizontal drag was 18 px above it, so Gain stayed unchanged.
+- Fix:
+  - Convert both X11 cookie and reply errors independently with `.ok().and_then(|cookie| cookie.reply().ok())`.
+  - For a horizontal/vertical WebView slider within 32 px of the requested line, align the UI Automation drag to the slider center while preserving the requested movement axis.
+- Local result: Windows target checks, runner tests, GL/WGPU-enabled GUI fixture checks, and formatting/diff gates passed.
+- Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
+
 ## 待记录
 
 后续每次执行按以下格式追加：

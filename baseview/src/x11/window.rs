@@ -362,7 +362,8 @@ impl<'a> Window<'a> {
             .xcb_connection
             .conn
             .get_input_focus()
-            .and_then(|cookie| cookie.reply())
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
             .map(|reply| reply.focus == self.inner.window_id)
             .unwrap_or(false)
     }

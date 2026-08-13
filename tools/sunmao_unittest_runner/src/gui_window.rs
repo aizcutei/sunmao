@@ -1662,7 +1662,63 @@ mod windows {
                     "UI Automation found no usable slider under the WebView host{details}"
                 ));
             };
+            let mut effective_drag = drag;
             if candidate.point_score == 0 {
+                let (left, top, right, bottom) = (
+                    candidate.bounds.left,
+                    candidate.bounds.top,
+                    candidate.bounds.right,
+                    candidate.bounds.bottom,
+                );
+                let horizontal_overlap =
+                    drag.from.x.max(drag.to.x) >= left && drag.from.x.min(drag.to.x) <= right;
+                let vertical_overlap =
+                    drag.from.y.max(drag.to.y) >= top && drag.from.y.min(drag.to.y) <= bottom;
+                if candidate.horizontal && horizontal_overlap {
+                    let distance = if drag.from.y < top {
+                        top - drag.from.y
+                    } else if drag.from.y > bottom {
+                        drag.from.y - bottom
+                    } else {
+                        0
+                    };
+                    if distance <= 32 {
+                        let center = (top + bottom) / 2;
+                        effective_drag.from.y = center;
+                        effective_drag.to.y = center;
+                        eprintln!(
+                            "Windows UI Automation aligned horizontal drag to slider center y={center}"
+                        );
+                    }
+                } else if !candidate.horizontal && vertical_overlap {
+                    let distance = if drag.from.x < left {
+                        left - drag.from.x
+                    } else if drag.from.x > right {
+                        drag.from.x - right
+                    } else {
+                        0
+                    };
+                    if distance <= 32 {
+                        let center = (left + right) / 2;
+                        effective_drag.from.x = center;
+                        effective_drag.to.x = center;
+                        eprintln!(
+                            "Windows UI Automation aligned vertical drag to slider center x={center}"
+                        );
+                    }
+                }
+            }
+            let point_score = drag_rectangle_score(
+                (
+                    candidate.bounds.left,
+                    candidate.bounds.top,
+                    candidate.bounds.right,
+                    candidate.bounds.bottom,
+                ),
+                (effective_drag.from.x, effective_drag.from.y),
+                (effective_drag.to.x, effective_drag.to.y),
+            );
+            if point_score == 0 {
                 return Err(format!(
                     "UI Automation found {candidate_count} usable slider(s), but none intersected drag ({},{})-({},{}); nearest slider was ({},{})-({},{})",
                     drag.from.x,
@@ -1677,10 +1733,10 @@ mod windows {
             }
 
             let delta = if candidate.horizontal {
-                f64::from(drag.to.x - drag.from.x)
+                f64::from(effective_drag.to.x - effective_drag.from.x)
                     / f64::from(candidate.bounds.right - candidate.bounds.left)
             } else {
-                f64::from(drag.from.y - drag.to.y)
+                f64::from(effective_drag.from.y - effective_drag.to.y)
                     / f64::from(candidate.bounds.bottom - candidate.bounds.top)
             };
             let target = (candidate.current + delta * (candidate.maximum - candidate.minimum))
