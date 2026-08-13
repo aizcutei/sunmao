@@ -2602,6 +2602,8 @@ mod macos {
         if bounds.size.width <= 0.0 || bounds.size.height <= 0.0 {
             return Err("macOS plugin surface bounds are empty".into());
         }
+        let display_selector = sel_registerName(b"displayIfNeeded\0".as_ptr().cast());
+        msg_send_void(surface, display_selector);
         let bitmap_selector =
             sel_registerName(b"bitmapImageRepForCachingDisplayInRect:\0".as_ptr().cast());
         let rep = msg_send_rect(surface, bitmap_selector, bounds);

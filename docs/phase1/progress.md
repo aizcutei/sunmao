@@ -138,6 +138,19 @@
 - Local result: macOS `cargo test --locked`（backend_clap/backend_vst3、view_baseview、runner、gain/sine）通过；Windows MSVC target `cargo check --locked` 的 runner、view_baseview、Gain GL/WGPU 通过。
 - Unresolved: 本轮修复尚未经 hosted CI 验证；不能把 Phase 1 标为完成。
 
+### 2026-08-13 — hosted CI #4 失败与诊断增强
+
+- Command/platform: push `0a625d9a21f7b5c7bfdfcf9db874ec46f23708cd` 后 GitHub Actions Phase 1 #4：https://github.com/aizcutei/sunmao/actions/runs/31665587024
+- Result:
+  - Linux：metadata/fmt 通过，逐 package `Test format adapters and host` 仍退出 101；failure artifact 已生成，但 GitHub artifact download 需要认证，当前环境无法读取其中的 `format-tests.log`。
+  - macOS：前置 tests/build/package 通过，GUI 步骤仍约 44 秒失败。
+  - Windows：前置 tests/build/package 通过，GUI 步骤约 1 秒失败。
+- Follow-up:
+  - GUI shell 为失败命令写出 GitHub error annotation（包含失败日志摘要）；Linux package test 失败 annotation 现在包含具体 package 名和退出码。
+  - macOS AppKit bitmap fallback 在 capture 前调用 `displayIfNeeded`，覆盖 WebView/子视图尚未刷新的情况。
+- Local result: macOS runner/view_baseview tests、Windows MSVC target check、format/diff gates 通过。
+- Unresolved: 仍缺具体 hosted Linux package 和 Windows/macOS GUI error 文本；Phase 1 未完成。
+
 ## 待记录
 
 后续每次执行按以下格式追加：
