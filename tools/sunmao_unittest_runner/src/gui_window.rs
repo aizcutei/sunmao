@@ -490,6 +490,25 @@ pub fn initialize_platform() -> Result<(), String> {
             if application.is_null() {
                 return Err("NSApplication initialization failed".into());
             }
+            // Hosted macOS runners start this binary as a command-line tool.
+            // Without a regular activation policy the window is not composited
+            // and pixel capture sees an empty or uniform frame.
+            let policy_selector = sel_registerName(b"setActivationPolicy:\0".as_ptr() as *const _);
+            let set_policy: unsafe extern "C" fn(*mut c_void, *mut c_void, isize) -> bool =
+                std::mem::transmute(objc_msgSend as *const c_void);
+            const NS_APPLICATION_ACTIVATION_POLICY_REGULAR: isize = 0;
+            let _ = set_policy(
+                application,
+                policy_selector,
+                NS_APPLICATION_ACTIVATION_POLICY_REGULAR,
+            );
+            let finish_selector = sel_registerName(b"finishLaunching\0".as_ptr() as *const _);
+            msg_send_void(application, finish_selector);
+            let activate_selector =
+                sel_registerName(b"activateIgnoringOtherApps:\0".as_ptr() as *const _);
+            let activate: unsafe extern "C" fn(*mut c_void, *mut c_void, bool) =
+                std::mem::transmute(objc_msgSend as *const c_void);
+            activate(application, activate_selector, true);
         }
         Ok(())
     }
@@ -796,7 +815,7 @@ mod windows {
     }
 
     fn host_window_style() -> u32 {
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN | WS_VISIBLE
     }
 
     pub(super) unsafe fn create_window(
@@ -2735,6 +2754,9 @@ mod macos {
         );
         let sel_content_view = sel_registerName(b"contentView\0".as_ptr() as *const _);
         let sel_order_front = sel_registerName(b"orderFront:\0".as_ptr() as *const _);
+        let sel_make_key = sel_registerName(b"makeKeyAndOrderFront:\0".as_ptr() as *const _);
+        let sel_order_front_regardless =
+            sel_registerName(b"orderFrontRegardless\0".as_ptr() as *const _);
         let sel_set_title = sel_registerName(b"setTitle:\0".as_ptr() as *const _);
         let sel_set_delegate = sel_registerName(b"setDelegate:\0".as_ptr() as *const _);
         let sel_retain = sel_registerName(b"retain\0".as_ptr() as *const _);
@@ -2793,6 +2815,8 @@ mod macos {
             msg_send1(window, sel_set_delegate, delegate);
         }
 
+        msg_send1(window, sel_make_key, ptr::null_mut());
+        msg_send_void(window, sel_order_front_regardless);
         msg_send1(window, sel_order_front, ptr::null_mut());
 
         Ok(PluginGuiWindow {

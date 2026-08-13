@@ -81,14 +81,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes \
             libasound2-dev \
+            libegl1-mesa-dev \
             libgl1-mesa-dev \
+            libgtk-3-dev \
+            libvulkan-dev \
+            libvulkan1 \
+            libwayland-dev \
             libwebkit2gtk-4.1-dev \
             libx11-dev \
             libx11-xcb-dev \
+            libxcb1-dev \
             libxcursor-dev \
+            libxext-dev \
             libxi-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
             libxtst6 \
-            libvulkan1 \
             mesa-vulkan-drivers \
             xvfb \
             xauth \
@@ -111,26 +119,32 @@ jobs:
           git diff --check
 
       - name: Test format adapters and host
-        run: >-
-          cargo test --locked
-          -p clap_sys
-          -p clap_rs
-          -p vst3_sys
-          -p vst3_rs
-          -p sunmao_core
-          -p sunmao_macros
-          -p sunmao_backend_clap
-          -p sunmao_backend_vst3
-          -p sunmao_packager
-          -p sunmao_gui
-          -p sunmao_gui_wgpu
-          -p sunmao_view_baseview
-          -p sunmao_unittest_runner
-          -p sunmao_fx_gain
-          -p sunmao_syn_sine
-          -p sunmao_syn_sine_gui_gl
-          -p sunmao_syn_sine_gui_wgpu
-          -p sunmao_syn_sine_gui_webview
+        shell: bash
+        run: |
+          set -euo pipefail
+          tests=(
+            cargo test --locked
+            -p clap_sys
+            -p clap_rs
+            -p vst3_sys
+            -p vst3_rs
+            -p sunmao_core
+            -p sunmao_macros
+            -p sunmao_backend_clap
+            -p sunmao_backend_vst3
+            -p sunmao_packager
+            -p sunmao_gui
+            -p sunmao_gui_wgpu
+            -p sunmao_view_baseview
+            -p sunmao_unittest_runner
+            -p sunmao_fx_gain
+            -p sunmao_syn_sine
+          )
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            xvfb-run -a "${tests[@]}"
+          else
+            "${tests[@]}"
+          fi
 
       - name: Test standalone runtime (non-blocking follow-up)
         continue-on-error: true
@@ -267,10 +281,29 @@ jobs:
 
       - name: Package and exercise native GUI backends
         shell: bash
+        env:
+          SUNMAO_GUI_RENDER_MS: "1500"
+          SUNMAO_GUI_PIXEL_TIMEOUT_MS: "10000"
         run: |
           set -euo pipefail
           packager="target/debug/sunmao_packager${{ matrix.executable-suffix }}"
           runner="target/debug/sunmao_unittest_runner${{ matrix.executable-suffix }}"
+          mkdir -p target/phase1-artifacts
+          for binary in \
+            "${{ matrix.gl-binary }}" \
+            "${{ matrix.wgpu-binary }}" \
+            "${{ matrix.webview-binary }}" \
+            "${{ matrix.synth-gl-binary }}" \
+            "${{ matrix.synth-wgpu-binary }}" \
+            "${{ matrix.synth-webview-binary }}" \
+            "${{ matrix.lpf-binary }}" \
+            "${{ matrix.daw-binary }}"; do
+            if [ ! -f "$binary" ]; then
+              echo "GUI binary missing: $binary" >&2
+              ls -la target/debug || true
+              exit 1
+            fi
+          done
           if [ "${{ runner.os }}" = "Linux" ]; then
             gui_runner=(xvfb-run -a env GDK_BACKEND=x11 WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 "$runner")
           else

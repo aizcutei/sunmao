@@ -1361,8 +1361,16 @@ fn cmd_gui(_args: &[String]) -> bool {
 
 // ---- GUI Test Command ----
 
+fn env_duration_ms(name: &str, default_ms: u64) -> std::time::Duration {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .map(std::time::Duration::from_millis)
+        .unwrap_or_else(|| std::time::Duration::from_millis(default_ms))
+}
+
 fn gui_test_render_delay(plugin: &mut dyn HostPlugin) -> Result<(), String> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+    let deadline = std::time::Instant::now() + env_duration_ms("SUNMAO_GUI_RENDER_MS", 500);
     while std::time::Instant::now() < deadline {
         plugin.service_host_requests()?;
         if !gui_window::PluginGuiWindow::pump_events() {
@@ -1377,7 +1385,7 @@ fn gui_test_verify_pixels(
     plugin: &mut dyn HostPlugin,
     window: &gui_window::PluginGuiWindow,
 ) -> Result<gui_window::PixelEvidence, String> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let deadline = std::time::Instant::now() + env_duration_ms("SUNMAO_GUI_PIXEL_TIMEOUT_MS", 3000);
     loop {
         match window.verify_non_uniform_pixels() {
             Ok(evidence) => return Ok(evidence),

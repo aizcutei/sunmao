@@ -95,6 +95,20 @@
   - Linux native GUI 与 Windows native GUI 只能由 hosted jobs 证明。
   - 未把 Phase 1 标为完成。
 
+### 2026-08-13 — hosted CI #1 失败与修复
+
+- Command/platform: push `0b0319ee0891dc8bd2b4d1e645b74aa00f159506` 后 GitHub Actions Phase 1 #1：https://github.com/aizcutei/sunmao/actions/runs/31660899211
+- Result: 三个 native jobs 均失败，不能将 Phase 1 标为完成。
+  - Linux：`Test format adapters and host` 退出 101（cargo test/compile）。
+  - macOS：process/package 已过，倒在 native GUI 步骤。
+  - Windows：process/package 已过，倒在 native GUI 步骤。
+- 修复：
+  - Linux apt 补 `libxkbcommon*`、`libgtk-3-dev`、`libwayland-dev`、`libxext-dev` 等；Linux unit tests 在 Xvfb 下运行；GUI example crates 从无测试的 cargo test 列表移除，改由后续 build 编译。
+  - macOS runner：`NSApplication` 设为 Regular activation policy 并 activate，避免 hosted 命令行进程窗口不被合成。
+  - GUI 步骤检查二进制存在；hosted 拉长 render/pixel timeout。
+  - Windows host window 增加 `WS_VISIBLE`。
+- Unresolved: 修复尚未经新的 hosted run 验证。
+
 ## 待记录
 
 后续每次执行按以下格式追加：
