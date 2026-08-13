@@ -136,6 +136,13 @@ impl WebView {
             gtk::main_iteration_do(false);
         }
     }
+
+    pub fn pump_platform_events() {
+        #[cfg(target_os = "linux")]
+        while gtk::events_pending() {
+            gtk::main_iteration_do(false);
+        }
+    }
 }
 
 fn bounds(width: f64, height: f64) -> Rect {

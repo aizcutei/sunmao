@@ -1037,6 +1037,7 @@ mod webview_backend {
                     // the parent X11 window. This ordering is required by
                     // WebKitGTK during close/recreate.
                     self.webview.take();
+                    WebView::pump_platform_events();
                 }
                 Event::Window(WindowEvent::Resized(info)) => {
                     self.width = info.logical_size().width as f32;

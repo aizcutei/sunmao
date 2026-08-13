@@ -257,6 +257,16 @@
 - Local result: Windows target checks, baseview/view/runner tests and formatting/diff gates passed.
 - Unresolved: Linux WebView close/recreate still needs hosted validation after the cleanup change; Phase 1 remains incomplete.
 
+### 2026-08-13 — hosted CI #15 WGPU cleanup and X11 event draining
+
+- Command/platform: push `10164d85b8e7791e21b43bf759e8ffa360ff2647` 后 GitHub Actions Phase 1 #15：https://github.com/aizcutei/sunmao/actions/runs/31676802616
+- Result:
+  - Windows reached and completed the WGPU CLAP GUI lifecycle, then still exited 139 during final cleanup.
+  - Linux still reproduced WebKitGTK/X11 close-recreate instability; macOS GUI remained green through the matrix.
+- Fix: after dropping a WebView on `WillClose`, explicitly drain platform WebView events before baseview destroys the X11 parent; retain the no-legacy-WGL change so WGPU cleanup has no stale GL context.
+- Local result: baseview all-features, view-baseview WebView, runner tests, Windows target checks, and formatting/diff gates passed.
+- Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
+
 ## 待记录
 
 后续每次执行按以下格式追加：
