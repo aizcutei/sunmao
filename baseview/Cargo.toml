@@ -18,7 +18,7 @@ license = "MIT OR Apache-2.0"
 default = []
 opengl = ["uuid", "x11/glx"]
 metal = []
-webview = ["dep:wry", "dep:gtk"]
+webview = ["dep:wry", "dep:gtk", "dep:gdk"]
 
 [dependencies]
 keyboard-types = { version = "0.6.1", default-features = false }
@@ -30,6 +30,7 @@ x11rb = { version = "0.13.0", features = ["cursor", "resource_manager", "allow-u
 x11 = { version = "2.21", features = ["xlib", "xlib_xcb"] }
 nix = "0.22.0"
 gtk = { version = "0.18", features = ["unsafe-assume-initialized"], optional = true }
+gdk = { version = "0.18", features = ["unsafe-assume-initialized"], optional = true }
 
 [target.'cfg(target_os="windows")'.dependencies]
 winapi = { version = "0.3.8", features = ["libloaderapi", "winuser", "windef", "minwindef", "guiddef", "combaseapi", "wingdi", "errhandlingapi", "ole2", "oleidl", "shellapi", "winerror"] }

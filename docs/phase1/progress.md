@@ -231,6 +231,14 @@
 - Local result: `baseview --all-features`, view-baseview, runner tests and formatting/diff gates passed.
 - Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
 
+### 2026-08-13 — hosted CI #12 GDK initialization assertion
+
+- Command/platform: push `6fb253d8fc8b0ac9647b3f82dc2288f6bf7fae81` 后 GitHub Actions Phase 1 #12：https://github.com/aizcutei/sunmao/actions/runs/31674923751
+- Result: Linux tests/builds passed; Linux WebView failed at first creation because the raw GTK initialization did not mark the separately compiled GDK runtime as initialized (`GDK has not been initialized`). macOS/Windows were still progressing successfully.
+- Fix: enable `unsafe-assume-initialized` on the direct Linux GDK dependency as well as GTK; raw `gtk_init_check()` remains the single underlying initialization.
+- Local result: baseview all-features, view-baseview, runner tests and formatting/diff gates passed.
+- Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
+
 ## 待记录
 
 后续每次执行按以下格式追加：
