@@ -247,6 +247,16 @@
 - Local result: baseview all-features, view-baseview WebView, runner tests and formatting/diff gates passed.
 - Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
 
+### 2026-08-13 — hosted CI #14 Windows WGPU cleanup and Linux X11 lifecycle
+
+- Command/platform: push `a7451af39db5496f642e55c1d7d135653c672053` 后 GitHub Actions Phase 1 #14：https://github.com/aizcutei/sunmao/actions/runs/31675953940
+- Result:
+  - Windows GL/WGPU GUI rendered and completed its WGPU CLAP lifecycle, then exited 139 during cleanup; the retained legacy WGL context created during fallback was unsafe to tear down beside the WGPU surface.
+  - Linux WebView still reported an X11 `BadWindow` during close/recreate despite dropping the WebView on `WillClose`; the GTK frame-clock warning remained.
+- Fix: remove the legacy WGL context fallback. When modern WGL is unavailable, `BaseviewView` now receives no GL context and directly selects its WGPU compatibility handler, avoiding a stale GL context during WGPU cleanup.
+- Local result: Windows target checks, baseview/view/runner tests and formatting/diff gates passed.
+- Unresolved: Linux WebView close/recreate still needs hosted validation after the cleanup change; Phase 1 remains incomplete.
+
 ## 待记录
 
 后续每次执行按以下格式追加：

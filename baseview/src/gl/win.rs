@@ -84,59 +84,6 @@ extern "C" {
     static __ImageBase: IMAGE_DOS_HEADER;
 }
 
-unsafe fn create_legacy_context(hwnd: HWND, config: &GlConfig) -> Result<GlContext, GlError> {
-    let hdc = GetDC(hwnd);
-    if hdc.is_null() {
-        return Err(GlError::CreationFailed(()));
-    }
-
-    let pfd = PIXELFORMATDESCRIPTOR {
-        nSize: std::mem::size_of::<PIXELFORMATDESCRIPTOR>() as u16,
-        nVersion: 1,
-        dwFlags: PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,
-        iPixelType: PFD_TYPE_RGBA,
-        cColorBits: u16::from(config.red_bits)
-            .saturating_add(u16::from(config.green_bits))
-            .saturating_add(u16::from(config.blue_bits))
-            .clamp(24, u16::from(u8::MAX)) as u8,
-        cAlphaBits: config.alpha_bits,
-        cDepthBits: config.depth_bits,
-        cStencilBits: config.stencil_bits,
-        iLayerType: PFD_MAIN_PLANE,
-        ..std::mem::zeroed()
-    };
-    let pixel_format = ChoosePixelFormat(hdc, &pfd);
-    if pixel_format == 0 || SetPixelFormat(hdc, pixel_format, &pfd) == 0 {
-        ReleaseDC(hwnd, hdc);
-        return Err(GlError::CreationFailed(()));
-    }
-
-    let hglrc = wglCreateContext(hdc);
-    if hglrc.is_null() || wglMakeCurrent(hdc, hglrc) == 0 {
-        if !hglrc.is_null() {
-            wglDeleteContext(hglrc);
-        }
-        ReleaseDC(hwnd, hdc);
-        return Err(GlError::CreationFailed(()));
-    }
-
-    let gl_library = LoadLibraryA(b"opengl32.dll\0".as_ptr() as *const i8);
-    if gl_library.is_null() {
-        wglMakeCurrent(hdc, std::ptr::null_mut());
-        wglDeleteContext(hglrc);
-        ReleaseDC(hwnd, hdc);
-        return Err(GlError::CreationFailed(()));
-    }
-
-    wglMakeCurrent(hdc, std::ptr::null_mut());
-    Ok(GlContext {
-        hwnd,
-        hdc,
-        hglrc,
-        gl_library,
-    })
-}
-
 impl GlContext {
     pub unsafe fn create(parent: &RawWindowHandle, config: GlConfig) -> Result<GlContext, GlError> {
         let handle = if let RawWindowHandle::Win32(handle) = parent {
@@ -273,9 +220,7 @@ impl GlContext {
         let (Some(wgl_choose_pixel_format_arb), Some(wgl_create_context_attribs_arb)) =
             (wgl_choose_pixel_format_arb, wgl_create_context_attribs_arb)
         else {
-            // Software/basic Windows drivers may expose only legacy WGL
-            // entry points. The renderer also supports GLSL 1.20.
-            return create_legacy_context(hwnd, &config);
+            return Err(GlError::VersionNotSupported);
         };
 
         // Create actual context
@@ -318,7 +263,7 @@ impl GlContext {
             || pixel_format == 0
         {
             ReleaseDC(hwnd, hdc);
-            return create_legacy_context(hwnd, &config);
+            return Err(GlError::CreationFailed(()));
         }
 
         let mut pfd: PIXELFORMATDESCRIPTOR = std::mem::zeroed();
@@ -331,7 +276,7 @@ impl GlContext {
             || SetPixelFormat(hdc, pixel_format, &pfd) == 0
         {
             ReleaseDC(hwnd, hdc);
-            return create_legacy_context(hwnd, &config);
+            return Err(GlError::CreationFailed(()));
         }
 
         let profile_mask = match config.profile {
@@ -347,17 +292,7 @@ impl GlContext {
             0
         ];
 
-        let hglrc = {
-            let hglrc =
-                wgl_create_context_attribs_arb(hdc, std::ptr::null_mut(), ctx_attribs.as_ptr());
-            if hglrc.is_null() {
-                // The pixel format is already selected, so a legacy context
-                // can still be created without calling SetPixelFormat twice.
-                wglCreateContext(hdc)
-            } else {
-                hglrc
-            }
-        };
+        let hglrc = wgl_create_context_attribs_arb(hdc, std::ptr::null_mut(), ctx_attribs.as_ptr());
         if hglrc.is_null() {
             ReleaseDC(hwnd, hdc);
             return Err(GlError::CreationFailed(()));
