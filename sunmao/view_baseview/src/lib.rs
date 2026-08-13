@@ -988,7 +988,7 @@ mod webview_backend {
                         WebviewHandlerState::Ready(WebviewHandler {
                             state,
                             context,
-                            webview,
+                            webview: Some(webview),
                             receiver,
                             width: config.width as f32,
                             height: config.height as f32,
@@ -1014,7 +1014,7 @@ mod webview_backend {
     struct WebviewHandler<S: WebViewState> {
         state: S,
         context: Arc<dyn ViewContext>,
-        webview: WebView,
+        webview: Option<WebView>,
         receiver: mpsc::Receiver<String>,
         width: f32,
         height: f32,
@@ -1022,7 +1022,9 @@ mod webview_backend {
 
     impl<S: WebViewState> WindowHandler for WebviewHandler<S> {
         fn on_frame(&mut self, _window: &mut Window) {
-            self.webview.poll_events();
+            if let Some(webview) = self.webview.as_ref() {
+                webview.poll_events();
+            }
             while let Ok(msg) = self.receiver.try_recv() {
                 self.state.on_message(&msg, self.context.as_ref());
             }
@@ -1030,12 +1032,20 @@ mod webview_backend {
 
         fn on_event(&mut self, _window: &mut Window, event: Event) -> EventStatus {
             match event {
+                Event::Window(WindowEvent::WillClose) => {
+                    // Drop WebView child resources before baseview destroys
+                    // the parent X11 window. This ordering is required by
+                    // WebKitGTK during close/recreate.
+                    self.webview.take();
+                }
                 Event::Window(WindowEvent::Resized(info)) => {
                     self.width = info.logical_size().width as f32;
                     self.height = info.logical_size().height as f32;
-                    if let Err(error) = self.webview.set_size(self.width as f64, self.height as f64)
-                    {
-                        eprintln!("Failed to resize WebView: {error}");
+                    if let Some(webview) = self.webview.as_ref() {
+                        if let Err(error) = webview.set_size(self.width as f64, self.height as f64)
+                        {
+                            eprintln!("Failed to resize WebView: {error}");
+                        }
                     }
                     self.state.on_resize(self.width, self.height);
                 }

@@ -239,6 +239,14 @@
 - Local result: baseview all-features, view-baseview, runner tests and formatting/diff gates passed.
 - Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
 
+### 2026-08-13 — hosted CI #13 Linux WebKit close ordering
+
+- Command/platform: push `5dd3e78a751ee51588b0e81164d19d8f7b584ea4` 后 GitHub Actions Phase 1 #13：https://github.com/aizcutei/sunmao/actions/runs/31675432896
+- Result: Linux tests/builds and initial WebView pixel/input passed, but close/recreate produced an X11 `BadWindow` while the old WebKit child was being destroyed after its parent window.
+- Fix: make `WebviewHandler` own the WebView as `Option<WebView>` and drop it on `WindowEvent::WillClose`, before baseview tears down the parent X11 window.
+- Local result: baseview all-features, view-baseview WebView, runner tests and formatting/diff gates passed.
+- Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
+
 ## 待记录
 
 后续每次执行按以下格式追加：
