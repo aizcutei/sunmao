@@ -40,7 +40,8 @@
 - Hosted CI #16（`048c110`）：失败，https://github.com/aizcutei/sunmao/actions/runs/31679754064
 - #16 里 Windows 首次通过全部 GUI backends 步骤；失败发生在 "Exercise repository packaging helper"：`tools/package_examples.sh` 头部 Usage 注释缺 `#`，脚本无参自递归（fork bomb），拖死 runner（Windows "lost communication"，macOS 卡 36 分钟）。已修复并加 step 级 timeout。
 - Hosted CI #17（`f5a0938`）：macOS 与 Windows job 首次全绿（含 packaging helper）；Linux 卡死在 GUI backends 步骤——`048c110` 引入的无界 GTK drain 循环（WebKitGTK frame clock 持续 re-arm，`events_pending()` 永不为空）。已改为 100ms 时间预算的有界 drain。
-- Hosted CI #18（`33b23dd`）：macOS + Windows 继续全绿；Linux GUI backends 步骤仍挂起（30 分钟+），说明 hang 不止在 drain（疑似 WebView close/recreate 深处）。因无 repo admin 权限拿不到 job log，改为给 Linux GUI 调用加 3 分钟 `timeout` + 阶段化打点，让 ::error 注解暴露卡点；**Phase 1 仍未完成**。
+- Hosted CI #18（`33b23dd`）：macOS + Windows 继续全绿；Linux GUI backends 步骤仍挂起（30 分钟+），说明 hang 不止在 drain。给 Linux GUI 调用加 3 分钟 `timeout` + 阶段化打点后：
+- Hosted CI #19（`041741c`）：注解定位到卡点——`SunMao Gain WebView (VST3)` 的 recreate 路径，`Reopening GUI...` 后卡死。根因：GTK/WebKitGTK 有永久线程亲和性，baseview 每次 open_gui 都新建 event 线程，第二次在新线程上创建 WebView 触发 WebKit 同步 IPC 死锁（伴随 Gdk frame-clock CRITICAL）。修复：Linux 上引入进程级专用 GTK 线程，所有 wry WebView 的创建/操作/销毁经 channel 编组到该线程执行，公开 `WebView` 变为代理（带 10s 应答超时防新死锁）；**Phase 1 仍未完成**。
 - `cargo metadata --locked --no-deps`、`cargo fmt --all -- --check`、`git diff --check` 已在本机通过。
 - 默认 VST3/CLAP 二进制经 `nm` 确认无 `RustAUFactory|au_component_factory|SunmaoAUCocoa`。
 
@@ -56,7 +57,7 @@
 | macOS GUI | 本机 GL/WGPU/WebView × VST3/CLAP 全绿，含 520x220、输入、gesture、close/recreate | `.phase1-run.gui.9d55cbf2/*.gui-test.log`（未跟踪） | hosted macOS job |
 | Linux GUI | 未在本机运行；macOS cross 缺少 X11 sysroot | 无 Ubuntu hosted 证据 | Ubuntu hosted job |
 | Windows GUI | 仅有 x86_64 MSVC cross-check，无原生 GUI runtime | 无 Windows hosted 证据 | Windows hosted job |
-| hosted CI | #18 macOS+Windows 全绿；Linux GUI 步骤仍挂起，已加 per-test timeout 以定位 | [run 31766414064](https://github.com/aizcutei/sunmao/actions/runs/31766414064) | 等待新 run 的 ::error 注解 |
+| hosted CI | #19 定位 Linux WebView recreate 死锁（GTK 线程亲和性），已引入专用 GTK 线程待复验 | [run 31768164175](https://github.com/aizcutei/sunmao/actions/runs/31768164175) | 等待新 run |
 
 ## 当前验证摘要
 

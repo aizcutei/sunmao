@@ -298,6 +298,15 @@
 - Local result: runner builds; fmt/diff gates pass.
 - Unresolved: actual Linux hang not yet identified; Phase 1 remains incomplete.
 
+### 2026-08-14 — hosted CI #19 Linux WebView recreate deadlock; dedicated GTK thread
+
+- Command/platform: push `041741c` 后 GitHub Actions Phase 1 #19：https://github.com/aizcutei/sunmao/actions/runs/31768164175
+- Result: macOS and Windows green again. Linux failed fast as designed (exit 124), and the annotation pinpointed the hang: `SunMao Gain WebView (VST3)` passed pixels, input, and host gestures, closed cleanly, then hung after `Reopening GUI...` — i.e. inside the second WebView creation.
+- Root cause: GTK/WebKitGTK are permanently bound to the first thread that initializes GTK. baseview spawns a fresh event thread per `open_gui`, so recreating a WebView from the second thread deadlocks inside WebKit's synchronous UI-process IPC (the earlier `Gdk-CRITICAL frame_clock` warning was the symptom). The previous `gtk::set_initialized` workaround only silenced the assertion; it could not give the new thread GTK affinity.
+- Fix: `baseview::WebView` on Linux now spawns one process-lifetime GTK thread that owns every `wry::WebView`; create/load/eval/resize/destroy are marshaled over a channel with a 10s reply timeout, the public type is a proxy, and `Drop` blocks until WebKit teardown ran so the X11 parent may be destroyed immediately afterwards. macOS/Windows keep the direct path.
+- Local result: baseview + view_baseview all-features build/test, fmt/diff gates, and a macOS WebView gui-test (including recreate) pass.
+- Unresolved: hosted Linux validation of the GTK-thread design; Phase 1 remains incomplete.
+
 ## 待记录
 
 后续每次执行按以下格式追加：
