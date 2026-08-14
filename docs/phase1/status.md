@@ -38,7 +38,8 @@
 - Hosted CI #14（`a7451af`）：失败，https://github.com/aizcutei/sunmao/actions/runs/31675953940
 - Hosted CI #15（`10164d8`）：被 #16 push 取消，https://github.com/aizcutei/sunmao/actions/runs/31676802616
 - Hosted CI #16（`048c110`）：失败，https://github.com/aizcutei/sunmao/actions/runs/31679754064
-- #16 里 Windows 首次通过全部 GUI backends 步骤；失败发生在 "Exercise repository packaging helper"：`tools/package_examples.sh` 头部 Usage 注释缺 `#`，脚本无参自递归（fork bomb），拖死 runner（Windows "lost communication"，macOS 卡 36 分钟）。已修复并加 step 级 timeout；**Phase 1 仍未完成**。
+- #16 里 Windows 首次通过全部 GUI backends 步骤；失败发生在 "Exercise repository packaging helper"：`tools/package_examples.sh` 头部 Usage 注释缺 `#`，脚本无参自递归（fork bomb），拖死 runner（Windows "lost communication"，macOS 卡 36 分钟）。已修复并加 step 级 timeout。
+- Hosted CI #17（`f5a0938`）：macOS 与 Windows job 首次全绿（含 packaging helper）；Linux 卡死在 GUI backends 步骤——`048c110` 引入的无界 GTK drain 循环（WebKitGTK frame clock 持续 re-arm，`events_pending()` 永不为空）。已改为 100ms 时间预算的有界 drain；**Phase 1 仍未完成**。
 - `cargo metadata --locked --no-deps`、`cargo fmt --all -- --check`、`git diff --check` 已在本机通过。
 - 默认 VST3/CLAP 二进制经 `nm` 确认无 `RustAUFactory|au_component_factory|SunmaoAUCocoa`。
 
@@ -54,7 +55,7 @@
 | macOS GUI | 本机 GL/WGPU/WebView × VST3/CLAP 全绿，含 520x220、输入、gesture、close/recreate | `.phase1-run.gui.9d55cbf2/*.gui-test.log`（未跟踪） | hosted macOS job |
 | Linux GUI | 未在本机运行；macOS cross 缺少 X11 sysroot | 无 Ubuntu hosted 证据 | Ubuntu hosted job |
 | Windows GUI | 仅有 x86_64 MSVC cross-check，无原生 GUI runtime | 无 Windows hosted 证据 | Windows hosted job |
-| hosted CI | #16 失败（packaging helper fork bomb，已修复待复验）；Windows GUI backends 首次全绿 | [run 31679754064](https://github.com/aizcutei/sunmao/actions/runs/31679754064) | 等待新 run |
+| hosted CI | #17 macOS+Windows 全绿；Linux 卡死于无界 GTK drain（已修复待复验） | [run 31764419303](https://github.com/aizcutei/sunmao/actions/runs/31764419303) | 等待新 run |
 
 ## 当前验证摘要
 

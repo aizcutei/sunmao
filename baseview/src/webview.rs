@@ -131,16 +131,22 @@ impl WebView {
     }
 
     pub fn poll_events(&self) {
-        #[cfg(target_os = "linux")]
-        while gtk::events_pending() {
-            gtk::main_iteration_do(false);
-        }
+        Self::pump_platform_events();
     }
 
     pub fn pump_platform_events() {
         #[cfg(target_os = "linux")]
-        while gtk::events_pending() {
-            gtk::main_iteration_do(false);
+        {
+            // WebKitGTK keeps re-arming frame-clock sources, so draining until
+            // `events_pending()` is false can spin forever. Bound the drain by
+            // wall-clock time; pending destroy work is still delivered.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+            while gtk::events_pending() {
+                gtk::main_iteration_do(false);
+                if std::time::Instant::now() >= deadline {
+                    break;
+                }
+            }
         }
     }
 }

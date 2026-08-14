@@ -278,6 +278,17 @@
 - Local result: `tools/package_examples.sh --debug --test` now completes in ~25s with all 16 bundles passing 16/16 runner tests.
 - Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
 
+### 2026-08-14 — hosted CI #17 unbounded Linux GTK drain
+
+- Command/platform: push `f5a0938` 后 GitHub Actions Phase 1 #17：https://github.com/aizcutei/sunmao/actions/runs/31764419303
+- Result:
+  - macOS and Windows jobs are fully green for the first time, including the repaired packaging helper.
+  - Linux hung inside "Package and exercise native GUI backends" (30+ minutes; run #16 showed the same step hanging 70 minutes before cancellation).
+- Root cause: the GTK event drain added in `048c110` loops `while gtk::events_pending()`, but WebKitGTK keeps re-arming frame-clock sources, so the queue never empties and the WillClose path spins forever. Runs #14/#15 (without the drain) failed the same step in ~30 seconds with `BadWindow` instead.
+- Fix: bound the drain (`poll_events` / `pump_platform_events`) with a 100ms wall-clock budget; pending WebKit destroy work is still delivered before the X11 parent is torn down.
+- Local result: fmt/diff gates and `baseview --all-features` tests pass (the Linux branch itself only compiles on Linux hosts).
+- Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
+
 ## 待记录
 
 后续每次执行按以下格式追加：
