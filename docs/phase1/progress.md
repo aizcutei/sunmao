@@ -289,6 +289,15 @@
 - Local result: fmt/diff gates and `baseview --all-features` tests pass (the Linux branch itself only compiles on Linux hosts).
 - Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
 
+### 2026-08-14 — hosted CI #18 Linux GUI hang persists; add per-test timeout
+
+- Command/platform: push `33b23dd` 后 GitHub Actions Phase 1 #18：https://github.com/aizcutei/sunmao/actions/runs/31766414064
+- Result: macOS and Windows stayed fully green; Linux still hung in "Package and exercise native GUI backends" (30+ minutes) even with the bounded GTK drain, so the hang is deeper than the drain loop — most likely inside the WebView close/recreate path that previously crashed with `BadWindow` before ever being reached.
+- Constraint: job logs require repo admin rights, so the only readable evidence is the `::error` annotations that echo each GUI test's log tail.
+- Fix (diagnostic): wrap each Linux GUI invocation in `timeout --signal=TERM --kill-after=15 180` and add phase markers around close/settle/reopen in the runner, so the next run's annotation shows the last completed phase instead of a silent 75-minute job timeout.
+- Local result: runner builds; fmt/diff gates pass.
+- Unresolved: actual Linux hang not yet identified; Phase 1 remains incomplete.
+
 ## 待记录
 
 后续每次执行按以下格式追加：

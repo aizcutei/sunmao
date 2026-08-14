@@ -1807,7 +1807,9 @@ fn cmd_gui_test(args: &[String]) -> bool {
     println!();
     println!("Recreating GUI...");
     plugin.close_gui();
+    println!("GUI closed; settling before recreate...");
     gui_test_settle_after_close();
+    println!("Reopening GUI...");
     match plugin.open_gui(&window) {
         Ok(()) => println!("GUI recreated successfully"),
         Err(error) => {

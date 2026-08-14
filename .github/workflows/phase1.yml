@@ -338,7 +338,10 @@ jobs:
             ls -la "$binary"
           done
           if [ "${{ runner.os }}" = "Linux" ]; then
-            gui_runner=(xvfb-run -a -- env GDK_BACKEND=x11 WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 "$runner")
+            # A single GUI lifecycle normally finishes in seconds. Kill hung
+            # invocations after 3 minutes so the ::error log tail shows the
+            # last completed phase instead of stalling the job for 75 minutes.
+            gui_runner=(timeout --signal=TERM --kill-after=15 180 xvfb-run -a -- env GDK_BACKEND=x11 WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 "$runner")
           else
             gui_runner=("$runner")
           fi
