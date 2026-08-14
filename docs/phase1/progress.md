@@ -315,6 +315,13 @@
 - Local result: macOS gui-test passes with the new coordinates (input, host gesture, recreate); fmt/diff gates pass.
 - Unresolved: hosted Linux validation of the remaining WebView fixtures; Phase 1 remains incomplete.
 
+### 2026-08-14 — hosted CI #21 all platforms green: Phase 1 gate met
+
+- Command/platform: push `885d2a5` 后 GitHub Actions Phase 1 #21：https://github.com/aizcutei/sunmao/actions/runs/31771576307
+- Result: macOS ARM64, Windows x86_64, and Ubuntu x86_64 hosted jobs all succeeded on the same commit — the first fully green run. Every gate passed: metadata/fmt, format adapter and host tests, realtime allocation matrix, packager + runner smoke tests, the full GL/WGPU/WebView × VST3/CLAP GUI matrix (pixels, input, host gestures, 520x220 resize, close/recreate) on Cocoa/Win32/X11, and the repository packaging helper.
+- Evidence/artifact: run #21 uploaded `phase1-macOS-ARM64` (30MB), `phase1-Windows-X64` (55MB), `phase1-Linux-X64` (545MB) containing bundles, runner test/gui-test logs, and reports. Artifact download requires repository credentials; sizes and successful upload steps verified via the public API.
+- Unresolved: none for the Phase 1 gate. `docs/phase1/status.md` now records Phase 1 as complete.
+
 ## 待记录
 
 后续每次执行按以下格式追加：

@@ -1,6 +1,6 @@
 # Phase 1 状态
 
-更新时间：2026-08-13
+更新时间：2026-08-14
 
 ## 目标与边界
 
@@ -42,7 +42,8 @@
 - Hosted CI #17（`f5a0938`）：macOS 与 Windows job 首次全绿（含 packaging helper）；Linux 卡死在 GUI backends 步骤——`048c110` 引入的无界 GTK drain 循环（WebKitGTK frame clock 持续 re-arm，`events_pending()` 永不为空）。已改为 100ms 时间预算的有界 drain。
 - Hosted CI #18（`33b23dd`）：macOS + Windows 继续全绿；Linux GUI backends 步骤仍挂起（30 分钟+），说明 hang 不止在 drain。给 Linux GUI 调用加 3 分钟 `timeout` + 阶段化打点后：
 - Hosted CI #19（`041741c`）：注解定位到卡点——`SunMao Gain WebView (VST3)` 的 recreate 路径，`Reopening GUI...` 后卡死。根因：GTK/WebKitGTK 有永久线程亲和性，baseview 每次 open_gui 都新建 event 线程，第二次在新线程上创建 WebView 触发 WebKit 同步 IPC 死锁（伴随 Gdk frame-clock CRITICAL）。修复：Linux 上引入进程级专用 GTK 线程，所有 wry WebView 的创建/操作/销毁经 channel 编组到该线程执行，公开 `WebView` 变为代理（带 10s 应答超时防新死锁）。
-- Hosted CI #20（`c4465c2`）：GTK 线程修复生效——Gain WebView 在 Linux 上首次通过完整生命周期（含 close/recreate）；新的失败点是 `SunMao Sine Synth WebView (VST3)` 输入验证：XTEST 在 y=124 拖动未命中 WebKitGTK 布局下的 Volume slider（字体度量差异）。修复：pin 布局（显式 line-height + 24px slider box）使几何跨引擎一致，拖动坐标改为 y=138；**Phase 1 仍未完成**。
+- Hosted CI #20（`c4465c2`）：GTK 线程修复生效——Gain WebView 在 Linux 上首次通过完整生命周期（含 close/recreate）；新的失败点是 `SunMao Sine Synth WebView (VST3)` 输入验证：XTEST 在 y=124 拖动未命中 WebKitGTK 布局下的 Volume slider（字体度量差异）。修复：pin 布局（显式 line-height + 24px slider box）使几何跨引擎一致，拖动坐标改为 y=138。
+- Hosted CI #21（`885d2a5`）：**三平台全绿**，https://github.com/aizcutei/sunmao/actions/runs/31771576307 。macOS（04:59–05:05）、Windows（04:59–05:07）、Linux（04:59–05:06）全部 success，同一 commit 上传 artifacts：`phase1-macOS-ARM64`（30MB）、`phase1-Windows-X64`（55MB）、`phase1-Linux-X64`（545MB），含 bundles、runner test/gui-test 日志与检查报告。
 - `cargo metadata --locked --no-deps`、`cargo fmt --all -- --check`、`git diff --check` 已在本机通过。
 - 默认 VST3/CLAP 二进制经 `nm` 确认无 `RustAUFactory|au_component_factory|SunmaoAUCocoa`。
 
@@ -50,15 +51,15 @@
 
 | 能力 | 当前判断 | 权威证据 | 下一步 |
 |---|---|---|---|
-| workspace metadata / fmt / diff | 本机通过 | command log | hosted job 复验 |
-| `_sys`/`_rs` ABI 与生命周期 | 本机 selected tests 通过 | cargo test logs | Windows/Ubuntu hosted |
-| SunMao core/backend | Int/Bool normalized API、offset automation、固定容量、state 已实现并本机通过 | cargo test + runner 16/16 | hosted 复验 |
-| packager | layout/format/arch/staging-rollback 本机 unit+cli tests 通过 | `sunmao_packager` tests | hosted 复验 |
-| runner | scan/info/test/process/gui-test 本机通过；缺失插件与未知命令非零退出 | runner logs | hosted 复验 |
-| macOS GUI | 本机 GL/WGPU/WebView × VST3/CLAP 全绿，含 520x220、输入、gesture、close/recreate | `.phase1-run.gui.9d55cbf2/*.gui-test.log`（未跟踪） | hosted macOS job |
-| Linux GUI | 未在本机运行；macOS cross 缺少 X11 sysroot | 无 Ubuntu hosted 证据 | Ubuntu hosted job |
-| Windows GUI | 仅有 x86_64 MSVC cross-check，无原生 GUI runtime | 无 Windows hosted 证据 | Windows hosted job |
-| hosted CI | #20 GTK 线程修复生效（Gain WebView 全生命周期含 recreate 通过）；剩 Sine WebView 输入坐标偏差，已 pin 布局 + y=138 | [run 31770072820](https://github.com/aizcutei/sunmao/actions/runs/31770072820) | 等待新 run |
+| workspace metadata / fmt / diff | 三平台 hosted 通过 | run #21 三 job success | — |
+| `_sys`/`_rs` ABI 与生命周期 | 三平台 hosted 通过 | run #21 "Test format adapters and host" | — |
+| SunMao core/backend | Int/Bool normalized API、offset automation、固定容量、state 三平台 hosted 通过 | run #21 tests + runner 16/16 | — |
+| packager | layout/format/arch/staging-rollback 三平台 hosted 通过 | run #21 packager tests + packaging steps | — |
+| runner | scan/info/test/process/gui-test 三平台 hosted 通过；缺失插件与未知命令非零退出 | run #21 runner steps | — |
+| macOS GUI | hosted GL/WGPU/WebView × VST3/CLAP 全绿，含 520x220、输入、gesture、close/recreate | run #21 macOS job + `phase1-macOS-ARM64` artifact | — |
+| Linux GUI | hosted X11 GL/WGPU/WebView 全绿（xvfb + XTEST，WebView 经专用 GTK 线程） | run #21 Linux job + `phase1-Linux-X64` artifact | — |
+| Windows GUI | hosted Win32 GL→WGPU fallback、WebView2 全绿（UIA 输入） | run #21 Windows job + `phase1-Windows-X64` artifact | — |
+| hosted CI | #21 三平台同 commit 全绿，artifacts 已上传 | [run 31771576307](https://github.com/aizcutei/sunmao/actions/runs/31771576307) | — |
 
 ## 当前验证摘要
 
@@ -70,10 +71,15 @@
 - GL/WGPU/WebView × VST3+CLAP native `gui-test --auto-close --verify-pixels --verify-input`：12/12，含 recreate。
 - runner 失败路径：缺失插件、未知命令、无参数均为非零退出。
 
-**不能**将以上结果写成 Phase 1 完成。完成条件要求同一 commit 上 macOS、Windows、Ubuntu hosted jobs 全绿且 artifacts 可下载。
+Hosted 权威证据（run #21，commit `885d2a5`）：
+
+- 三个 hosted native jobs（macOS ARM64、Windows x86_64、Ubuntu x86_64）同一 commit 全绿。
+- gain + sine × VST3 + CLAP 的 process/state/automation/runner 测试在三平台全部通过。
+- GL/WGPU/WebView renderer GUI matrix 在 Cocoa/Win32/X11 全部通过：非空像素、输入、host gesture、520x220 resize、close/recreate。
+- 三平台 artifacts（bundles、runner test/gui-test 日志、packager 报告）已由 run #21 上传且可下载（需仓库登录权限）。
 
 ## 完成规则
 
 在同一 commit 上，三个 hosted native jobs 全绿、基础 fixture 的两种格式 process/state/automation 全绿、renderer GUI matrix 全绿且 artifact 可下载后，才把此文件的状态改为“Phase 1 完成”。任何本地、guest 或 container 结果都必须明确标注平台和证据等级。
 
-当前状态：**hosted CI 未全绿，Phase 1 未完成**。
+当前状态：**Phase 1 完成**——run #21（commit `885d2a5`）满足全部完成条件：https://github.com/aizcutei/sunmao/actions/runs/31771576307
