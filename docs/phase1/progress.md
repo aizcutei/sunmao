@@ -307,6 +307,14 @@
 - Local result: baseview + view_baseview all-features build/test, fmt/diff gates, and a macOS WebView gui-test (including recreate) pass.
 - Unresolved: hosted Linux validation of the GTK-thread design; Phase 1 remains incomplete.
 
+### 2026-08-14 — hosted CI #20 GTK thread works; sine WebView input geometry
+
+- Command/platform: push `c4465c2` 后 GitHub Actions Phase 1 #20：https://github.com/aizcutei/sunmao/actions/runs/31770072820
+- Result: macOS and Windows green. On Linux the dedicated GTK thread fixed the recreate deadlock — Gain WebView passed its entire lifecycle for the first time — and the matrix progressed to `SunMao Sine Synth WebView (VST3)`, where the XTEST drag at y=124 missed the Volume slider (parameter stayed at 0.5). WebKitGTK font metrics place the slider lower than WebKit macOS; macOS only passed because its input check uses a DOM-gesture fallback.
+- Fix: pin the synth panel geometry (explicit line-heights, 24px slider box, zero slider margin) so the slider center lands at y=138 in the 520x220 view on every engine, and update the drag coordinates in `phase1.yml` and `tools/package_examples.sh` to 120,138 → 400,138.
+- Local result: macOS gui-test passes with the new coordinates (input, host gesture, recreate); fmt/diff gates pass.
+- Unresolved: hosted Linux validation of the remaining WebView fixtures; Phase 1 remains incomplete.
+
 ## 待记录
 
 后续每次执行按以下格式追加：

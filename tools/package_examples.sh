@@ -260,9 +260,9 @@ if [ "$GUI_TEST" -eq 1 ]; then
         GUI_COMMAND+=(--verify-input --drag-from 120,150 --drag-to 400,150)
         ;;
       sunmao_syn_sine_gui_webview)
-        # The synth panel has a taller value readout; after the standard
-        # 520x220 resize its range input is centered around y=135.
-        GUI_COMMAND+=(--verify-input --drag-from 120,124 --drag-to 400,124)
+        # The synth panel pins its line heights and slider box, so after the
+        # standard 520x220 resize its range input is centered at y=138.
+        GUI_COMMAND+=(--verify-input --drag-from 120,138 --drag-to 400,138)
         ;;
     esac
     for ext in clap vst3; do

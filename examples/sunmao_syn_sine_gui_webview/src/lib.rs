@@ -106,10 +106,13 @@ impl WebViewState for SineWebViewState {
 html, body { margin: 0; width: 100%; height: 100%; }
 body { display: flex; align-items: center; justify-content: center; background: #111c23; color: #e8f1f5; font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; user-select: none; }
 .panel { width: 90%; max-width: 360px; padding: 22px 24px; background: #1b2a33; border: 1px solid #38505c; border-radius: 10px; }
-.label { color: #9dc4d2; letter-spacing: .08em; text-transform: uppercase; font-size: 12px; margin-bottom: 8px; }
+/* Explicit line heights and a fixed slider box keep the layout identical
+   across WebKit macOS, WebKitGTK, and WebView2 so host-side input tests can
+   target the slider at a known position (center y=138 in a 520x220 view). */
+.label { color: #9dc4d2; letter-spacing: .08em; text-transform: uppercase; font-size: 12px; line-height: 14px; margin-bottom: 8px; }
 .value { font-size: 38px; line-height: 1; font-variant-numeric: tabular-nums; margin-bottom: 18px; }
-input[type=range] { width: 100%; accent-color: #68c5d8; }
-.limits { display: flex; justify-content: space-between; color: #7b9aa5; font-size: 11px; margin-top: 8px; }
+input[type=range] { display: block; width: 100%; height: 24px; margin: 0; accent-color: #68c5d8; }
+.limits { display: flex; justify-content: space-between; color: #7b9aa5; font-size: 11px; line-height: 13px; margin-top: 8px; }
 </style>
 </head>
 <body>
