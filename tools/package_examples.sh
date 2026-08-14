@@ -8,8 +8,8 @@
 # This is the Phase-1 packaging pipeline. It replaces the ad-hoc /tmp/package_all.sh.
 #
 # Usage:
-  tools/package_examples.sh              # build + package all GUI examples (VST3/CLAP)
-  tools/package_examples.sh --au         # macOS-only AU experiment (not Phase-1)
+#   tools/package_examples.sh              # build + package all GUI examples (VST3/CLAP)
+#   tools/package_examples.sh --au         # macOS-only AU experiment (not Phase-1)
 #   tools/package_examples.sh --install    # macOS: also install the generated bundles
 #   tools/package_examples.sh --test       # test each generated VST3/CLAP plugin
 #   tools/package_examples.sh --gui-test   # exercise each VST3/CLAP GUI lifecycle

@@ -267,6 +267,17 @@
 - Local result: baseview all-features, view-baseview WebView, runner tests, Windows target checks, and formatting/diff gates passed.
 - Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
 
+### 2026-08-13 — hosted CI #16 packaging helper fork bomb
+
+- Command/platform: push `048c1101` 后 GitHub Actions Phase 1 #16：https://github.com/aizcutei/sunmao/actions/runs/31679754064
+- Result:
+  - Windows first time passed every prior gate including "Package and exercise native GUI backends" (GL fallback → WGPU, WebView input, close/recreate all green).
+  - The job then died in "Exercise repository packaging helper": the runner lost communication after the step ran ~60 minutes; macOS ran the same step 36+ minutes in #15 before cancellation. Linux/macOS were cancelled by fail-fast.
+- Root cause: lines 11–12 of `tools/package_examples.sh` were Usage examples missing their `#` comment prefix, so every invocation re-executed `tools/package_examples.sh` with no arguments — unbounded recursion that fork-bombed the host. Reproduced locally with a clean shell (fork failures + repeated release builds); this also explains the earlier local "resource exhaustion" incident. The step has never completed on any hosted runner since the initial checkpoint commit.
+- Fix: restore the `#` prefixes; add `timeout-minutes: 20` to the packaging-helper step so a future hang fails with diagnostics instead of killing the runner.
+- Local result: `tools/package_examples.sh --debug --test` now completes in ~25s with all 16 bundles passing 16/16 runner tests.
+- Unresolved: hosted CI has not validated this round; Phase 1 remains incomplete.
+
 ## 待记录
 
 后续每次执行按以下格式追加：

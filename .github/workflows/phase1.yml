@@ -438,6 +438,7 @@ jobs:
 
       - name: Exercise repository packaging helper
         shell: bash
+        timeout-minutes: 20
         run: tools/package_examples.sh --debug --test
 
       - name: Upload packaged smoke-test plugins
