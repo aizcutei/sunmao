@@ -333,10 +333,12 @@ jobs:
           synth_standalone_output="$standalone_dir/SunMaoSine"
           mkdir -p "$standalone_dir"
 
+          # The packager names the .app's inner executable after the --out
+          # path's stem (module_stem), not the display name.
           packaged_standalone() {
-            local output_base="$1" display_name="$2"
+            local output_base="$1"
             case "${{ runner.os }}" in
-              macOS) printf '%s.app/Contents/MacOS/%s\n' "$output_base" "$display_name" ;;
+              macOS) printf '%s.app/Contents/MacOS/%s\n' "$output_base" "$(basename "$output_base")" ;;
               Windows) printf '%s.exe\n' "$output_base" ;;
               Linux) printf '%s\n' "$output_base" ;;
               *) echo "unsupported runner OS: ${{ runner.os }}" >&2; return 1 ;;
@@ -380,8 +382,8 @@ jobs:
             --bundle-id com.sunmao.synth.sine \
             --version 1.0.0
 
-          packaged_gain="$(packaged_standalone "$gain_standalone_output" "SunMao Gain")"
-          packaged_synth="$(packaged_standalone "$synth_standalone_output" "SunMao Sine Synth")"
+          packaged_gain="$(packaged_standalone "$gain_standalone_output")"
+          packaged_synth="$(packaged_standalone "$synth_standalone_output")"
 
           {
             echo "commit=${GITHUB_SHA:-unknown}"
@@ -509,10 +511,12 @@ jobs:
             return "$status"
           }
 
+          # Same contract as above: the inner executable is named after the
+          # --out path's stem, not the display name.
           packaged_standalone() {
-            local output_base="$1" executable_name="$2"
+            local output_base="$1"
             case "${{ runner.os }}" in
-              macOS) printf '%s.app/Contents/MacOS/%s\n' "$output_base" "$executable_name" ;;
+              macOS) printf '%s.app/Contents/MacOS/%s\n' "$output_base" "$(basename "$output_base")" ;;
               Windows) printf '%s.exe\n' "$output_base" ;;
               Linux) printf '%s\n' "$output_base" ;;
               *) echo "unsupported runner OS: ${{ runner.os }}" >&2; return 1 ;;
@@ -533,7 +537,7 @@ jobs:
               --name "$display_name" \
               --bundle-id "$bundle_id" \
               --version 1.0.0
-            packaged="$(packaged_standalone "$output" "$display_name")"
+            packaged="$(packaged_standalone "$output")"
             test -f "$packaged"
             run_standalone_gui_test "$output.packaged.gui-smoke.log" "$packaged"
           }

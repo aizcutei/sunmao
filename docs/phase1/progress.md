@@ -379,6 +379,15 @@
 - Evidence/artifact: local logs (`/tmp/phase1_workspace_test.log`, `/tmp/phase1_package_test.log`, `/tmp/phase1_gui_test.log`) — macOS-local evidence level only.
 - Unresolved: same-commit hosted revalidation on macOS ARM64, Windows x86_64, and Ubuntu x86_64 with VST3/CLAP + standalone artifacts uploaded; Phase 1 stays incomplete until that run is green.
 
+### 2026-08-28 — hosted CI #23 macOS standalone path mismatch in the workflow
+
+- Command/platform: push `6c0bede` triggered GitHub Actions Phase 1 #23: https://github.com/aizcutei/sunmao/actions/runs/33150512977
+- Result: Windows x86_64 and Ubuntu x86_64 jobs were fully green, including the new standalone gate. macOS failed in "Package and exercise VST3 + CLAP + standalone" (annotations only showed exit code 1; the failure diagnostics artifact requires credentials this host does not have).
+- Root cause (reproduced locally by running the step's exact commands on macOS ARM64): the workflow's `packaged_standalone()` helper built the macOS path as `<out>.app/Contents/MacOS/<display name>` (e.g. `SunMaoGain.app/Contents/MacOS/SunMao Gain`), but `sunmao_packager standalone` names the inner executable after the `--out` path's stem (`module_stem`, asserted by the packager's own unit tests), producing `SunMaoGain.app/Contents/MacOS/SunMaoGain`. Windows/Linux never hit that branch, and `tools/package_examples.sh` passes identical stem and display names, so only the hosted macOS job saw the mismatch.
+- Fix: both `packaged_standalone()` helpers in `.github/workflows/phase1.yml` now derive the executable name from `basename "$output_base"` and drop the display-name argument.
+- Evidence/artifact: local re-run of the full step body (packager × 6, four runner `test` suites, raw + packaged `--smoke` for gain/sine, missing-plugin negative test) exits 0 on macOS ARM64; fmt/diff/YAML gates pass. Workflow-only change; no Rust code touched.
+- Unresolved: hosted revalidation of the fixed workflow on all three platforms.
+
 ## 待记录
 
 后续每次执行按以下格式追加：
