@@ -545,6 +545,14 @@ pub trait Plugin: Sized + 'static {
     /// Called when a MIDI note off is received.
     fn note_off(&mut self, _sample_offset: u32, _channel: i16, _pitch: i16, _velocity: f32) {}
 
+    /// Per-note expression for a note previously delivered by
+    /// [`Plugin::note_on`].
+    ///
+    /// VST3 identifies the target note only by its `note_id`, so an
+    /// implementation that needs the channel and key must remember them from
+    /// the note-on event.
+    fn note_expression(&mut self, _sample_offset: u32, _type_id: u32, _note_id: i32, _value: f64) {}
+
     // === Processing ===
 
     /// Process audio

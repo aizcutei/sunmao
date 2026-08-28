@@ -3,6 +3,7 @@
 //! This crate wraps `SunmaoPlugin` to expose it as a CLAP plugin via `clap_rs`.
 
 use clap_rs::ext::gui::{GuiApi, GuiHandler, GuiResizeHints};
+use clap_rs::ext::voice_info::VoiceInfo as ClapVoiceInfo;
 use clap_rs::ext::RenderMode;
 use clap_rs::gui::prepare_view;
 use clap_rs::process::{
@@ -18,7 +19,10 @@ use std::ffi::c_void;
 use std::num::NonZeroIsize;
 use std::ptr::NonNull;
 use std::sync::Arc;
-use sunmao_core::events::MidiMessage;
+use sunmao_core::events::{
+    MidiMessage, NoteExpression as SunmaoNoteExpression,
+    NoteExpressionKind as SunmaoNoteExpressionKind,
+};
 use sunmao_core::plugin::{
     BusInfo as SunmaoBusInfo, BusRole as SunmaoBusRole, ProcessContext as SunmaoProcessContext,
     RenderMode as SunmaoRenderMode, TailLength as SunmaoTailLength,
@@ -372,6 +376,66 @@ fn timed_parameter_change(
     })
 }
 
+/// Converts a CLAP parameter modulation, dropping unknown parameters exactly
+/// like an out-of-range automation event.
+fn timed_parameter_mod(
+    descriptors: &[ParamDescriptor],
+    event: &clap_rs::events::ParamModEvent,
+    frames: usize,
+) -> Option<(&'static str, f32, u32)> {
+    let descriptor = descriptors
+        .iter()
+        .find(|descriptor| descriptor.numeric_id == event.param_id)?;
+    // A modulation is an offset, not a value, so it is not normalized against
+    // the parameter range; only non-finite amounts are rejected.
+    let amount = event.amount as f32;
+    amount.is_finite().then(|| {
+        (
+            descriptor.id,
+            amount,
+            event_sample_offset(event.time, frames),
+        )
+    })
+}
+
+/// Converts a CLAP note expression. An unnamed dimension keeps its raw id so
+/// the plugin still sees the event.
+fn note_expression_to_sunmao(
+    event: &clap_rs::events::NoteExpressionEvent,
+    frames: usize,
+) -> Option<SunmaoNoteExpression> {
+    if event.port_index > 0 || !event.value.is_finite() {
+        return None;
+    }
+    let channel = u8::try_from(event.channel.max(0)).ok()?;
+    let key = u8::try_from(event.key.max(0)).ok()?;
+    if channel > 15 || key > 127 {
+        return None;
+    }
+    let kind = match event.kind {
+        Some(clap_rs::events::NoteExpressionKind::Volume) => SunmaoNoteExpressionKind::Volume,
+        Some(clap_rs::events::NoteExpressionKind::Pan) => SunmaoNoteExpressionKind::Pan,
+        Some(clap_rs::events::NoteExpressionKind::Tuning) => SunmaoNoteExpressionKind::Tuning,
+        Some(clap_rs::events::NoteExpressionKind::Vibrato) => SunmaoNoteExpressionKind::Vibrato,
+        Some(clap_rs::events::NoteExpressionKind::Expression) => {
+            SunmaoNoteExpressionKind::Expression
+        }
+        Some(clap_rs::events::NoteExpressionKind::Brightness) => {
+            SunmaoNoteExpressionKind::Brightness
+        }
+        Some(clap_rs::events::NoteExpressionKind::Pressure) => SunmaoNoteExpressionKind::Pressure,
+        None => SunmaoNoteExpressionKind::Unknown(event.raw_kind),
+    };
+    Some(SunmaoNoteExpression {
+        offset: event_sample_offset(event.time, frames),
+        kind,
+        note_id: (event.note_id >= 0).then_some(event.note_id),
+        channel: Some(channel),
+        key: Some(key),
+        value: event.value,
+    })
+}
+
 fn note_event_to_midi(
     note: &clap_rs::events::NoteEvent,
     frames: usize,
@@ -650,6 +714,15 @@ impl<P: SunmaoPlugin> Plugin for SunmaoClapWrapper<P> {
             .unwrap_or(0)
     }
 
+    fn voice_info(&self) -> Option<ClapVoiceInfo> {
+        let info = self.plugin.as_ref()?.voice_info()?;
+        Some(ClapVoiceInfo {
+            voice_count: info.active,
+            voice_capacity: info.capacity,
+            supports_overlapping_notes: info.supports_overlapping_notes,
+        })
+    }
+
     fn set_render_mode(&mut self, mode: RenderMode) -> bool {
         let Some(plugin) = self.plugin.as_mut() else {
             return false;
@@ -812,6 +885,28 @@ impl<P: SunmaoPlugin> AudioProcessor for SunmaoClapProcessor<P> {
                         timed_parameter_change(&self.param_descriptors, &param, frames)
                     {
                         if !self.event_queue.push_param_change(change) {
+                            return clap_rs::clap_sys::process::CLAP_PROCESS_ERROR;
+                        }
+                    }
+                }
+                ClapEvent::ParamMod(param) => {
+                    if let Some((id, amount, offset)) =
+                        timed_parameter_mod(&self.param_descriptors, &param, frames)
+                    {
+                        if !self
+                            .event_queue
+                            .push(SunmaoEvent::ParamMod { id, amount, offset })
+                        {
+                            return clap_rs::clap_sys::process::CLAP_PROCESS_ERROR;
+                        }
+                    }
+                }
+                ClapEvent::NoteExpression(expression) if accepts_midi => {
+                    if let Some(expression) = note_expression_to_sunmao(&expression, frames) {
+                        if !self
+                            .event_queue
+                            .push(SunmaoEvent::NoteExpression(expression))
+                        {
                             return clap_rs::clap_sys::process::CLAP_PROCESS_ERROR;
                         }
                     }

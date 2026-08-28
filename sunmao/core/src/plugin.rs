@@ -70,6 +70,26 @@ impl BusInfo {
     }
 }
 
+/// Polyphony information a host can query.
+///
+/// CLAP exposes this through `clap.voice-info`; VST3 has no equivalent, so a
+/// VST3 host simply never sees it.
+///
+/// ```
+/// # use sunmao_core::plugin::VoiceInfo;
+/// let info = VoiceInfo { active: 3, capacity: 8, supports_overlapping_notes: false };
+/// assert!(info.active <= info.capacity);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VoiceInfo {
+    /// Voices currently sounding.
+    pub active: u32,
+    /// Largest number of simultaneous voices.
+    pub capacity: u32,
+    /// Whether several notes may sound on the same key at once.
+    pub supports_overlapping_notes: bool,
+}
+
 /// How long a plugin keeps producing output after its input goes silent.
 ///
 /// Both formats encode "infinite" with a magic number — VST3 uses
@@ -231,6 +251,13 @@ pub trait SunmaoPlugin: Default + Send + 'static {
     /// How long the plugin keeps producing output after its input stops.
     fn tail(&self) -> TailLength {
         TailLength::None
+    }
+
+    /// Polyphony information for hosts that ask for it.
+    ///
+    /// `None` means "not a voice-based plugin". VST3 hosts never see this.
+    fn voice_info(&self) -> Option<VoiceInfo> {
+        None
     }
 
     /// Called when the host switches between realtime and offline rendering.

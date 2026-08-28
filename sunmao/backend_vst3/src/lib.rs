@@ -7,7 +7,10 @@ use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use std::ffi::c_void;
 use std::sync::Arc;
-use sunmao_core::events::MidiMessage;
+use sunmao_core::events::{
+    MidiMessage, NoteExpression as SunmaoNoteExpression,
+    NoteExpressionKind as SunmaoNoteExpressionKind,
+};
 use sunmao_core::plugin::{
     BusRole as SunmaoBusRole, ProcessContext as SunmaoProcessContext,
     RenderMode as SunmaoRenderMode, TailLength as SunmaoTailLength,
@@ -544,6 +547,38 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
             message: midi,
             sequence,
         });
+    }
+
+    fn note_expression(&mut self, sample_offset: u32, type_id: u32, note_id: i32, value: f64) {
+        use vst3_rs::vst3_sys::vst::ievents::NoteExpressionTypeIDs as Vst3Expression;
+
+        // VST3 has no poly-pressure dimension here: hosts send that as a
+        // separate kPolyPressureEvent, so it never maps to `Pressure`.
+        let kind = match type_id {
+            Vst3Expression::kVolumeTypeID => SunmaoNoteExpressionKind::Volume,
+            Vst3Expression::kPanTypeID => SunmaoNoteExpressionKind::Pan,
+            Vst3Expression::kTuningTypeID => SunmaoNoteExpressionKind::Tuning,
+            Vst3Expression::kVibratoTypeID => SunmaoNoteExpressionKind::Vibrato,
+            Vst3Expression::kExpressionTypeID => SunmaoNoteExpressionKind::Expression,
+            Vst3Expression::kBrightnessTypeID => SunmaoNoteExpressionKind::Brightness,
+            other => SunmaoNoteExpressionKind::Unknown(other as i32),
+        };
+        let expression = SunmaoNoteExpression {
+            offset: sample_offset,
+            kind,
+            note_id: (note_id >= 0).then_some(note_id),
+            // VST3 addresses the note by id only.
+            channel: None,
+            key: None,
+            value,
+        };
+        if !self.event_capacity_available {
+            self.event_overflowed = true;
+            return;
+        }
+        if !self.event_queue.push(Event::NoteExpression(expression)) {
+            self.event_overflowed = true;
+        }
     }
 
     fn note_off(&mut self, sample_offset: u32, channel: i16, pitch: i16, velocity: f32) {
@@ -1948,6 +1983,7 @@ mod tests {
                     assert_eq!(id, "mix");
                     ("param", offset, Some(value))
                 }
+                other => panic!("unexpected event in this fixture: {other:?}"),
             })
             .collect();
         assert_eq!(

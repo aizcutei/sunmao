@@ -1,8 +1,8 @@
 //! SunMao Poly Expression Synth — Phase 2 acceptance fixture.
 //!
-//! M0 skeleton: an 8-voice sine synth driven by plain MIDI notes, built only
-//! on the Phase 1 contract. M4 adds per-note expression/MPE input and
-//! voice-info reporting.
+//! An 8-voice sine synth driven by MIDI notes with per-note expression (M4):
+//! tuning bends a single voice and volume scales it, keyed by the host's note
+//! id where available and by channel/key otherwise.
 
 use sunmao::prelude::*;
 
@@ -10,8 +10,16 @@ const VOICE_COUNT: usize = 8;
 
 struct Voice {
     note: u8,
+    channel: u8,
+    /// Host-assigned note identity; voices started before a host supplied one
+    /// keep `None` and are matched by channel/key instead.
+    note_id: Option<i32>,
     velocity: f32,
     phase: f64,
+    /// Per-note tuning in semitones.
+    tuning: f64,
+    /// Per-note volume multiplier.
+    expression_gain: f32,
     active: bool,
 }
 
@@ -19,8 +27,12 @@ impl Voice {
     const fn idle() -> Self {
         Self {
             note: 0,
+            channel: 0,
+            note_id: None,
             velocity: 0.0,
             phase: 0.0,
+            tuning: 0.0,
+            expression_gain: 1.0,
             active: false,
         }
     }
@@ -59,7 +71,12 @@ impl Default for PolyExprSynth {
 }
 
 fn note_frequency(note: u8) -> f64 {
-    440.0 * 2.0_f64.powf((f64::from(note) - 69.0) / 12.0)
+    note_frequency_with_tuning(note, 0.0)
+}
+
+/// Note frequency with a per-note tuning offset in semitones.
+fn note_frequency_with_tuning(note: u8, semitones: f64) -> f64 {
+    440.0 * 2.0_f64.powf((f64::from(note) - 69.0 + semitones) / 12.0)
 }
 
 impl SunmaoPlugin for PolyExprSynth {
@@ -85,6 +102,14 @@ impl SunmaoPlugin for PolyExprSynth {
         self.sample_rate = sample_rate;
     }
 
+    fn voice_info(&self) -> Option<VoiceInfo> {
+        Some(VoiceInfo {
+            active: self.voices.iter().filter(|voice| voice.active).count() as u32,
+            capacity: VOICE_COUNT as u32,
+            supports_overlapping_notes: false,
+        })
+    }
+
     fn reset(&mut self) {
         for voice in &mut self.voices {
             *voice = Voice::idle();
@@ -108,9 +133,10 @@ impl SunmaoPlugin for PolyExprSynth {
                     .position(|voice| !voice.active)
                     .unwrap_or(0);
                 if let Some(voice) = self.voices.get_mut(slot) {
+                    *voice = Voice::idle();
                     voice.note = message.note();
+                    voice.channel = message.channel();
                     voice.velocity = f32::from(message.velocity()) / 127.0;
-                    voice.phase = 0.0;
                     voice.active = true;
                 }
             } else if message.is_note_off() {
@@ -118,6 +144,33 @@ impl SunmaoPlugin for PolyExprSynth {
                     if voice.active && voice.note == message.note() {
                         voice.active = false;
                     }
+                }
+            }
+        }
+
+        // Per-note expression is applied at block rate alongside the notes.
+        for expression in events.note_expressions() {
+            for voice in self.voices.iter_mut().filter(|voice| voice.active) {
+                let matches = match (expression.note_id, voice.note_id) {
+                    (Some(event_id), Some(voice_id)) => event_id == voice_id,
+                    // Without note ids on both sides, fall back to the
+                    // channel/key pair the format did provide.
+                    _ => {
+                        expression.key.is_none_or(|key| key == voice.note)
+                            && expression.channel.is_none_or(|ch| ch == voice.channel)
+                    }
+                };
+                if !matches {
+                    continue;
+                }
+                match expression.kind {
+                    NoteExpressionKind::Tuning => voice.tuning = expression.value,
+                    NoteExpressionKind::Volume => {
+                        voice.expression_gain = expression.value.clamp(0.0, 4.0) as f32
+                    }
+                    // Other dimensions are accepted but not rendered by this
+                    // fixture.
+                    _ => {}
                 }
             }
         }
@@ -130,8 +183,11 @@ impl SunmaoPlugin for PolyExprSynth {
                 if !voice.active {
                     continue;
                 }
-                let increment = note_frequency(voice.note) / self.sample_rate;
-                mixed += (voice.phase * std::f64::consts::TAU).sin() as f32 * voice.velocity;
+                let increment =
+                    note_frequency_with_tuning(voice.note, voice.tuning) / self.sample_rate;
+                mixed += (voice.phase * std::f64::consts::TAU).sin() as f32
+                    * voice.velocity
+                    * voice.expression_gain;
                 voice.phase = (voice.phase + increment).fract();
             }
             let sample = mixed * volume / VOICE_COUNT as f32;
@@ -182,6 +238,99 @@ mod tests {
         );
         assert_eq!(status, ProcessStatus::Normal);
         output_left
+    }
+
+    /// Renders one block and returns the peak absolute sample.
+    fn peak(samples: &[f32]) -> f32 {
+        samples.iter().fold(0.0f32, |acc, s| acc.max(s.abs()))
+    }
+
+    fn expression(kind: NoteExpressionKind, key: u8, value: f64) -> Event {
+        Event::NoteExpression(NoteExpression {
+            offset: 0,
+            kind,
+            note_id: None,
+            channel: Some(0),
+            key: Some(key),
+            value,
+        })
+    }
+
+    #[test]
+    fn a_volume_expression_scales_only_the_addressed_voice() {
+        let mut plugin = PolyExprSynth::default();
+        plugin.initialize(48_000.0, 64);
+
+        let mut events = EventQueue::new();
+        events.push(Event::Midi(MidiMessage::note_on(0, 0, 69, 100)));
+        let reference = peak(&render(&mut plugin, &events, 64));
+
+        plugin.reset();
+        let mut ducked_events = EventQueue::new();
+        ducked_events.push(Event::Midi(MidiMessage::note_on(0, 0, 69, 100)));
+        ducked_events.push(expression(NoteExpressionKind::Volume, 69, 0.25));
+        let ducked = peak(&render(&mut plugin, &ducked_events, 64));
+
+        assert!(
+            ducked < reference * 0.5,
+            "a 0.25 volume expression must attenuate the voice: {ducked} vs {reference}"
+        );
+    }
+
+    #[test]
+    fn a_tuning_expression_bends_the_addressed_voice() {
+        let mut plugin = PolyExprSynth::default();
+        plugin.initialize(48_000.0, 64);
+
+        let mut events = EventQueue::new();
+        events.push(Event::Midi(MidiMessage::note_on(0, 0, 69, 100)));
+        events.push(expression(NoteExpressionKind::Tuning, 69, 12.0));
+        render(&mut plugin, &events, 8);
+
+        let voice = plugin
+            .voices
+            .iter()
+            .find(|voice| voice.active)
+            .expect("the note must be sounding");
+        assert_eq!(voice.tuning, 12.0);
+        // One octave up from A440.
+        assert!((note_frequency_with_tuning(voice.note, voice.tuning) - 880.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn an_expression_for_another_key_leaves_the_voice_untouched() {
+        let mut plugin = PolyExprSynth::default();
+        plugin.initialize(48_000.0, 64);
+
+        let mut events = EventQueue::new();
+        events.push(Event::Midi(MidiMessage::note_on(0, 0, 69, 100)));
+        events.push(expression(NoteExpressionKind::Tuning, 60, 12.0));
+        render(&mut plugin, &events, 8);
+
+        let voice = plugin
+            .voices
+            .iter()
+            .find(|voice| voice.active)
+            .expect("the note must be sounding");
+        assert_eq!(voice.tuning, 0.0, "expression addressed a different key");
+    }
+
+    #[test]
+    fn an_unnamed_expression_dimension_is_accepted_without_effect() {
+        let mut plugin = PolyExprSynth::default();
+        plugin.initialize(48_000.0, 64);
+
+        // The event must not be dropped at the queue level and must not
+        // corrupt the voice either.
+        let mut events = EventQueue::new();
+        events.push(Event::Midi(MidiMessage::note_on(0, 0, 69, 100)));
+        events.push(expression(NoteExpressionKind::Unknown(4242), 69, 1.0));
+        assert_eq!(events.note_expressions().count(), 1);
+        render(&mut plugin, &events, 8);
+
+        let voice = plugin.voices.iter().find(|voice| voice.active).unwrap();
+        assert_eq!(voice.tuning, 0.0);
+        assert_eq!(voice.expression_gain, 1.0);
     }
 
     #[test]

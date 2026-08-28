@@ -687,6 +687,20 @@ fn clamp_event_to_block(event: Event, frames: usize) -> Event {
             },
             offset: offset.min(max_offset),
         },
+        // A modulation is an additive offset rather than a normalized value,
+        // so only its timing is clamped.
+        Event::ParamMod { id, amount, offset } => Event::ParamMod {
+            id,
+            amount: if amount.is_finite() { amount } else { 0.0 },
+            offset: offset.min(max_offset),
+        },
+        Event::NoteExpression(mut expression) => {
+            expression.offset = expression.offset.min(max_offset);
+            if !expression.value.is_finite() {
+                expression.value = 0.0;
+            }
+            Event::NoteExpression(expression)
+        }
     }
 }
 

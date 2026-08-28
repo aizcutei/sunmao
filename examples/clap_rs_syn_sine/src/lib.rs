@@ -183,6 +183,8 @@ fn event_time(event: &Event) -> u32 {
     match event {
         Event::NoteOn(event) | Event::NoteOff(event) => event.time,
         Event::ParamValue(event) => event.time,
+        Event::ParamMod(event) => event.time,
+        Event::NoteExpression(event) => event.time,
         Event::Midi(event) => event.time,
         Event::Unknown => 0,
     }

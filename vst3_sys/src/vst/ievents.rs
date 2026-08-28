@@ -50,6 +50,22 @@ pub struct PolyPressureEvent {
     pub note_id: int32,
 }
 
+/// Note expression type identifiers (`Steinberg::Vst::NoteExpressionTypeIDs`).
+///
+/// VST3 has no note-expression dimension for poly pressure; hosts deliver that
+/// as a separate `kPolyPressureEvent` instead.
+pub mod NoteExpressionTypeIDs {
+    use crate::base::types::uint32;
+    pub const kVolumeTypeID: uint32 = 0;
+    pub const kPanTypeID: uint32 = 1;
+    pub const kTuningTypeID: uint32 = 2;
+    pub const kVibratoTypeID: uint32 = 3;
+    pub const kExpressionTypeID: uint32 = 4;
+    pub const kBrightnessTypeID: uint32 = 5;
+    pub const kTextTypeID: uint32 = 6;
+    pub const kPhonemeTypeID: uint32 = 7;
+}
+
 /// Note expression value event
 #[repr(C)]
 #[derive(Clone, Copy, Default)]

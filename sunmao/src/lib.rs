@@ -75,7 +75,9 @@ pub use sunmao_view_baseview as view_baseview;
 pub mod prelude {
     pub use std::sync::Arc;
     pub use sunmao_core::audio::AudioBuffer;
-    pub use sunmao_core::events::{Event, EventQueue, MidiMessage, ParamChange};
+    pub use sunmao_core::events::{
+        Event, EventQueue, MidiMessage, NoteExpression, NoteExpressionKind, ParamChange,
+    };
     pub use sunmao_core::metadata::{AuInfo, ClapInfo, Vst3Info, Vst3SpeakerLayout};
     pub use sunmao_core::params::{
         stable_param_id, validate_param_layout, BoolParam, FloatParam, IntParam, ParamDescriptor,
@@ -83,6 +85,7 @@ pub mod prelude {
     };
     pub use sunmao_core::plugin::{
         BusInfo, BusRole, ProcessContext, ProcessStatus, RenderMode, SunmaoPlugin, TailLength,
+        VoiceInfo,
     };
     pub use sunmao_core::view::{
         ParamsViewContext, ParentWindow, StandaloneViewOptions, StandaloneViewResult, SunmaoView,

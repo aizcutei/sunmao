@@ -102,3 +102,20 @@
 - Result: macOS ARM64、Windows x86_64、Ubuntu x86_64 三个 job 同一 commit 全部 success。bus 声明模型与 sidechain 路由在两种格式、三个平台通过；改动了两个 backend 的通道拓扑推导后，Phase 1 既有 gate（含 GUI matrix、standalone、packager、runner）仍保持绿色。
 - Evidence/artifact: run #33 上传 `phase1-macOS-ARM64`（51.0MB）、`phase1-Windows-X64`（76.8MB）、`phase1-Linux-X64`（955.8MB）。
 - Unresolved: M3 的三项延后工作（bus 激活/去激活回调、speaker layout 动态协商、runner 多 bus 宿主测试）转入 M6 收口。进入 M4；M4 盘点：`_sys` 两侧齐全（`clap_sys` 有 `CLAP_EVENT_NOTE_EXPRESSION`/`CLAP_EVENT_PARAM_MOD` 与 expression 种类常量，`vst3_sys::ievents` 有 `NoteExpressionValueEvent`），`clap_rs::Plugin` 已有 `voice_info()`；**最大缺口在 `_rs` 事件层**——`clap_rs::Event` 只有 5 个变体，note expression 与 param mod 都落入 `Unknown` 被静默丢弃，违反 semantics.md 的"严禁静默丢事件"，必须先修。
+
+### 2026-08-28 — M4 modulation/per-note expression/voice-info 实现（待 hosted 验证）
+
+- Command/platform: macOS ARM64，分支 `phase2/advanced-plugin-contract`。
+- Change（自底向上）：
+  - `_sys`：`vst3_sys` 补 `NoteExpressionTypeIDs`（SDK 的 `Steinberg::Vst::NoteExpressionTypeIDs`），此前缺失。
+  - `_rs`：**修掉一处静默丢事件**——`clap_rs::Event` 此前只有 5 个变体，`CLAP_EVENT_NOTE_EXPRESSION` 与 `CLAP_EVENT_PARAM_MOD` 都落入 `Unknown` 被丢弃；现新增 `NoteExpression`/`ParamMod` 变体、`NoteExpressionKind` 与短结构体拒绝。`vst3_rs::Plugin` 新增 `note_expression()` 钩子，wrapper 分发 `kNoteExpressionValueEvent`（拒绝非有限值）。
+  - core：`Event` 新增 `ParamMod`/`NoteExpression` 变体，新增 `NoteExpression`/`NoteExpressionKind`/`VoiceInfo` 与 `EventQueue::{param_mods,note_expressions}`、`SunmaoPlugin::voice_info()`、`MidiMessage::channel()`；`as_param_change()` 对 `ParamMod` 返回 `None`，使 modulation 无法污染 state。全部进 prelude。
+  - backend：两侧同时桥接。**`NoteExpression` 的 `channel`/`key` 建模为 `Option`**——VST3 的 expression 事件只带 `note_id`，据实为 `None`；CLAP 带全套故为 `Some`。VST3 无 pressure 维度（宿主走独立的 `kPolyPressureEvent`），未知维度保留原始 id 为 `Unknown(i32)` 照常下发。CLAP 侧桥接 voice-info；VST3 无查询点，按降级不暴露。
+  - fixture：poly synth 按 note_id 优先、channel/key 退化匹配来路由 expression，实现 tuning 弯音与 volume 缩放，并上报 voice-info。
+  - `docs/phase2/semantics.md`：modulation、per-note expression、voice-info 三行填入落地 API 与降级规则。
+- Result:
+  - 新增测试：`clap_rs` 4（46/46）、core（25/25 + 4 doc-test）、fixture 4（6/6）。
+  - 完整 `cargo test --locked`：104 套件全绿、0 失败。过程中新枚举变体暴露出三处非穷尽匹配（standalone runtime 的事件钳制、VST3 backend 测试、`clap_rs_syn_sine` 示例），均已按各自语义补齐——runtime 对 mod 只钳时序不钳值域，对 expression 钳时序并拒绝非有限值。
+  - Windows target check 通过；`tools/package_examples.sh --debug --test` 退出 0，Phase 1 的 20 个 runner 套件仍各 16/16。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/phase2_m4_test4.log`、`/tmp/phase2_m4_pkg.log`）——本地证据等级。
+- Unresolved: 三平台 hosted 验证本 commit 后 M4 才算完成。未做：backend 层的 expression/mod 端到端映射测试（目前覆盖在 `_rs` 与 core/fixture 两端）、VST3 note-id ↔ channel/key 的 backend 侧映射表，列为 M6 收口项。

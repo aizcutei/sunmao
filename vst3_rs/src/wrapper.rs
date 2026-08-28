@@ -1390,6 +1390,17 @@ impl<P: Plugin> ProcessorWrapper<P> {
                             let note = event.event.note_off;
                             plugin.note_off(sample_offset, note.channel, note.pitch, note.velocity);
                         }
+                        EventTypes::kNoteExpressionValueEvent => {
+                            let expression = event.event.note_expression_value;
+                            if expression.value.is_finite() {
+                                plugin.note_expression(
+                                    sample_offset,
+                                    expression.type_id,
+                                    expression.note_id,
+                                    expression.value,
+                                );
+                            }
+                        }
                         _ => {}
                     }
                 }
