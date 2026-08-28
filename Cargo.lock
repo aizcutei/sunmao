@@ -4680,6 +4680,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sunmao_dsp"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "sunmao_fx_gain"
 version = "0.1.0"
 dependencies = [
@@ -4752,6 +4759,7 @@ name = "sunmao_fx_svf"
 version = "0.1.0"
 dependencies = [
  "sunmao",
+ "sunmao_dsp",
 ]
 
 [[package]]

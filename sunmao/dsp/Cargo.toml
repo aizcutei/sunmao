@@ -1,0 +1,11 @@
+[package]
+name = "sunmao_dsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Allocation-free DSP building blocks for SunMao plugins"
+
+[dependencies]
+
+[dev-dependencies]
+proptest = "1.11.0"

@@ -629,3 +629,45 @@
   日志；`sunmao/tests/template_size.rs` 会在它降到预算内时主动失败以提醒收紧断言。
   进入 M3：新建 `sunmao/dsp`（filters/envelopes/oscillators），并让 SVF fixture
   换用组件实现且**测试语义不变**，同时用 oscillator/envelope 把 instrument 模板压进预算。
+
+### 2026-08-29 — M3 第一步：`sunmao/dsp` filters（SVF fixture 换组件、测试零改动）
+
+- Command/platform: macOS ARM64，分支 `phase3/framework-dsp-library`。
+- Change:
+  - 新建 `sunmao/dsp` crate 并入 workspace：`filters` 模块提供 `OnePole`
+    （lowpass/highpass）、`Svf`（TPT，同时输出 lp/bp/hp）、`Biquad`（TDF2，
+    lowpass/highpass/bandpass，RBJ 系数），全部**系数计算与逐样本处理分离**
+    （`set_*` 做三角函数，`process`/`tick` 只做算术），无分配、`Copy`。
+  - 组件自己夹参数而不信任调用方：cutoff 归一化后夹在 `[1e-5, 0.49]`
+    （`tan` 在 Nyquist 发散，宿主可以把 cutoff 自动化到任何值）、resonance 夹 `[0,1]`、
+    Q 夹 `[0.05,40]`、非有限输入丢弃而非写进状态（一个 NaN 会永久污染滤波器）。
+  - `sunmao_fx_svf` fixture 换用 `Svf` 组件：删除 inline TPT 实现，
+    cutoff 预畸变/Nyquist 夹取/resonance→damping 映射全部交给组件。
+    **6 个既有测试一行未改即通过**（`git diff` 在测试区零改动），这正是 M3
+    对 filter 家族的验收标准。
+- **实现中被测试抓出的三件事**：
+  1. denormal flush 阈值原设 `1e-30`：确实能挡住 denormal（f32 denormal < 1.18e-38），
+     但低 cutoff 的谐振 SVF 静音后 40 万样本仍停在 `1.1e-28`，仍在做无用计算。
+     改为 `1e-20`（约 -400 dBFS，仍远低于任何可闻电平），及时离开该区间。
+  2. 我把不变量**写过头**了：原断言"静音后精确等于 0"。二阶递归会在任何 flush
+     地板之上徘徊（biquad 实测停在 `-1.38e-20`），而"精确 0"只会诱导我不断调大常数
+     去迁就一个我自己臆造的要求。改为断言真正需要的性质：
+     **残留低于可闻阈（1e-18）且不落在 denormal 区间**。
+  3. **f32 biquad 在低归一化 cutoff 下 DC 增益严重失准**：20Hz@96kHz 实测 DC 增益
+     **1.142（14% 误差）**——`a1→-2, a2→1` 使 `1+a1+a2` 成为灾难性相消。
+     20Hz 是极常见设置，故**修掉而非记为陷阱**：`Biquad` 的系数与状态改用 f64
+     （每样本多几次乘法），修复后同条件 DC 增益回到 1.0 量级。`Svf`/`OnePole`
+     无此相消，保持 f32。
+- Result:
+  - `sunmao_dsp`：9 单测 + 3 doc-test + **4 proptest**（任意 cutoff/resonance/Q/
+    采样率/幅度下永不产生非有限样本；静音后残留不可闻且非 denormal；
+    lowpass 在任意 cutoff 下 DC 增益为 1；`reset` 后与新建实例逐样本完全一致）。
+  - `RUSTFLAGS=-Awarnings cargo test --locked` 123 套件全绿、exit 0（新增 3 套件）。
+  - metadata/fmt/diff-check 通过；Windows 交叉 check 通过；
+    `tools/package_examples.sh --debug --test` 退出 0、24 套件各 19/19；
+    `nm -gU` 复查 SVF fixture cdylib 无 AU 符号。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/m3a_test.log`、`/tmp/m3a_pkg.log`、
+  `/tmp/m3a_win.log`）——本地证据等级。
+- Unresolved: 待三平台 hosted 全绿。M3 余下：envelopes（ADSR/follower）与
+  band-limited oscillators（sine/saw/pulse），随后用 oscillator/envelope 把
+  instrument 模板压进 ≤50 行（M2 记录的未达标项）。

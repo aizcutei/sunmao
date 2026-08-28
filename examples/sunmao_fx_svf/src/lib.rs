@@ -1,12 +1,12 @@
 //! SunMao SVF Filter — Phase 3 acceptance fixture.
 //!
-//! M0 skeleton: a stereo state-variable filter (Zavalishin TPT topology) with
-//! lowpass/bandpass/highpass modes, implemented inline. M3 replaces the inline
-//! DSP with the `sunmao/dsp` SVF component while keeping every test's
-//! semantics unchanged — that swap is the acceptance criterion for the DSP
-//! crate's filter family.
+//! Now built on the `sunmao_dsp::filters::Svf` component. The inline TPT
+//! implementation this fixture started with has been removed; every test below
+//! is unchanged from the skeleton, which is what makes the swap evidence that
+//! the component reproduces the hand-written DSP rather than merely compiling.
 
 use sunmao::prelude::*;
+use sunmao_dsp::filters::Svf;
 
 /// Filter mode selected by the `mode` parameter.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -48,33 +48,11 @@ impl Default for SvfParams {
     }
 }
 
-/// Per-channel TPT SVF state.
-#[derive(Clone, Copy, Default)]
-struct SvfState {
-    ic1: f32,
-    ic2: f32,
-}
-
-impl SvfState {
-    /// One TPT SVF step returning (lowpass, bandpass, highpass).
-    fn tick(&mut self, input: f32, g: f32, k: f32) -> (f32, f32, f32) {
-        let a1 = 1.0 / (1.0 + g * (g + k));
-        let a2 = g * a1;
-        let a3 = g * a2;
-        let v3 = input - self.ic2;
-        let v1 = a1 * self.ic1 + a2 * v3;
-        let v2 = self.ic2 + a2 * self.ic1 + a3 * v3;
-        self.ic1 = 2.0 * v1 - self.ic1;
-        self.ic2 = 2.0 * v2 - self.ic2;
-        (v2, v1, input - k * v1 - v2)
-    }
-}
-
 /// The SVF filter plugin.
 pub struct SvfPlugin {
     params: Arc<SvfParams>,
     sample_rate: f64,
-    states: [SvfState; 2],
+    states: [Svf; 2],
 }
 
 impl Default for SvfPlugin {
@@ -82,7 +60,7 @@ impl Default for SvfPlugin {
         Self {
             params: Arc::new(SvfParams::default()),
             sample_rate: 44_100.0,
-            states: [SvfState::default(); 2],
+            states: [Svf::new(); 2],
         }
     }
 }
@@ -103,7 +81,9 @@ impl SunmaoPlugin for SvfPlugin {
     }
 
     fn reset(&mut self) {
-        self.states = [SvfState::default(); 2];
+        for state in &mut self.states {
+            state.reset();
+        }
     }
 
     fn process(
@@ -130,18 +110,18 @@ impl SunmaoPlugin for SvfPlugin {
         }
         let mode = FilterMode::from_index(self.params.mode.get());
 
-        // Prewarped cutoff, clamped below Nyquist so `tan` stays finite.
-        let normalized = (f64::from(cutoff) / self.sample_rate).clamp(1e-5, 0.49);
-        let g = (std::f64::consts::PI * normalized).tan() as f32;
-        // Damping: resonance 0 → k = 2 (no peak), resonance 1 → k = 0.1
-        // (pronounced but bounded peak, never self-oscillating).
-        let k = 2.0 - 1.9 * resonance.clamp(0.0, 1.0);
+        // The component owns cutoff prewarping, the Nyquist clamp, and the
+        // resonance-to-damping mapping the inline version used to do here.
+        for state in &mut self.states {
+            state.set_params(f64::from(cutoff), resonance, self.sample_rate);
+        }
 
         let channels = buffer.num_output_channels().min(2);
         for sample_index in 0..buffer.num_samples() {
             for (channel, state) in self.states.iter_mut().enumerate().take(channels) {
                 let input = buffer.output(channel)[sample_index];
-                let (lp, bp, hp) = state.tick(input, g, k);
+                let out = state.tick(input);
+                let (lp, bp, hp) = (out.lowpass, out.bandpass, out.highpass);
                 buffer.output(channel)[sample_index] = match mode {
                     FilterMode::Lowpass => lp,
                     FilterMode::Bandpass => bp,

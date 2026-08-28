@@ -38,6 +38,7 @@ members = [
     "baseview",
     "sunmao",
     "sunmao/core",
+    "sunmao/dsp",
     "sunmao/macros",
     "sunmao/runtime",
     "sunmao/backend_vst3",
