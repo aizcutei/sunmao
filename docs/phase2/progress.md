@@ -126,3 +126,18 @@
 - Result: macOS ARM64、Windows x86_64、Ubuntu x86_64 三个 job 同一 commit 全部 success。modulation、per-note expression、voice-info 在两种格式、三个平台通过；Phase 1 既有 gate 与 Phase 2 fixture 步骤保持绿色。
 - Evidence/artifact: run #35 上传 `phase1-macOS-ARM64`（51.1MB）、`phase1-Windows-X64`（76.9MB）、`phase1-Linux-X64`（956.0MB）。
 - Unresolved: M4 完成，进入 M5（最后一个实现里程碑）。M5 盘点：`vst3_rs/src/state.rs` 已有 `STATE_MAGIC`+`STATE_VERSION=1` 的参数编码，CLAP 侧另有一份；**关键缺口是 `decode_header` 对版本不符直接返回 `None`（`vst3_rs/src/state.rs:94`），旧版本 state 会被整体拒绝而非迁移**，且版本头分散在两个格式层，与 semantics.md 约定的"版本头由 SunMao 层定义、格式无关"不符。
+
+### 2026-08-28 — M5 版本化 state 与迁移（待 hosted 验证）
+
+- Command/platform: macOS ARM64，分支 `phase2/advanced-plugin-contract`。
+- Change（自底向上）：
+  - `_rs`：**修掉 M5 的本体缺陷**——`vst3_rs/src/state.rs` 与 `clap_rs/src/ext/state.rs` 的 `decode_header` 此前对版本不符一律 `return None`，旧 preset 会被整体丢弃。现改为：`version <= STATE_VERSION` 接受并返回版本号，`version > STATE_VERSION` 拒绝（本 build 无法解释未来布局），magic 校验不变。
+  - core：`SunmaoPlugin` 新增 `STATE_VERSION` 常量与 `migrate_state(from_version)` 钩子，并写明版本策略——条目按参数 id 匹配，故**增删参数不需要升版本**，只有既有参数的含义变化才需要。
+  - fixture：state migration 演进到 v2（保留 v1 的 `level`，新增 `trim_db`），`migrate_state` 在 `from_version < 2` 时把 `trim_db` 归位到文档化的默认值。
+  - `docs/phase2/semantics.md`：版本化 state 行填入落地 API 与版本策略。
+- Result:
+  - 新增测试：两个 `_rs` 各 3（`clap_rs` 49/49、`vst3_rs` 50/50，覆盖"旧版本被接受/未来版本被拒绝/外来 magic 被拒绝"）、fixture 2（3/3）。
+  - 完整 `cargo test --locked`：104 套件全绿、0 失败；fmt/diff 通过。
+  - Windows target check 通过；`tools/package_examples.sh --debug --test` 退出 0，Phase 1 的 20 个 runner 套件仍各 16/16——runner 的 state round-trip 用例是这次改动的直接回归面。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/phase2_m5_test.log`、`/tmp/phase2_m5_pkg.log`）——本地证据等级。
+- Unresolved: 三平台 hosted 验证本 commit 后 M5 才算完成。未做：`clap.preset-load` 宿主驱动的 preset 载入路径、VST3 program list 映射、backend 侧调用 `migrate_state` 的端到端接线（目前钩子与解码器已就绪，backend 尚未在 load 后回调），列为 M6 收口项。

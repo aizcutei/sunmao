@@ -187,6 +187,14 @@ pub trait SunmaoPlugin: Default + Send + 'static {
     const URL: &'static str;
     /// Plugin version string.
     const VERSION: &'static str = "1.0.0";
+    /// Version of this plugin's parameter state layout.
+    ///
+    /// Bump it whenever the *meaning* of an existing parameter changes.
+    /// Adding or removing parameters does not require a bump: state entries
+    /// are matched by parameter id, so a state written by an older build
+    /// restores the parameters it knew and leaves new ones at their defaults.
+    const STATE_VERSION: u32 = 1;
+
     /// Maximum number of host events accepted in one processing block.
     ///
     /// Format adapters allocate this scratch during activation and report a
@@ -259,6 +267,14 @@ pub trait SunmaoPlugin: Default + Send + 'static {
     fn voice_info(&self) -> Option<VoiceInfo> {
         None
     }
+
+    /// Called after a state written by an older build has been applied.
+    ///
+    /// `from_version` is that build's [`SunmaoPlugin::STATE_VERSION`], always
+    /// lower than this build's. Use it to reinterpret values whose meaning
+    /// changed; parameters that simply did not exist yet already hold their
+    /// defaults and need no action.
+    fn migrate_state(&mut self, _from_version: u32) {}
 
     /// Called when the host switches between realtime and offline rendering.
     ///

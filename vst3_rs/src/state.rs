@@ -39,7 +39,7 @@ pub(crate) unsafe fn load_parameter_state(
     if !unsafe { stream_read_exact(stream, &mut header) } {
         return kResultFalse;
     }
-    let Some(count) = decode_header(&header) else {
+    let Some((_version, count)) = decode_header(&header) else {
         return kResultFalse;
     };
     let Some(body_len) = count.checked_mul(ENTRY_LEN) else {
@@ -86,20 +86,26 @@ fn encode_parameter_state(
     Some(bytes)
 }
 
-fn decode_header(bytes: &[u8]) -> Option<usize> {
+/// Reads the header, returning `(version, entry count)`.
+///
+/// A state written by an older build is accepted: entries are matched by
+/// parameter id, so parameters that did not exist yet simply keep their
+/// defaults. A *newer* version is rejected because this build cannot know how
+/// to interpret it.
+fn decode_header(bytes: &[u8]) -> Option<(u32, usize)> {
     if bytes.len() < HEADER_LEN || bytes[..8] != STATE_MAGIC {
         return None;
     }
     let version = u32::from_le_bytes(bytes[8..12].try_into().ok()?);
-    if version != STATE_VERSION {
+    if version > STATE_VERSION {
         return None;
     }
     let count = u32::from_le_bytes(bytes[12..16].try_into().ok()?) as usize;
-    (count <= MAX_STATE_PARAMETERS).then_some(count)
+    (count <= MAX_STATE_PARAMETERS).then_some((version, count))
 }
 
 fn decode_parameter_state(bytes: &[u8]) -> Option<Vec<(u32, f64)>> {
-    let count = decode_header(bytes)?;
+    let (_version, count) = decode_header(bytes)?;
     let required_len = HEADER_LEN.checked_add(count.checked_mul(ENTRY_LEN)?)?;
     if bytes.len() < required_len {
         return None;
@@ -210,5 +216,39 @@ mod tests {
         let mut bytes = encode_parameter_state(&params(), |_| 0.5).unwrap();
         bytes[HEADER_LEN + 4..HEADER_LEN + ENTRY_LEN].copy_from_slice(&f64::NAN.to_le_bytes());
         assert_eq!(decode_parameter_state(&bytes), None);
+    }
+
+    fn header_bytes(version: u32, count: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&STATE_MAGIC);
+        bytes.extend_from_slice(&version.to_le_bytes());
+        bytes.extend_from_slice(&count.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn a_state_from_an_older_build_is_accepted() {
+        // Entries are matched by parameter id, so an older layout restores
+        // what it knew and leaves newer parameters at their defaults. This
+        // must not be rejected outright.
+        let header = header_bytes(STATE_VERSION.saturating_sub(1).max(0), 0);
+        assert_eq!(
+            decode_header(&header),
+            Some((STATE_VERSION.saturating_sub(1).max(0), 0))
+        );
+    }
+
+    #[test]
+    fn a_state_from_a_newer_build_is_rejected() {
+        // This build cannot know how a future layout reinterprets values.
+        let header = header_bytes(STATE_VERSION + 1, 0);
+        assert_eq!(decode_header(&header), None);
+    }
+
+    #[test]
+    fn a_foreign_magic_is_rejected() {
+        let mut header = header_bytes(STATE_VERSION, 0);
+        header[0] = b'X';
+        assert_eq!(decode_header(&header), None);
     }
 }

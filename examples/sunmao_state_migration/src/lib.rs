@@ -1,23 +1,28 @@
 //! SunMao State Migration Fixture — Phase 2 acceptance fixture.
 //!
-//! M0 skeleton: a v1 tone-control effect with the plain Phase 1 parameter
-//! state. M5 evolves the parameter set to v2 and exercises the versioned
-//! state migration path (v1 blobs injected into a v2 plugin must load with
-//! documented defaults for the new fields).
+//! A v2 tone-control effect that must still load state written by its v1
+//! build. v1 stored a linear `level`; v2 keeps it and adds `trim_db`, which
+//! did not exist then and therefore loads at its default.
 
 use sunmao::prelude::*;
 
-/// Version 1 parameters. M5 adds a v2 field and a migration from this layout.
+/// Version 2 parameters. `level` existed in v1; `trim_db` is new.
 #[derive(Params)]
 pub struct StateMigrationParams {
-    /// Output level (linear).
+    /// Output level (linear). Present since v1.
     pub level: FloatParam,
+    /// Extra trim in dB. Added in v2, so a v1 state leaves it at 0.
+    pub trim_db: FloatParam,
 }
+
+/// Default trim for a state written before `trim_db` existed.
+pub const V1_TRIM_DEFAULT_DB: f32 = 0.0;
 
 impl Default for StateMigrationParams {
     fn default() -> Self {
         Self {
             level: FloatParam::new("level", "Level", 1.0, 0.0, 2.0),
+            trim_db: FloatParam::new("trim_db", "Trim", V1_TRIM_DEFAULT_DB, -24.0, 24.0),
         }
     }
 }
@@ -25,12 +30,15 @@ impl Default for StateMigrationParams {
 /// The state migration fixture plugin.
 pub struct StateMigrationPlugin {
     params: Arc<StateMigrationParams>,
+    /// Version of the last state migrated into this instance, for tests.
+    migrated_from: Option<u32>,
 }
 
 impl Default for StateMigrationPlugin {
     fn default() -> Self {
         Self {
             params: Arc::new(StateMigrationParams::default()),
+            migrated_from: None,
         }
     }
 }
@@ -42,8 +50,18 @@ impl SunmaoPlugin for StateMigrationPlugin {
 
     type Params = StateMigrationParams;
 
+    const STATE_VERSION: u32 = 2;
+
     fn params(&self) -> Arc<Self::Params> {
         self.params.clone()
+    }
+
+    fn migrate_state(&mut self, from_version: u32) {
+        self.migrated_from = Some(from_version);
+        if from_version < 2 {
+            // v1 had no trim; state written then must sound exactly as it did.
+            self.params.trim_db.set(V1_TRIM_DEFAULT_DB);
+        }
     }
 
     fn process(
@@ -119,6 +137,34 @@ mod tests {
 
         assert_eq!(status, ProcessStatus::Normal);
         assert_eq!(output_left, [0.5; 4]);
+    }
+
+    #[test]
+    fn a_v1_state_leaves_the_new_parameter_at_its_documented_default() {
+        let mut plugin = StateMigrationPlugin::default();
+        // A v1 host state only carried `level`; whatever `trim_db` happened to
+        // hold beforehand must not survive as if the old host had set it.
+        plugin.params.level.set(0.25);
+        plugin.params.trim_db.set(9.0);
+
+        plugin.migrate_state(1);
+
+        assert_eq!(
+            plugin.params.trim_db.get(),
+            V1_TRIM_DEFAULT_DB,
+            "a v1 state predates trim_db, so it must load at the default"
+        );
+        assert_eq!(
+            plugin.params.level.get(),
+            0.25,
+            "a parameter that existed in v1 must survive migration"
+        );
+        assert_eq!(plugin.migrated_from, Some(1));
+    }
+
+    #[test]
+    fn the_plugin_declares_the_current_state_version() {
+        assert_eq!(StateMigrationPlugin::STATE_VERSION, 2);
     }
 }
 
