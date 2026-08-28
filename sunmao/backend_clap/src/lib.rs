@@ -5,6 +5,7 @@
 use clap_rs::clap_sys::id::CLAP_INVALID_ID;
 use clap_rs::ext::audio_ports_config::AudioPortsConfig as ClapAudioPortsConfig;
 use clap_rs::ext::gui::{GuiApi, GuiHandler, GuiResizeHints};
+use clap_rs::ext::preset_load::PresetLocation as ClapPresetLocation;
 use clap_rs::ext::voice_info::VoiceInfo as ClapVoiceInfo;
 use clap_rs::ext::RenderMode;
 use clap_rs::gui::prepare_view;
@@ -26,8 +27,9 @@ use sunmao_core::events::{
     NoteExpressionKind as SunmaoNoteExpressionKind,
 };
 use sunmao_core::plugin::{
-    BusInfo as SunmaoBusInfo, BusRole as SunmaoBusRole, ProcessContext as SunmaoProcessContext,
-    RenderMode as SunmaoRenderMode, TailLength as SunmaoTailLength,
+    BusInfo as SunmaoBusInfo, BusRole as SunmaoBusRole, PresetLocation as SunmaoPresetLocation,
+    ProcessContext as SunmaoProcessContext, RenderMode as SunmaoRenderMode,
+    TailLength as SunmaoTailLength,
 };
 use sunmao_core::view::ViewContext;
 use sunmao_core::{
@@ -754,6 +756,20 @@ impl<P: SunmaoPlugin> Plugin for SunmaoClapWrapper<P> {
     }
 
     const STATE_VERSION: u32 = P::STATE_VERSION;
+    const SUPPORTS_PRESET_LOAD: bool = P::SUPPORTS_PRESET_LOAD;
+
+    fn load_preset(&mut self, location: ClapPresetLocation<'_>) -> bool {
+        // The two enums are the same shape; the backend only re-labels them so
+        // plugins never see a clap_rs type.
+        let location = match location {
+            ClapPresetLocation::File { path, key } => SunmaoPresetLocation::File { path, key },
+            ClapPresetLocation::Internal { key } => SunmaoPresetLocation::Internal { key },
+        };
+        self.plugin
+            .as_mut()
+            .map(|plugin| plugin.load_preset(location))
+            .unwrap_or(false)
+    }
 
     fn state_loaded(&mut self, from_version: u32) {
         // clap_rs only calls this once every value from the older blob has been
@@ -3354,6 +3370,182 @@ mod tests {
             u32::from_le_bytes(writer.bytes[8..12].try_into().unwrap()),
             MigrationPlugin::STATE_VERSION
         );
+    }
+
+    // ======= Preset load through the real CLAP extension =======
+
+    static PRESETS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    #[derive(Default)]
+    struct PresetPlugin;
+
+    impl SunmaoPlugin for PresetPlugin {
+        const NAME: &'static str = "Preset Load Test";
+        const VENDOR: &'static str = "SunMao Test";
+        const URL: &'static str = "https://example.invalid";
+        const SUPPORTS_PRESET_LOAD: bool = true;
+        type Params = RealtimeParams;
+
+        fn params(&self) -> Arc<Self::Params> {
+            Arc::new(RealtimeParams)
+        }
+
+        fn load_preset(&mut self, location: SunmaoPresetLocation<'_>) -> bool {
+            PRESETS.lock().unwrap().push(format!("{location:?}"));
+            // Refuse one key so the failure path is observable through the ABI.
+            !matches!(
+                location,
+                SunmaoPresetLocation::Internal { key: Some("bad") }
+            )
+        }
+
+        fn process(
+            &mut self,
+            _buffer: &mut AudioBuffer,
+            _events: &EventQueue,
+            _context: &SunmaoProcessContext,
+        ) -> ProcessStatus {
+            ProcessStatus::Normal
+        }
+    }
+
+    /// A plugin that has not opted in must not advertise the extension.
+    #[derive(Default)]
+    struct NoPresetPlugin;
+
+    impl SunmaoPlugin for NoPresetPlugin {
+        const NAME: &'static str = "No Preset Test";
+        const VENDOR: &'static str = "SunMao Test";
+        const URL: &'static str = "https://example.invalid";
+        type Params = RealtimeParams;
+
+        fn params(&self) -> Arc<Self::Params> {
+            Arc::new(RealtimeParams)
+        }
+
+        fn process(
+            &mut self,
+            _buffer: &mut AudioBuffer,
+            _events: &EventQueue,
+            _context: &SunmaoProcessContext,
+        ) -> ProcessStatus {
+            ProcessStatus::Normal
+        }
+    }
+
+    #[test]
+    fn clap_preset_load_reaches_the_plugin_with_its_location() {
+        use clap_rs::clap_sys::ext::preset_load::{
+            clap_plugin_preset_load_t, CLAP_EXT_PRESET_LOAD, CLAP_EXT_PRESET_LOAD_COMPAT,
+        };
+        use clap_rs::clap_sys::factory::preset_discovery::{
+            CLAP_PRESET_DISCOVERY_LOCATION_FILE, CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN,
+        };
+        use std::ffi::CString;
+
+        PRESETS.lock().unwrap().clear();
+
+        let plugin = unsafe {
+            clap_rs::entry::PluginEntry::create_plugin::<SunmaoClapWrapper<PresetPlugin>>(
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        assert!(!plugin.is_null());
+        unsafe { assert!(((*plugin).init.unwrap())(plugin)) };
+
+        let ext = unsafe {
+            ((*plugin).get_extension.unwrap())(plugin, CLAP_EXT_PRESET_LOAD.as_ptr().cast())
+        } as *const clap_plugin_preset_load_t;
+        assert!(
+            !ext.is_null(),
+            "an opted-in plugin must expose the extension"
+        );
+        // Hosts may still probe the draft id.
+        let compat = unsafe {
+            ((*plugin).get_extension.unwrap())(plugin, CLAP_EXT_PRESET_LOAD_COMPAT.as_ptr().cast())
+        };
+        assert_eq!(compat, ext as *const c_void);
+
+        let from_location = unsafe { (*ext).from_location.unwrap() };
+        let path = CString::new("/presets/bank.clap-preset").unwrap();
+        let key = CString::new("lead").unwrap();
+
+        // A file location carries both path and key through to the plugin.
+        assert!(unsafe {
+            from_location(
+                plugin,
+                CLAP_PRESET_DISCOVERY_LOCATION_FILE,
+                path.as_ptr(),
+                key.as_ptr(),
+            )
+        });
+        // A plugin-internal location has no path.
+        assert!(unsafe {
+            from_location(
+                plugin,
+                CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN,
+                std::ptr::null(),
+                key.as_ptr(),
+            )
+        });
+        // A plugin refusal surfaces as false rather than being swallowed.
+        let bad = CString::new("bad").unwrap();
+        assert!(!unsafe {
+            from_location(
+                plugin,
+                CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN,
+                std::ptr::null(),
+                bad.as_ptr(),
+            )
+        });
+
+        assert_eq!(
+            PRESETS.lock().unwrap().as_slice(),
+            &[
+                "File { path: \"/presets/bank.clap-preset\", key: Some(\"lead\") }".to_string(),
+                "Internal { key: Some(\"lead\") }".to_string(),
+                "Internal { key: Some(\"bad\") }".to_string(),
+            ],
+            "each location must reach the plugin unaltered"
+        );
+
+        // A null path for a file location, and an unknown location kind, are
+        // both refused before the plugin is asked.
+        let before = PRESETS.lock().unwrap().len();
+        assert!(!unsafe {
+            from_location(
+                plugin,
+                CLAP_PRESET_DISCOVERY_LOCATION_FILE,
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        });
+        assert!(!unsafe { from_location(plugin, 9_999, path.as_ptr(), std::ptr::null()) });
+        assert_eq!(PRESETS.lock().unwrap().len(), before);
+
+        unsafe { ((*plugin).destroy.unwrap())(plugin) };
+    }
+
+    #[test]
+    fn a_plugin_without_preset_support_does_not_expose_the_extension() {
+        use clap_rs::clap_sys::ext::preset_load::CLAP_EXT_PRESET_LOAD;
+
+        let plugin = unsafe {
+            clap_rs::entry::PluginEntry::create_plugin::<SunmaoClapWrapper<NoPresetPlugin>>(
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        unsafe { assert!(((*plugin).init.unwrap())(plugin)) };
+        let ext = unsafe {
+            ((*plugin).get_extension.unwrap())(plugin, CLAP_EXT_PRESET_LOAD.as_ptr().cast())
+        };
+        assert!(
+            ext.is_null(),
+            "a host must not be offered a preset loader that always refuses"
+        );
+        unsafe { ((*plugin).destroy.unwrap())(plugin) };
     }
 }
 

@@ -33,7 +33,7 @@ pub mod prelude {
         ParamKind, ParamLayoutError, Params,
     };
     pub use crate::plugin::{
-        BusConfig, BusInfo, BusRole, ProcessContext, ProcessStatus, SunmaoPlugin,
+        BusConfig, BusInfo, BusRole, PresetLocation, ProcessContext, ProcessStatus, SunmaoPlugin,
     };
     pub use crate::view::{
         ParamsViewContext, ParentWindow, StandaloneViewOptions, StandaloneViewResult, SunmaoView,

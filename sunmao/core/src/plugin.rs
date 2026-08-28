@@ -133,6 +133,33 @@ impl BusConfig {
     }
 }
 
+/// Where a preset the host wants loaded lives.
+///
+/// CLAP hosts pass this through `clap.preset-load`. VST3 has no equivalent
+/// call in these bindings — a VST3 host applies a preset by handing its bytes
+/// to `setState` instead — so a VST3 plugin never sees this. See
+/// `docs/phase2/semantics.md`.
+///
+/// ```
+/// # use sunmao_core::plugin::PresetLocation;
+/// let from_disk = PresetLocation::File { path: "/presets/lead.clap-preset", key: None };
+/// // A container file can hold several presets, addressed by key.
+/// let from_bank = PresetLocation::File { path: "/presets/bank.clap-preset", key: Some("lead") };
+/// assert_ne!(from_disk, from_bank);
+/// // Factory presets live inside the plugin itself and have no path.
+/// assert_eq!(
+///     PresetLocation::Internal { key: Some("init") },
+///     PresetLocation::Internal { key: Some("init") },
+/// );
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresetLocation<'a> {
+    /// A file on disk. `key` selects one preset inside a container file.
+    File { path: &'a str, key: Option<&'a str> },
+    /// A preset built into the plugin binary.
+    Internal { key: Option<&'a str> },
+}
+
 /// Polyphony information a host can query.
 ///
 /// CLAP exposes this through `clap.voice-info`; VST3 has no equivalent, so a
@@ -414,6 +441,25 @@ pub trait SunmaoPlugin: Default + Send + 'static {
     /// `None` means "not a voice-based plugin". VST3 hosts never see this.
     fn voice_info(&self) -> Option<VoiceInfo> {
         None
+    }
+
+    /// Whether this plugin can load presets by location.
+    ///
+    /// The CLAP extension is only advertised when this is `true`, so a host
+    /// never asks a plugin that would just refuse.
+    const SUPPORTS_PRESET_LOAD: bool = false;
+
+    /// Called when the host asks for a preset to be loaded.
+    ///
+    /// Return `true` once the preset has been applied; `false` reports the
+    /// failure to the host rather than leaving it to assume success. Both the
+    /// path and key borrow the host's strings and must not be retained.
+    ///
+    /// Only reached when [`SunmaoPlugin::SUPPORTS_PRESET_LOAD`] is `true`.
+    /// A VST3 host applies presets through `setState` instead and never calls
+    /// this; see `docs/phase2/semantics.md`.
+    fn load_preset(&mut self, _location: PresetLocation<'_>) -> bool {
+        false
     }
 
     /// Called after a state written by an older build has been applied.

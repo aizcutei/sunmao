@@ -378,3 +378,37 @@
 - Unresolved: phase2/status.md 遗留表第 5 项已改为"已实现"（5/7 关闭）。
   下一个瓶颈是第 6 项：`clap.preset-load` 与 VST3 program list，统一为
   "插件侧载入回调 + 状态应用"，program list 可选实现。
+
+### 2026-08-28 — M1 第 6 项：preset 载入（CLAP 落地，VST3 program list 按边界不实现）
+
+- Command/platform: macOS ARM64，分支 `phase3/framework-dsp-library`。
+- Change:
+  - 先读上游确认边界：`clap_sys` 有 `clap.preset-load/2` 与 draft 别名、
+    location kind 常量在 `factory::preset_discovery`；**`vst3_sys` 完全没有
+    `IUnitInfo`/`IProgramListData` 绑定**，故 VST3 program list 若要做需先补 `_sys`。
+    按 loop 边界"program list 可选实现"，本项只落 CLAP 侧回调腿。
+  - core：新增 `PresetLocation::{File{path,key}, Internal{key}}` 与
+    `SunmaoPlugin::{SUPPORTS_PRESET_LOAD, load_preset}`（默认不支持、返回 false），
+    进两个 prelude，带 doc-test。
+  - `clap_rs`：新增 `ext/preset_load.rs` 暴露 `clap.preset-load/2`（含 draft 别名解析），
+    **仅在 `SUPPORTS_PRESET_LOAD` 为真时创建扩展**——否则宿主会拿到一个必然失败的
+    loader。backend 层防御：file 位置但路径为空指针、路径非 UTF-8、未知 location_kind
+    一律在触达插件前拒绝；非 UTF-8 **不做有损转换**，否则可能载入与宿主所指不同的文件。
+  - backend_clap：`ClapPresetLocation` ↔ `SunmaoPresetLocation` 同形转译，插件返回值
+    如实上报。
+  - fixture：`sunmao_state_migration` 消费该能力（preset 本质就是参数状态），
+    实现两个 factory preset 与"未知 key / file 位置一律拒绝"。
+- Result:
+  - 新增测试：backend 2（走真实扩展：两种位置原样送达、拒绝上报 false、
+    空路径与未知 kind 不触达插件；未支持的插件不暴露扩展）、fixture 2、core doc-test 1。
+  - `RUSTFLAGS=-Awarnings cargo test --locked` 115 套件全绿、exit 0。
+  - metadata/fmt/diff-check 通过；`cargo check --locked --target x86_64-pc-windows-msvc`
+    覆盖 5 个改动 crate 通过；`tools/package_examples.sh --debug --test` 退出 0、
+    24 套件各 19/19。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/m1f_test.log`、`/tmp/m1f_pkg.log`、
+  `/tmp/m1f_win.log`）——本地证据等级。
+- Unresolved: 待三平台 hosted 全绿方可把遗留表第 6 项改为"已实现"。
+  **诚实标注**：这是本阶段少见的**单格式能力**——VST3 侧没有等价调用可接，
+  不是"接了但降级"，而是该格式宿主根本没有 preset 接口可调（其路径是 `setState`）。
+  若将来要做 VST3 program list，需先在 `vst3_sys` 补 `IUnitInfo`/`IProgramListData`
+  绑定，属独立工作量。M1 余下第 7 项（无界 fuzz 脚手架）。

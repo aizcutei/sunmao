@@ -13,6 +13,7 @@ use crate::ext::audio_ports_config::{
 use crate::ext::latency::{create_latency_ext, create_latency_ext_gui};
 use crate::ext::note_ports::{NotePortInfo, create_note_ports_ext, create_note_ports_ext_gui};
 use crate::ext::params::{ParameterInfo, create_params_ext, create_params_ext_gui};
+use crate::ext::preset_load::{create_preset_load_ext, create_preset_load_ext_gui};
 use crate::ext::render::{create_render_ext, create_render_ext_gui};
 use crate::ext::state::{create_state_ext, create_state_ext_gui};
 use crate::ext::tail::{create_tail_ext, create_tail_ext_gui};
@@ -34,6 +35,9 @@ use clap_sys::ext::gui::clap_plugin_gui_t;
 use clap_sys::ext::latency::{CLAP_EXT_LATENCY, clap_plugin_latency_t};
 use clap_sys::ext::note_ports::{CLAP_EXT_NOTE_PORTS, clap_plugin_note_ports_t};
 use clap_sys::ext::params::{CLAP_EXT_PARAMS, clap_plugin_params_t};
+use clap_sys::ext::preset_load::{
+    CLAP_EXT_PRESET_LOAD, CLAP_EXT_PRESET_LOAD_COMPAT, clap_plugin_preset_load_t,
+};
 use clap_sys::ext::render::{CLAP_EXT_RENDER, clap_plugin_render_t};
 use clap_sys::ext::state::{CLAP_EXT_STATE, clap_plugin_state_t};
 use clap_sys::ext::tail::{CLAP_EXT_TAIL, clap_plugin_tail_t};
@@ -86,6 +90,7 @@ pub struct PluginInstance<P: Plugin> {
     pub audio_ports_activation_ext: Option<*const clap_plugin_audio_ports_activation_t>,
     pub audio_ports_config_ext: Option<*const clap_plugin_audio_ports_config_t>,
     pub audio_ports_config_info_ext: Option<*const clap_plugin_audio_ports_config_info_t>,
+    pub preset_load_ext: Option<*const clap_plugin_preset_load_t>,
     pub note_ports_ext: Option<*const clap_plugin_note_ports_t>,
     pub params_ext: Option<*const clap_plugin_params_t>,
     pub state_ext: Option<*const clap_plugin_state_t>,
@@ -123,6 +128,7 @@ impl<P: Plugin> PluginInstance<P> {
             audio_ports_activation_ext: None,
             audio_ports_config_ext: None,
             audio_ports_config_info_ext: None,
+            preset_load_ext: None,
             note_ports_ext: None,
             params_ext: None,
             state_ext: None,
@@ -247,6 +253,9 @@ impl<P: Plugin> PluginInstance<P> {
                 ))
             };
         }
+        if let Some(ptr) = self.preset_load_ext.take() {
+            unsafe { drop(Box::from_raw(ptr as *mut clap_plugin_preset_load_t)) };
+        }
         if let Some(ptr) = self.note_ports_ext.take() {
             unsafe { drop(Box::from_raw(ptr as *mut clap_plugin_note_ports_t)) };
         }
@@ -354,6 +363,11 @@ unsafe fn plugin_init_unchecked<P: Plugin>(plugin: *const clap_plugin_t) -> bool
         instance.audio_ports_config_ext = Some(Box::into_raw(config_ext));
         let info_ext = Box::new(create_audio_ports_config_info_ext::<P>());
         instance.audio_ports_config_info_ext = Some(Box::into_raw(info_ext));
+    }
+
+    if P::SUPPORTS_PRESET_LOAD {
+        let ext = Box::new(create_preset_load_ext::<P>());
+        instance.preset_load_ext = Some(Box::into_raw(ext));
     }
 
     if !instance.note_ports_cache.is_empty() {
@@ -691,6 +705,14 @@ pub unsafe extern "C" fn plugin_get_extension<P: Plugin>(
         }
     }
 
+    if id_cstr.to_bytes_with_nul() == CLAP_EXT_PRESET_LOAD.as_bytes()
+        || id_cstr.to_bytes_with_nul() == CLAP_EXT_PRESET_LOAD_COMPAT.as_bytes()
+    {
+        if let Some(ptr) = instance.preset_load_ext {
+            return ptr as *const c_void;
+        }
+    }
+
     if id_cstr.to_bytes_with_nul() == CLAP_EXT_NOTE_PORTS.as_bytes() {
         if let Some(ptr) = instance.note_ports_ext {
             return ptr as *const c_void;
@@ -780,6 +802,11 @@ unsafe fn plugin_init_with_gui_unchecked<P: Plugin + GuiHandler>(
         instance.audio_ports_config_ext = Some(Box::into_raw(config_ext));
         let info_ext = Box::new(create_audio_ports_config_info_ext_gui::<P>());
         instance.audio_ports_config_info_ext = Some(Box::into_raw(info_ext));
+    }
+
+    if P::SUPPORTS_PRESET_LOAD {
+        let ext = Box::new(create_preset_load_ext_gui::<P>());
+        instance.preset_load_ext = Some(Box::into_raw(ext));
     }
 
     if !instance.note_ports_cache.is_empty() {
@@ -918,6 +945,14 @@ pub unsafe extern "C" fn plugin_get_extension_with_gui<P: Plugin + GuiHandler>(
         || id_cstr.to_bytes_with_nul() == CLAP_EXT_AUDIO_PORTS_CONFIG_INFO_COMPAT.as_bytes()
     {
         if let Some(ptr) = instance.audio_ports_config_info_ext {
+            return ptr as *const c_void;
+        }
+    }
+
+    if id_cstr.to_bytes_with_nul() == CLAP_EXT_PRESET_LOAD.as_bytes()
+        || id_cstr.to_bytes_with_nul() == CLAP_EXT_PRESET_LOAD_COMPAT.as_bytes()
+    {
+        if let Some(ptr) = instance.preset_load_ext {
             return ptr as *const c_void;
         }
     }

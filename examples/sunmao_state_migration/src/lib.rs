@@ -32,6 +32,8 @@ pub struct StateMigrationPlugin {
     params: Arc<StateMigrationParams>,
     /// Version of the last state migrated into this instance, for tests.
     migrated_from: Option<u32>,
+    /// Name of the last factory preset applied, for tests.
+    loaded_preset: Option<&'static str>,
 }
 
 impl Default for StateMigrationPlugin {
@@ -39,6 +41,7 @@ impl Default for StateMigrationPlugin {
         Self {
             params: Arc::new(StateMigrationParams::default()),
             migrated_from: None,
+            loaded_preset: None,
         }
     }
 }
@@ -54,6 +57,39 @@ impl SunmaoPlugin for StateMigrationPlugin {
 
     fn params(&self) -> Arc<Self::Params> {
         self.params.clone()
+    }
+
+    const SUPPORTS_PRESET_LOAD: bool = true;
+
+    /// Applies a factory preset by name.
+    ///
+    /// Presets are just parameter state, so this fixture keeps them in the
+    /// plugin rather than reading files: it exercises the host-facing contract
+    /// (a named preset is applied, an unknown one is refused) without making
+    /// the test depend on the filesystem.
+    fn load_preset(&mut self, location: PresetLocation<'_>) -> bool {
+        let key = match location {
+            // A file preset is refused: this fixture ships no preset files, and
+            // claiming success would tell the host a preset was applied when
+            // nothing changed.
+            PresetLocation::File { .. } => return false,
+            PresetLocation::Internal { key } => key,
+        };
+        match key {
+            Some("init") => {
+                self.params.level.set(1.0);
+                self.params.trim_db.set(V1_TRIM_DEFAULT_DB);
+                self.loaded_preset = Some("init");
+                true
+            }
+            Some("loud") => {
+                self.params.level.set(2.0);
+                self.params.trim_db.set(6.0);
+                self.loaded_preset = Some("loud");
+                true
+            }
+            _ => false,
+        }
     }
 
     fn migrate_state(&mut self, from_version: u32) {
@@ -165,6 +201,40 @@ mod tests {
     #[test]
     fn the_plugin_declares_the_current_state_version() {
         assert_eq!(StateMigrationPlugin::STATE_VERSION, 2);
+    }
+
+    #[test]
+    fn a_named_factory_preset_is_applied() {
+        let mut plugin = StateMigrationPlugin::default();
+        assert!(plugin.load_preset(PresetLocation::Internal { key: Some("loud") }));
+        assert_eq!(plugin.loaded_preset, Some("loud"));
+        assert_eq!(plugin.params.level.get(), 2.0);
+        assert_eq!(plugin.params.trim_db.get(), 6.0);
+
+        assert!(plugin.load_preset(PresetLocation::Internal { key: Some("init") }));
+        assert_eq!(plugin.params.level.get(), 1.0);
+        assert_eq!(plugin.params.trim_db.get(), V1_TRIM_DEFAULT_DB);
+    }
+
+    #[test]
+    fn an_unknown_or_file_preset_is_refused_rather_than_faked() {
+        let mut plugin = StateMigrationPlugin::default();
+        let before = plugin.params.level.get();
+
+        // A host must be told the load failed, not left believing it worked.
+        assert!(!plugin.load_preset(PresetLocation::Internal { key: Some("nope") }));
+        assert!(!plugin.load_preset(PresetLocation::Internal { key: None }));
+        assert!(!plugin.load_preset(PresetLocation::File {
+            path: "/presets/whatever.clap-preset",
+            key: None,
+        }));
+
+        assert_eq!(plugin.loaded_preset, None);
+        assert_eq!(
+            plugin.params.level.get(),
+            before,
+            "a refusal changes nothing"
+        );
     }
 }
 

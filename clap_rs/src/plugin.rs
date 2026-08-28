@@ -216,6 +216,16 @@ pub trait Plugin: Sized {
         false
     }
 
+    // Whether `clap.preset-load` is advertised. Off by default so a host never
+    // asks a plugin that would only refuse.
+    const SUPPORTS_PRESET_LOAD: bool = false;
+
+    // Called when the host asks for a preset to be loaded. Return `true` once
+    // it has been applied. Only reached when `SUPPORTS_PRESET_LOAD` is true.
+    fn load_preset(&mut self, _location: crate::ext::preset_load::PresetLocation<'_>) -> bool {
+        false
+    }
+
     // Version stamped into saved state. A blob written by an older build is
     // accepted and `state_loaded` reports its version; a newer one is refused
     // because this build cannot know how to read it.
