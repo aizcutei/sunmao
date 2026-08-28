@@ -81,7 +81,9 @@ pub mod prelude {
         stable_param_id, validate_param_layout, BoolParam, FloatParam, IntParam, ParamDescriptor,
         ParamKind, ParamLayoutError, Params,
     };
-    pub use sunmao_core::plugin::{ProcessContext, ProcessStatus, SunmaoPlugin};
+    pub use sunmao_core::plugin::{
+        ProcessContext, ProcessStatus, RenderMode, SunmaoPlugin, TailLength,
+    };
     pub use sunmao_core::view::{
         ParamsViewContext, ParentWindow, StandaloneViewOptions, StandaloneViewResult, SunmaoView,
         ViewContext, ViewHandle,

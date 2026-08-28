@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use vst3_sys::base::{IUnknownVtbl, kResultOk};
 use vst3_sys::gui::{IPlugFrameVtbl, ViewRect};
+use vst3_sys::vst::types::ProcessModes;
 use vst3_sys::vst::{IComponentHandlerVtbl, SpeakerArrangement};
 
 /// Plugin information for registration
@@ -30,6 +31,28 @@ impl Default for PluginInfo {
             email: "",
             version: "1.0.0",
             category: "Fx",
+        }
+    }
+}
+
+/// Host render mode negotiated through `ProcessSetup.process_mode`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum RenderMode {
+    /// `kRealtime`, and `kPrefetch` which still runs under realtime rules.
+    #[default]
+    Realtime,
+    /// `kOffline`: a bounce or export with no realtime deadline.
+    Offline,
+}
+
+impl RenderMode {
+    /// Maps a raw `ProcessModes` value; unknown modes are treated as realtime
+    /// because that is the stricter contract.
+    pub fn from_process_mode(mode: i32) -> Self {
+        if mode == ProcessModes::kOffline {
+            Self::Offline
+        } else {
+            Self::Realtime
         }
     }
 }
@@ -495,6 +518,12 @@ pub trait Plugin: Sized + 'static {
         0
     }
 
+    /// Called from `setupProcessing` with the host's negotiated process mode.
+    ///
+    /// VST3 only renegotiates the setup while the component is inactive, so
+    /// this is a valid place to change the reported latency.
+    fn set_render_mode(&mut self, _mode: RenderMode) {}
+
     // === Parameters ===
 
     /// Declare plugin parameters
@@ -546,7 +575,7 @@ pub fn class_id_from_str(value: &str) -> [i8; 16] {
 
 #[cfg(test)]
 mod tests {
-    use super::{ParameterBridge, class_id_from_str};
+    use super::{ParameterBridge, ProcessModes, RenderMode, class_id_from_str};
     use crate::ParamInfo;
     use std::sync::Arc;
 
@@ -655,5 +684,24 @@ mod tests {
         assert!(controller.set(42, 0.91));
         assert_eq!(controller.get(42), 0.91);
         assert_eq!(processor_b.get(42), 0.73);
+    }
+
+    #[test]
+    fn only_the_offline_process_mode_maps_to_offline_rendering() {
+        assert_eq!(
+            RenderMode::from_process_mode(ProcessModes::kOffline),
+            RenderMode::Offline
+        );
+        assert_eq!(
+            RenderMode::from_process_mode(ProcessModes::kRealtime),
+            RenderMode::Realtime
+        );
+        // Prefetch still runs under realtime rules.
+        assert_eq!(
+            RenderMode::from_process_mode(ProcessModes::kPrefetch),
+            RenderMode::Realtime
+        );
+        // An unknown mode falls back to the stricter contract.
+        assert_eq!(RenderMode::from_process_mode(9_999), RenderMode::Realtime);
     }
 }

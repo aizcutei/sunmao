@@ -18,6 +18,43 @@ pub enum ProcessStatus {
     Error,
 }
 
+/// How long a plugin keeps producing output after its input goes silent.
+///
+/// Both formats encode "infinite" with a magic number — VST3 uses
+/// `kInfiniteTail` and CLAP treats anything at or above `i32::MAX` as
+/// unbounded — so the unified API names the concept instead.
+///
+/// ```
+/// # use sunmao_core::plugin::TailLength;
+/// // A one-second reverb tail at 48 kHz.
+/// let tail = TailLength::Samples(48_000);
+/// assert_ne!(tail, TailLength::Infinite);
+/// assert_eq!(TailLength::default(), TailLength::None);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TailLength {
+    /// The plugin stops producing output as soon as its input does.
+    #[default]
+    None,
+    /// The plugin keeps producing output for this many samples.
+    Samples(u32),
+    /// The plugin may produce output indefinitely (e.g. a feedback network).
+    Infinite,
+}
+
+/// Whether the host is rendering in realtime or offline.
+///
+/// VST3 additionally distinguishes a prefetch mode; it maps to
+/// [`RenderMode::Realtime`] because it still runs under realtime constraints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RenderMode {
+    /// Normal realtime playback.
+    #[default]
+    Realtime,
+    /// Offline rendering such as a bounce or export.
+    Offline,
+}
+
 /// Context information provided during processing.
 ///
 /// Every musical field is optional because both VST3 and CLAP let the host
@@ -108,6 +145,27 @@ pub trait SunmaoPlugin: Default + Send + 'static {
 
     /// Called when processing stops.
     fn reset(&mut self) {}
+
+    /// Processing delay in samples, so the host can compensate for it.
+    ///
+    /// Both formats only re-query this outside the processing state, so it
+    /// must stay constant for as long as the plugin is processing; change it
+    /// from [`SunmaoPlugin::initialize`] or [`SunmaoPlugin::set_render_mode`].
+    fn latency_samples(&self) -> u32 {
+        0
+    }
+
+    /// How long the plugin keeps producing output after its input stops.
+    fn tail(&self) -> TailLength {
+        TailLength::None
+    }
+
+    /// Called when the host switches between realtime and offline rendering.
+    ///
+    /// The host calls this outside processing, so it is a valid place to
+    /// change [`SunmaoPlugin::latency_samples`] (e.g. to enable a longer
+    /// lookahead when rendering offline).
+    fn set_render_mode(&mut self, _mode: RenderMode) {}
 
     /// Main audio processing callback.
     ///

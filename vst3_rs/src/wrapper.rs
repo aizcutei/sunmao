@@ -3,6 +3,7 @@
 //! This module contains the unsafe FFI glue that converts Plugin trait
 //! implementations into VST3 COM interfaces.
 
+use crate::plugin::RenderMode;
 use crate::process::{MAX_PROCESS_EVENTS, MAX_PROCESS_FRAMES};
 use crate::state::{load_parameter_state, save_parameter_state};
 use crate::{HostHandle, ParamInfo, ParameterBridge, Plugin, ProcessContext, ProcessError};
@@ -1118,6 +1119,11 @@ impl<P: Plugin> ProcessorWrapper<P> {
         (*obj).sample_rate = sample_rate;
         (*obj).max_frames = max_frames;
         (*obj).process_ctx = Some(process_ctx);
+        // The component is inactive here, so the plugin may still change the
+        // latency it reports in response to the negotiated render mode.
+        if let Some(plugin) = (*obj).plugin.as_mut() {
+            plugin.set_render_mode(RenderMode::from_process_mode(setup.process_mode));
+        }
 
         kResultOk
     }

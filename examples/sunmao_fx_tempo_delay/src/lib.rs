@@ -38,12 +38,17 @@ impl Default for TempoDelayParams {
     }
 }
 
+/// Lookahead used to align the wet path, in milliseconds. Offline rendering
+/// doubles it because there is no realtime deadline to respect.
+const LOOKAHEAD_MS: f64 = 5.0;
+
 /// The tempo delay plugin.
 pub struct TempoDelayPlugin {
     params: Arc<TempoDelayParams>,
     delay_lines: [Vec<f32>; 2],
     write_pos: usize,
     sample_rate: f64,
+    render_mode: RenderMode,
 }
 
 impl Default for TempoDelayPlugin {
@@ -53,7 +58,18 @@ impl Default for TempoDelayPlugin {
             delay_lines: [Vec::new(), Vec::new()],
             write_pos: 0,
             sample_rate: 44_100.0,
+            render_mode: RenderMode::Realtime,
         }
+    }
+}
+
+impl TempoDelayPlugin {
+    fn lookahead_seconds(&self) -> f64 {
+        let scale = match self.render_mode {
+            RenderMode::Realtime => 1.0,
+            RenderMode::Offline => 2.0,
+        };
+        LOOKAHEAD_MS / 1000.0 * scale
     }
 }
 
@@ -83,6 +99,24 @@ impl SunmaoPlugin for TempoDelayPlugin {
             line.fill(0.0);
         }
         self.write_pos = 0;
+    }
+
+    fn latency_samples(&self) -> u32 {
+        (self.lookahead_seconds() * self.sample_rate).round() as u32
+    }
+
+    fn tail(&self) -> TailLength {
+        // With feedback the delay line never fully decays in finite time, so
+        // the tail is only bounded when feedback is off.
+        if self.params.feedback.get() > 0.0 {
+            TailLength::Infinite
+        } else {
+            TailLength::Samples((MAX_DELAY_SECONDS * self.sample_rate).ceil() as u32)
+        }
+    }
+
+    fn set_render_mode(&mut self, mode: RenderMode) {
+        self.render_mode = mode;
     }
 
     fn process(
@@ -212,6 +246,35 @@ mod tests {
         output
             .iter()
             .position(|sample| (*sample - 1.0).abs() < 1e-6)
+    }
+
+    #[test]
+    fn offline_rendering_doubles_the_reported_lookahead() {
+        let mut plugin = TempoDelayPlugin::default();
+        plugin.initialize(48_000.0, 64);
+        let realtime = plugin.latency_samples();
+        assert_eq!(realtime, 240, "5 ms at 48 kHz");
+
+        plugin.set_render_mode(RenderMode::Offline);
+        assert_eq!(plugin.latency_samples(), realtime * 2);
+
+        plugin.set_render_mode(RenderMode::Realtime);
+        assert_eq!(plugin.latency_samples(), realtime);
+    }
+
+    #[test]
+    fn feedback_makes_the_tail_unbounded() {
+        let mut plugin = TempoDelayPlugin::default();
+        plugin.initialize(48_000.0, 64);
+
+        plugin.params.feedback.set(0.0);
+        assert_eq!(
+            plugin.tail(),
+            TailLength::Samples((MAX_DELAY_SECONDS * 48_000.0) as u32)
+        );
+
+        plugin.params.feedback.set(0.5);
+        assert_eq!(plugin.tail(), TailLength::Infinite);
     }
 
     #[test]

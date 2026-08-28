@@ -13,7 +13,7 @@ pub mod wrapper;
 pub use gui::GuiPlugin;
 pub use params::ParamInfo;
 pub use plugin::{
-    AudioConfig, HostHandle, ParameterBridge, Plugin, PluginInfo, PortConfig, PortType,
+    AudioConfig, HostHandle, ParameterBridge, Plugin, PluginInfo, PortConfig, PortType, RenderMode,
     class_id_from_str,
 };
 pub use process::{ParamChange, ProcessContext, ProcessError, ProcessResult};

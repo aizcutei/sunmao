@@ -56,3 +56,19 @@
 - Result: macOS ARM64、Windows x86_64、Ubuntu x86_64 三个 job 同一 commit 全部 success。transport 模型在两种格式、三个平台上通过；Phase 1 既有 gate 与 M0 的 Phase 2 fixture 步骤保持绿色。
 - Evidence/artifact: run #29 上传 `phase1-macOS-ARM64`（50.7MB）、`phase1-Windows-X64`（76.7MB）、`phase1-Linux-X64`（954.7MB）。
 - Unresolved: M1 完成，进入 M2。M2 盘点：`clap_rs::Plugin` 已有 `latency()`/`tail()`/`set_render_mode()` 与 `ext/{latency,tail,render}.rs`，`vst3_rs::Plugin` 已有 `latency()`/`tail()`；缺口在 `sunmao_core::SunmaoPlugin`（无对应方法）、两个 backend（未桥接）、VST3 的 `ProcessSetup.process_mode`（未向上暴露）、runner（无 latency/tail 断言）。
+
+### 2026-08-28 — M2 latency/tail/offline render 实现（待 hosted 验证）
+
+- Command/platform: macOS ARM64，分支 `phase2/advanced-plugin-contract`。
+- Change（自底向上）：
+  - `_rs`：`vst3_rs` 新增 `RenderMode`（`from_process_mode` 把 `kPrefetch` 与未知模式并入 `Realtime`）与 `Plugin::set_render_mode` 钩子，并在 `setupProcessing` 组件未激活时下发；`clap_rs` 的 latency/tail/render 扩展已存在，无需改动。
+  - core：`SunmaoPlugin` 新增 `latency_samples()`/`tail()`/`set_render_mode()`；新增 `TailLength{None,Samples,Infinite}` 与 `RenderMode{Realtime,Offline}` 两个枚举（均带 doc-test），并进 `sunmao::prelude`。
+  - backend：两侧同时桥接。tail 的"无限"魔数由 backend 编码——VST3 `kInfiniteTail`(=`u32::MAX`)、CLAP `>=i32::MAX`；**有限 tail 一律夹到魔数之下**，避免恰好等于魔数的有限值被宿主当成无限尾音。CLAP 的 `set_render_mode` 经 `catch_unwind` 包裹，插件 panic 转为 `false` 而非跨 ABI 展开。
+  - fixture：tempo delay 上报 5ms lookahead latency（offline 时翻倍）与 tail——feedback>0 时为 `Infinite`，否则为延迟线长度。
+  - `docs/phase2/semantics.md`：latency/tail/offline render 三行填入落地 API 与降级规则，均注明对应测试名。
+- Result:
+  - 新增测试：`vst3_rs` 1（47/47）、两个 backend 各 2（各 20/20）、fixture 2（9/9）、core doc-test 2。
+  - 完整 `cargo test --locked`：104 套件全绿、0 失败；fmt/metadata/diff 通过。
+  - Windows target check（两 backend + fixture）通过；`tools/package_examples.sh --debug --test` 退出 0，Phase 1 的 20 个 runner 套件仍各 16/16。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/phase2_m2_test.log`、`/tmp/phase2_m2_pkg.log`）——本地证据等级。
+- Unresolved: 三平台 hosted 验证本 commit 后 M2 才算完成。runner 的 latency/tail 宿主侧断言仍未加（宿主需查询 `IAudioProcessor::getLatencySamples`/`clap.latency`），列为 M2 收尾项。

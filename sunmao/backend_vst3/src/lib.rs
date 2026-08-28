@@ -8,7 +8,10 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::Arc;
 use sunmao_core::events::MidiMessage;
-use sunmao_core::plugin::ProcessContext as SunmaoProcessContext;
+use sunmao_core::plugin::{
+    ProcessContext as SunmaoProcessContext, RenderMode as SunmaoRenderMode,
+    TailLength as SunmaoTailLength,
+};
 use sunmao_core::view::ViewContext;
 use sunmao_core::{
     AudioBuffer, Event, EventQueue, ParamDescriptor, Params, ParentWindow, SunmaoPlugin, ViewHandle,
@@ -24,6 +27,29 @@ use vst3_rs::{
 };
 
 pub use vst3_rs::{export_vst3_plugin, export_vst3_plugin_with_gui};
+
+/// VST3's "no tail" encoding (`kNoTail`).
+const fn vst3_no_tail() -> u32 {
+    vst3_rs::vst3_sys::vst::types::kNoTail
+}
+
+/// VST3's "unbounded tail" encoding (`kInfiniteTail`).
+const fn vst3_infinite_tail() -> u32 {
+    vst3_rs::vst3_sys::vst::types::kInfiniteTail
+}
+
+/// Encodes a unified tail length for VST3.
+///
+/// `kInfiniteTail` is a reserved magic value, so a finite tail that happens to
+/// land on it is reported one sample shorter rather than silently becoming
+/// unbounded.
+fn clamp_vst3_tail(tail: SunmaoTailLength) -> u32 {
+    match tail {
+        SunmaoTailLength::None => vst3_no_tail(),
+        SunmaoTailLength::Samples(samples) => samples.min(vst3_infinite_tail() - 1),
+        SunmaoTailLength::Infinite => vst3_infinite_tail(),
+    }
+}
 
 /// Wrapper that adapts a SunmaoPlugin to vst3_rs::Plugin.
 pub struct SunmaoVst3Wrapper<P: SunmaoPlugin> {
@@ -366,6 +392,14 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
         self.pending_midi.clear();
         self.event_overflowed = false;
         self.event_queue.clear();
+    }
+
+    fn latency(&self) -> u32 {
+        self.plugin.latency_samples()
+    }
+
+    fn tail(&self) -> u32 {
+        clamp_vst3_tail(self.plugin.tail())
     }
 
     fn reset(&mut self) {
@@ -2049,6 +2083,82 @@ mod tests {
             frame_rate: Default::default(),
             samples_to_next_clock: 0,
         }
+    }
+
+    #[derive(Default)]
+    struct TailPlugin;
+
+    impl SunmaoPlugin for TailPlugin {
+        const NAME: &'static str = "Tail Test";
+        const VENDOR: &'static str = "SunMao Test";
+        const URL: &'static str = "https://example.invalid";
+        type Params = EmptyParams;
+
+        fn params(&self) -> Arc<Self::Params> {
+            Arc::new(EmptyParams)
+        }
+
+        fn latency_samples(&self) -> u32 {
+            256
+        }
+
+        fn tail(&self) -> SunmaoTailLength {
+            SunmaoTailLength::Infinite
+        }
+
+        fn process(
+            &mut self,
+            _buffer: &mut AudioBuffer,
+            _events: &EventQueue,
+            _context: &SunmaoProcessContext,
+        ) -> ProcessStatus {
+            ProcessStatus::Normal
+        }
+    }
+
+    #[test]
+    fn latency_and_infinite_tail_reach_the_vst3_contract() {
+        unsafe {
+            let processor = ProcessorWrapper::<SunmaoVst3Wrapper<TailPlugin>>::new([0; 16]);
+            let component = processor.cast::<c_void>();
+            let component_vtbl = *(component as *const *const IComponentVtbl);
+            assert_eq!(
+                ((*component_vtbl).base.initialize)(component, std::ptr::null_mut()),
+                kResultOk
+            );
+
+            let mut audio = std::ptr::null_mut();
+            assert_eq!(
+                ((*component_vtbl).base.unknown.query_interface)(
+                    component,
+                    &vst3_rs::vst3_sys::vst::iid::IAudioProcessor,
+                    &mut audio,
+                ),
+                kResultOk
+            );
+            let audio_vtbl = *(audio as *const *const IAudioProcessorVtbl);
+
+            assert_eq!(((*audio_vtbl).get_latency_samples)(audio), 256);
+            assert_eq!(
+                ((*audio_vtbl).get_tail_samples)(audio),
+                vst3_infinite_tail()
+            );
+
+            ((*component_vtbl).base.terminate)(component);
+            ((*component_vtbl).base.unknown.release)(component);
+        }
+    }
+
+    #[test]
+    fn a_finite_tail_never_collides_with_the_infinite_encoding() {
+        // `kInfiniteTail` is a magic value, so a finite tail reported at that
+        // exact length must be clamped one sample below it.
+        assert_eq!(
+            clamp_vst3_tail(SunmaoTailLength::Samples(u32::MAX)),
+            vst3_infinite_tail() - 1
+        );
+        assert_eq!(clamp_vst3_tail(SunmaoTailLength::Samples(48_000)), 48_000);
+        assert_eq!(clamp_vst3_tail(SunmaoTailLength::None), vst3_no_tail());
     }
 
     #[test]

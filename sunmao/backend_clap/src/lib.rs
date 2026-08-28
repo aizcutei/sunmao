@@ -3,6 +3,7 @@
 //! This crate wraps `SunmaoPlugin` to expose it as a CLAP plugin via `clap_rs`.
 
 use clap_rs::ext::gui::{GuiApi, GuiHandler, GuiResizeHints};
+use clap_rs::ext::RenderMode;
 use clap_rs::gui::prepare_view;
 use clap_rs::process::{
     ProcessContext, MAX_PROCESS_AUDIO_SAMPLES, MAX_PROCESS_CHANNELS, MAX_PROCESS_EVENTS,
@@ -18,7 +19,10 @@ use std::num::NonZeroIsize;
 use std::ptr::NonNull;
 use std::sync::Arc;
 use sunmao_core::events::MidiMessage;
-use sunmao_core::plugin::ProcessContext as SunmaoProcessContext;
+use sunmao_core::plugin::{
+    ProcessContext as SunmaoProcessContext, RenderMode as SunmaoRenderMode,
+    TailLength as SunmaoTailLength,
+};
 use sunmao_core::view::ViewContext;
 use sunmao_core::{
     AudioBuffer, Event as SunmaoEvent, EventQueue, ParamChange, ParamDescriptor, Params,
@@ -27,6 +31,19 @@ use sunmao_core::{
 use sunmao_core::{ParentWindow, SunmaoView, ViewHandle};
 
 pub use clap_rs::{export_clap_plugin, export_clap_plugin_with_gui, PluginInfo};
+
+/// CLAP treats any tail at or above `i32::MAX` samples as unbounded.
+const CLAP_INFINITE_TAIL: u32 = i32::MAX as u32;
+
+/// Encodes a unified tail length for CLAP, keeping a finite tail strictly
+/// below the threshold that the format reads as unbounded.
+fn clamp_clap_tail(tail: SunmaoTailLength) -> u32 {
+    match tail {
+        SunmaoTailLength::None => 0,
+        SunmaoTailLength::Samples(samples) => samples.min(CLAP_INFINITE_TAIL - 1),
+        SunmaoTailLength::Infinite => CLAP_INFINITE_TAIL,
+    }
+}
 
 const DEFAULT_EFFECT_FEATURES: &[&str] = &["audio-effect"];
 const DEFAULT_SYNTH_FEATURES: &[&str] = &["instrument", "synthesizer"];
@@ -584,6 +601,36 @@ impl<P: SunmaoPlugin> Plugin for SunmaoClapWrapper<P> {
             processor.plugin.reset();
         }));
         self.plugin = Some(processor.plugin);
+    }
+
+    fn latency(&self) -> u32 {
+        self.plugin
+            .as_ref()
+            .map(|plugin| plugin.latency_samples())
+            .unwrap_or(0)
+    }
+
+    fn tail(&self) -> u32 {
+        self.plugin
+            .as_ref()
+            .map(|plugin| clamp_clap_tail(plugin.tail()))
+            .unwrap_or(0)
+    }
+
+    fn set_render_mode(&mut self, mode: RenderMode) -> bool {
+        let Some(plugin) = self.plugin.as_mut() else {
+            return false;
+        };
+        let mode = match mode {
+            RenderMode::Realtime => SunmaoRenderMode::Realtime,
+            RenderMode::Offline => SunmaoRenderMode::Offline,
+        };
+        // Render mode switches run on the main thread, but they are still user
+        // code reached over the CLAP ABI.
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            plugin.set_render_mode(mode);
+        }))
+        .is_ok()
     }
 
     fn audio_ports_config(&self) -> Vec<AudioPortInfo> {
@@ -2116,6 +2163,58 @@ mod tests {
         );
         assert!(processor.is_none());
         assert!(wrapper.plugin.is_some());
+    }
+
+    #[derive(Default)]
+    struct TailPlugin;
+
+    impl SunmaoPlugin for TailPlugin {
+        const NAME: &'static str = "Tail Test";
+        const VENDOR: &'static str = "SunMao Test";
+        const URL: &'static str = "https://example.invalid";
+        type Params = RealtimeParams;
+
+        fn params(&self) -> Arc<Self::Params> {
+            Arc::new(RealtimeParams)
+        }
+
+        fn latency_samples(&self) -> u32 {
+            256
+        }
+
+        fn tail(&self) -> SunmaoTailLength {
+            SunmaoTailLength::Infinite
+        }
+
+        fn process(
+            &mut self,
+            _buffer: &mut AudioBuffer,
+            _events: &EventQueue,
+            _context: &SunmaoProcessContext,
+        ) -> ProcessStatus {
+            ProcessStatus::Normal
+        }
+    }
+
+    #[test]
+    fn latency_and_infinite_tail_reach_the_clap_contract() {
+        let host = unsafe { HostHandle::from_raw(std::ptr::null()) };
+        let wrapper = <SunmaoClapWrapper<TailPlugin> as Plugin>::new(host);
+
+        assert_eq!(Plugin::latency(&wrapper), 256);
+        assert_eq!(Plugin::tail(&wrapper), CLAP_INFINITE_TAIL);
+    }
+
+    #[test]
+    fn a_finite_clap_tail_never_reaches_the_infinite_threshold() {
+        // CLAP treats anything at or above `i32::MAX` as unbounded, so a
+        // finite tail must stay strictly below it.
+        assert_eq!(
+            clamp_clap_tail(SunmaoTailLength::Samples(u32::MAX)),
+            CLAP_INFINITE_TAIL - 1
+        );
+        assert_eq!(clamp_clap_tail(SunmaoTailLength::Samples(48_000)), 48_000);
+        assert_eq!(clamp_clap_tail(SunmaoTailLength::None), 0);
     }
 
     #[derive(Default)]
