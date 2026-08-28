@@ -412,3 +412,11 @@
   不是"接了但降级"，而是该格式宿主根本没有 preset 接口可调（其路径是 `setState`）。
   若将来要做 VST3 program list，需先在 `vst3_sys` 补 `IUnitInfo`/`IProgramListData`
   绑定，属独立工作量。M1 余下第 7 项（无界 fuzz 脚手架）。
+
+### 2026-08-28 — M1 第 6 项验收：hosted run #53 三平台全绿
+
+- Command/platform: push `e1455dd` 触发 GitHub Actions #53：https://github.com/aizcutei/sunmao/actions/runs/33184652119
+- Result: 三平台三个 job 同一 commit 全部 success，逐步骤复查零非成功步骤。
+- Evidence/artifact: run #53 上传三平台 artifacts（49.5MB / 73.9MB / 915.8MB），均可下载。
+- Unresolved: 遗留表第 6 项已改为"已实现"（6/7 关闭）。余下第 7 项：无界 fuzz 脚手架
+  （按边界仅本地/非 blocking，入口写入 README）。
