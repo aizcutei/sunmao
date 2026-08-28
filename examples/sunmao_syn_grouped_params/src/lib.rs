@@ -63,6 +63,9 @@ pub struct GroupedSynth {
     env: f32,
     /// One-pole lowpass state, the filter section's placeholder DSP.
     lp_state: f32,
+    /// Level is smoothed: a host jumping it between blocks would otherwise
+    /// step the gain and click.
+    level: Smoother,
 }
 
 impl Default for GroupedSynth {
@@ -75,6 +78,9 @@ impl Default for GroupedSynth {
             stage: EnvStage::Idle,
             env: 0.0,
             lp_state: 0.0,
+            // 10 ms is short enough to feel immediate and long enough to
+            // remove the step.
+            level: Smoother::new(SmoothingStyle::Linear(0.010)),
         }
     }
 }
@@ -104,6 +110,9 @@ impl SunmaoPlugin for GroupedSynth {
 
     fn initialize(&mut self, sample_rate: f64, _max_block_size: u32) {
         self.sample_rate = sample_rate;
+        self.level.set_sample_rate(sample_rate);
+        // Start at the current setting rather than ramping up from zero.
+        self.level.reset(self.params.osc_level.get());
     }
 
     fn reset(&mut self) {
@@ -130,7 +139,8 @@ impl SunmaoPlugin for GroupedSynth {
             }
         }
 
-        let level = self.params.osc_level.get();
+        // Aim the smoother at this block's value; the ramp is read per sample.
+        self.level.set_target(self.params.osc_level.get());
         let detune = f64::from(self.params.osc_detune.get());
         let cutoff = f64::from(self.params.filter_cutoff.get());
         let attack_step =
@@ -166,7 +176,7 @@ impl SunmaoPlugin for GroupedSynth {
             let raw = if self.stage == EnvStage::Idle {
                 0.0
             } else {
-                (self.phase * std::f64::consts::TAU).sin() as f32 * self.env * level
+                (self.phase * std::f64::consts::TAU).sin() as f32 * self.env * self.level.next()
             };
             self.phase = (self.phase + increment).fract();
             self.lp_state += lp_coeff * (raw - self.lp_state);
@@ -315,6 +325,61 @@ mod tests {
         }
         let attack = group_segments("Amp/Envelope").collect::<Vec<_>>();
         assert_eq!(attack, vec!["Amp", "Envelope"]);
+    }
+
+    #[test]
+    fn a_level_jump_is_ramped_rather_than_stepped() {
+        // The point of smoothing: a host slamming the level between blocks must
+        // not produce a discontinuity in the output.
+        let mut plugin = GroupedSynth::default();
+        plugin.params.osc_level.set(1.0);
+        plugin.initialize(48_000.0, 64);
+
+        // Sound a note and let the envelope settle so the level is what varies.
+        let mut events = EventQueue::new();
+        events.push(Event::Midi(MidiMessage::note_on(0, 0, 69, 100)));
+        let context = ProcessContext::default();
+        for _ in 0..64 {
+            let mut out_l = [0.0f32; 64];
+            let mut out_r = [0.0f32; 64];
+            let mut outputs: [&mut [f32]; 2] = [&mut out_l, &mut out_r];
+            let inputs: [&[f32]; 0] = [];
+            let mut buffer = AudioBuffer::new(&inputs, &mut outputs, 64);
+            plugin.process(&mut buffer, &events, &context);
+            events = EventQueue::new();
+        }
+
+        // Now drop the level to zero and capture the first block after it.
+        plugin.params.osc_level.set(0.0);
+        let mut out_l = [0.0f32; 64];
+        let mut out_r = [0.0f32; 64];
+        let mut outputs: [&mut [f32]; 2] = [&mut out_l, &mut out_r];
+        let inputs: [&[f32]; 0] = [];
+        let mut buffer = AudioBuffer::new(&inputs, &mut outputs, 64);
+        plugin.process(&mut buffer, &events, &context);
+
+        // A 10 ms ramp at 48 kHz is 480 samples, so after one 64-sample block
+        // the level must still be well above zero: an unsmoothed plugin would
+        // have gone silent immediately.
+        assert!(
+            plugin.level.is_smoothing(),
+            "the level jump must still be ramping"
+        );
+        assert!(
+            plugin.level.current() > 0.5,
+            "a 10 ms ramp should be ~13% through after 64 samples, got {}",
+            plugin.level.current()
+        );
+    }
+
+    #[test]
+    fn the_level_smoother_starts_at_its_parameter_instead_of_sliding_up() {
+        // Opening a session must not fade in from zero.
+        let mut plugin = GroupedSynth::default();
+        plugin.params.osc_level.set(0.7);
+        plugin.initialize(48_000.0, 64);
+        assert!(!plugin.level.is_smoothing());
+        assert!((plugin.level.current() - 0.7).abs() < 1e-6);
     }
 }
 

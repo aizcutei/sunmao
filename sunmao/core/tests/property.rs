@@ -8,6 +8,7 @@ use proptest::prelude::*;
 use sunmao_core::audio::AudioBuffer;
 use sunmao_core::events::{Event, EventQueue, MidiMessage, NoteExpression, NoteExpressionKind};
 use sunmao_core::plugin::{BusConfig, BusInfo, TailLength};
+use sunmao_core::smoothing::{Smoother, SmoothingStyle};
 
 /// Builds the bus bounds a format adapter hands to `AudioBuffer`.
 fn bounds_for(channels: &[u32]) -> Vec<usize> {
@@ -185,6 +186,87 @@ proptest! {
                     .any(|c| c.matches(&proposed_inputs, &proposed_outputs)),
                 "no config may match once the lookup reported none"
             );
+        }
+    }
+
+    /// A ramp must always arrive, at any magnitude and any duration.
+    ///
+    /// This is the invariant an epsilon cannot provide: the distance at which
+    /// f32 stops making progress scales with the target, so a fixed threshold
+    /// leaves large targets smoothing forever. Sweeping magnitudes from
+    /// subnormal-ish to audio-rate frequencies is what makes that visible.
+    #[test]
+    fn a_smoother_always_reaches_its_target(
+        start in -20_000.0f32..20_000.0,
+        target in -20_000.0f32..20_000.0,
+        seconds in 0.0001f32..1.0,
+        sample_rate in prop::sample::select(vec![8_000.0f64, 44_100.0, 48_000.0, 192_000.0]),
+        exponential in any::<bool>(),
+    ) {
+        let style = if exponential {
+            SmoothingStyle::Exponential(seconds)
+        } else {
+            SmoothingStyle::Linear(seconds)
+        };
+        let mut smoother = Smoother::new(style);
+        smoother.set_sample_rate(sample_rate);
+        smoother.reset(start);
+        smoother.set_target(target);
+
+        // An exponential ramp is bounded at 12 time constants and the longest
+        // configured time here is one second, so 15 seconds of samples is more
+        // than arrival can legitimately need for either style.
+        let limit = (sample_rate * 15.0) as usize;
+        let mut arrived = false;
+        for _ in 0..limit {
+            let value = smoother.next();
+            prop_assert!(value.is_finite(), "produced {value}");
+            if !smoother.is_smoothing() {
+                arrived = true;
+                break;
+            }
+        }
+        prop_assert!(
+            arrived,
+            "never arrived: start={start} target={target} seconds={seconds} exp={exponential} \
+             stalled at {} with distance {:e}",
+            smoother.current(),
+            (target - smoother.current()).abs()
+        );
+        prop_assert_eq!(smoother.current(), smoother.target());
+    }
+
+    /// A ramp never leaves the interval between where it started and its
+    /// target, so smoothing a gain cannot momentarily exceed either end.
+    #[test]
+    fn a_smoother_never_leaves_the_interval_it_travels(
+        start in -10.0f32..10.0,
+        target in -10.0f32..10.0,
+        seconds in 0.001f32..0.05,
+        exponential in any::<bool>(),
+    ) {
+        let style = if exponential {
+            SmoothingStyle::Exponential(seconds)
+        } else {
+            SmoothingStyle::Linear(seconds)
+        };
+        let mut smoother = Smoother::new(style);
+        smoother.set_sample_rate(48_000.0);
+        smoother.reset(start);
+        smoother.set_target(target);
+
+        let low = start.min(target);
+        let high = start.max(target);
+        for _ in 0..48_000 {
+            let value = smoother.next();
+            // A small tolerance for the exact landing arithmetic only.
+            prop_assert!(
+                value >= low - 1.0e-3 && value <= high + 1.0e-3,
+                "{value} escaped [{low}, {high}]"
+            );
+            if !smoother.is_smoothing() {
+                break;
+            }
         }
     }
 }

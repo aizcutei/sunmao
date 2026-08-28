@@ -529,3 +529,49 @@
   在三平台原生构建下全部通过。
 - Evidence/artifact: run #57 上传三平台 artifacts（50.0MB / 74.2MB / 918.2MB），均可下载。
 - Unresolved: M2 余下两项：零分配参数 smoothing、effect/instrument template。
+
+### 2026-08-29 — M2 第二项：零分配参数 smoothing（设计经 proptest 两次修正）
+
+- Command/platform: macOS ARM64，分支 `phase3/framework-dsp-library`。
+- Change:
+  - core 新增 `smoothing` 模块：`SmoothingStyle::{Linear,Exponential}(seconds)` 与
+    `Smoother`（`set_sample_rate`/`reset`/`set_target`/`next`/`is_smoothing`/`current`/
+    `target`），进两个 prelude，带 doc-test。全标量 + `Copy`，`next()` 只做算术。
+  - 与 automation/modulation 的关系写进模块文档：**automation 是值故被 smoothing，
+    modulation 是叠加偏移必须加在 smoothing 之后**——若折进 target，modulation 就会
+    变成被平滑的值并进入插件持久化状态，违反既有契约。
+  - fixture `sunmao_syn_grouped_params` 消费：level 走 10ms 线性 ramp，
+    `initialize` 里 `reset` 到当前参数值（否则开工程会从 0 淡入）。
+- **实现中被测试抓出的两个真实缺陷（都是我这轮写的）**：
+  1. **指数 ramp 永不终止**：`current = target - distance*decay` 在 f32 下存在不动点——
+     target=1.0 时距离收敛到约 `1.4e-5` 后 `target - small` 舍入回同一个 f32，
+     而该距离**远大于**我原先设的 `SNAP_EPSILON=1e-6`，于是永远不 snap、
+     每样本继续做无用计算且永不到达。修法不是调大 epsilon（不动点距离随 target 量级变化，
+     任何固定阈值对大 target 都太小、对小 target 又粗糙），而是**检测无进展**
+     （`next == current` 即 snap）。
+  2. **`is_smoothing()` 曾用 epsilon 判定**，于是它在值仍差一点点时就报"已到达"，
+     插件据此停止调用 `next()` 便永久留下一个残余偏移。改为"恰好到达才为 false"。
+     随后 proptest 又指出：指数逼近要到达绝对 epsilon 可能需 ~22 个时间常数
+     （1 秒时间常数 → 约 22 秒），`is_smoothing` 会长时间为真。最终设计：
+     **指数 ramp 在 12 个时间常数后精确 snap**（此时残余约 `e^-12`≈6ppm，不可闻），
+     `is_smoothing` 统一为 `remaining > 0`——既保证精确到达，又给出可预测的上界。
+- Result:
+  - core 7 单测（精确落点、单调不过冲、中途改目标不跳变、NaN/Inf 不污染 ramp、
+    非法采样率退化为直通、reset 取消 ramp、无堆状态）。
+  - **2 个新 proptest**：`a_smoother_always_reaches_its_target`（任意起点/目标
+    ±20000、任意时长、4 种采样率、两种风格——必在界内精确到达且全程有限）与
+    `a_smoother_never_leaves_the_interval_it_travels`。前者正是抓出上述两个缺陷的测试。
+  - 零分配**实测**：`sunmao_backend_clap::smoothing_in_process_does_not_allocate`
+    在该模块既有的计数分配器下跑 64 块 × 512 样本 × 两种风格 + 每块改目标，
+    分配调用 0；realtime allocation matrix 四个 crate 保持绿。
+  - fixture 8 单测全绿（含既有 DSP 语义测试未变）：新增
+    `a_level_jump_is_ramped_rather_than_stepped`、
+    `the_level_smoother_starts_at_its_parameter_instead_of_sliding_up`。
+  - `RUSTFLAGS=-Awarnings cargo test --locked` 115 套件全绿、exit 0；
+    metadata/fmt/diff-check 通过；Windows 交叉 check 覆盖 4 个改动 crate 通过；
+    `tools/package_examples.sh --debug --test` 退出 0、24 套件各 19/19。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/m2b_test.log`、`/tmp/m2b_pkg.log`、
+  `/tmp/m2b_win.log`）——本地证据等级。
+- Unresolved: 待三平台 hosted 全绿。smoothing 非 host-facing（无格式映射），故未加
+  semantics.md 行；与 automation/modulation 的关系记在模块文档。M2 余下最后一项：
+  effect/instrument template（新插件样板 ≤50 行）。

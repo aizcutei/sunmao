@@ -87,6 +87,7 @@ pub mod prelude {
         BusConfig, BusInfo, BusRole, PresetLocation, ProcessContext, ProcessStatus, RenderMode,
         SunmaoPlugin, TailLength, VoiceInfo,
     };
+    pub use sunmao_core::smoothing::{Smoother, SmoothingStyle};
     pub use sunmao_core::view::{
         ParamsViewContext, ParentWindow, StandaloneViewOptions, StandaloneViewResult, SunmaoView,
         ViewContext, ViewHandle,

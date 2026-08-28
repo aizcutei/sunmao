@@ -3703,6 +3703,36 @@ mod tests {
 
         unsafe { ((*plugin).destroy.unwrap())(plugin) };
     }
+
+    #[test]
+    fn smoothing_in_process_does_not_allocate() {
+        // `Smoother` is called once per sample on the audio thread. This runs
+        // it under the counting allocator that the realtime tests in this
+        // module use, so the claim is measured rather than assumed.
+        use sunmao_core::smoothing::{Smoother, SmoothingStyle};
+
+        let mut linear = Smoother::new(SmoothingStyle::Linear(0.01));
+        let mut exponential = Smoother::new(SmoothingStyle::Exponential(0.01));
+        linear.set_sample_rate(48_000.0);
+        exponential.set_sample_rate(48_000.0);
+        linear.reset(0.0);
+        exponential.reset(0.0);
+
+        let ((), allocator_calls) = count_allocator_calls(|| {
+            // Retargeting mid-ramp is the realistic pattern: a host sends a new
+            // automation value every block.
+            for block in 0..64 {
+                let target = if block % 2 == 0 { 1.0 } else { -1.0 };
+                linear.set_target(target);
+                exponential.set_target(target);
+                for _ in 0..512 {
+                    std::hint::black_box(linear.next());
+                    std::hint::black_box(exponential.next());
+                }
+            }
+        });
+        assert_eq!(allocator_calls, 0);
+    }
 }
 
 /// Entry type alias for sunmao_export! macro

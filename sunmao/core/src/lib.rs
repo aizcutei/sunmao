@@ -7,6 +7,7 @@ pub mod events;
 pub mod metadata;
 pub mod params;
 pub mod plugin;
+pub mod smoothing;
 pub mod view;
 
 // Re-exports for convenience
@@ -35,6 +36,7 @@ pub mod prelude {
     pub use crate::plugin::{
         BusConfig, BusInfo, BusRole, PresetLocation, ProcessContext, ProcessStatus, SunmaoPlugin,
     };
+    pub use crate::smoothing::{Smoother, SmoothingStyle};
     pub use crate::view::{
         ParamsViewContext, ParentWindow, StandaloneViewOptions, StandaloneViewResult, SunmaoView,
         ViewContext, ViewHandle,
