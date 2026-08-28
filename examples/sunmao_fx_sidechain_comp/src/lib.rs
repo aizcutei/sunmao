@@ -164,6 +164,7 @@ mod tests {
                 tempo: None,
                 is_playing: true,
                 sample_pos: 0,
+                ..Default::default()
             },
         );
         assert_eq!(status, ProcessStatus::Normal);

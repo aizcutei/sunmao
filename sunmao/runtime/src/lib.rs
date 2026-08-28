@@ -411,11 +411,15 @@ impl<P: SunmaoPlugin> StandaloneProcessor<P> {
     fn process_prepared_block(&mut self, frames: usize) -> ProcessStatus {
         let mut audio =
             AudioBuffer::from_planar(&self.input_buffers, &mut self.output_buffers, frames);
+        // The standalone runtime has no host timeline; it advertises a fixed
+        // tempo and its own sample cursor, and leaves the musical fields
+        // absent rather than inventing a bar/loop structure.
         let context = ProcessContext {
             sample_rate: self.sample_rate,
             tempo: Some(120.0),
             is_playing: true,
             sample_pos: self.sample_pos,
+            ..Default::default()
         };
         let status = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.plugin.process(&mut audio, &self.events, &context)

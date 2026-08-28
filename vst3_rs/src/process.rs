@@ -52,8 +52,20 @@ pub struct ProcessContext {
     tempo: Option<f64>,
     /// Whether transport is playing
     is_playing: bool,
+    /// Whether the host is recording
+    is_recording: bool,
+    /// Whether the host's cycle (loop) region is active
+    is_loop_active: bool,
     /// Current position in samples
     sample_pos: i64,
+    /// Time signature as `(numerator, denominator)`
+    time_signature: Option<(u16, u16)>,
+    /// Song position in quarter notes
+    song_pos_beats: Option<f64>,
+    /// Musical start of the current bar, in quarter notes
+    bar_start_beats: Option<f64>,
+    /// Cycle region in quarter notes
+    loop_beats: Option<(f64, f64)>,
     /// Input audio buffers (channel, sample)
     inputs: Vec<Vec<f32>>,
     /// Output audio buffers (channel, sample)
@@ -130,7 +142,13 @@ impl ProcessContext {
             sample_rate,
             tempo: None,
             is_playing: true,
+            is_recording: false,
+            is_loop_active: false,
             sample_pos: 0,
+            time_signature: None,
+            song_pos_beats: None,
+            bar_start_beats: None,
+            loop_beats: None,
             inputs,
             outputs,
             param_changes,
@@ -320,28 +338,101 @@ impl ProcessContext {
         self.sample_pos
     }
 
+    pub fn is_recording(&self) -> bool {
+        self.is_recording
+    }
+
+    pub fn is_loop_active(&self) -> bool {
+        self.is_loop_active
+    }
+
+    /// Time signature as `(numerator, denominator)`.
+    pub fn time_signature(&self) -> Option<(u16, u16)> {
+        self.time_signature
+    }
+
+    /// Song position in quarter notes, matching CLAP's beat-time unit.
+    pub fn song_pos_beats(&self) -> Option<f64> {
+        self.song_pos_beats
+    }
+
+    /// Song position in seconds, derived from the sample timeline because
+    /// VST3 has no dedicated seconds field.
+    pub fn song_pos_seconds(&self) -> Option<f64> {
+        (self.sample_rate > 0.0).then(|| self.sample_pos as f64 / self.sample_rate)
+    }
+
+    /// Musical start of the current bar, in quarter notes.
+    pub fn bar_start_beats(&self) -> Option<f64> {
+        self.bar_start_beats
+    }
+
+    /// Cycle region in quarter notes; `None` unless the cycle is active.
+    pub fn loop_beats(&self) -> Option<(f64, f64)> {
+        self.loop_beats
+    }
+
     pub(crate) fn update_transport_from_raw(&mut self, raw: *const c_void) {
         if raw.is_null() {
             self.tempo = None;
             self.is_playing = true;
+            self.is_recording = false;
+            self.is_loop_active = false;
             self.sample_pos = 0;
+            self.time_signature = None;
+            self.song_pos_beats = None;
+            self.bar_start_beats = None;
+            self.loop_beats = None;
             return;
         }
 
         let ctx = unsafe { &*(raw as *const SysProcessContext) };
-        self.is_playing = (ctx.state & ProcessContextFlags::kPlaying) != 0;
-        self.tempo = if (ctx.state & ProcessContextFlags::kTempoValid) != 0 {
-            ctx.tempo
-                .is_finite()
-                .then_some(ctx.tempo)
-                .filter(|tempo| *tempo >= 0.0)
-        } else {
-            None
+        let state = ctx.state;
+        let valid = |flag: u32, value: f64| -> Option<f64> {
+            ((state & flag) != 0 && value.is_finite()).then_some(value)
         };
-        self.sample_pos = if (ctx.state & ProcessContextFlags::kContTimeValid) != 0 {
+
+        self.is_playing = (state & ProcessContextFlags::kPlaying) != 0;
+        self.is_recording = (state & ProcessContextFlags::kRecording) != 0;
+        self.is_loop_active = (state & ProcessContextFlags::kCycleActive) != 0;
+        self.tempo =
+            valid(ProcessContextFlags::kTempoValid, ctx.tempo).filter(|tempo| *tempo >= 0.0);
+        self.sample_pos = if (state & ProcessContextFlags::kContTimeValid) != 0 {
             ctx.continous_time_samples
         } else {
             ctx.project_time_samples
+        };
+        self.time_signature = if (state & ProcessContextFlags::kTimeSigValid) != 0
+            && ctx.time_sig_numerator > 0
+            && ctx.time_sig_denominator > 0
+        {
+            Some((
+                ctx.time_sig_numerator as u16,
+                ctx.time_sig_denominator as u16,
+            ))
+        } else {
+            None
+        };
+        self.song_pos_beats = valid(
+            ProcessContextFlags::kProjectTimeMusicValid,
+            ctx.project_time_music,
+        );
+        self.bar_start_beats = valid(
+            ProcessContextFlags::kBarPositionValid,
+            ctx.bar_position_music,
+        );
+        // A cycle region is only meaningful while the host reports it active
+        // and hands over a non-degenerate range.
+        self.loop_beats = if self.is_loop_active {
+            match (
+                valid(ProcessContextFlags::kCycleValid, ctx.cycle_start_music),
+                valid(ProcessContextFlags::kCycleValid, ctx.cycle_end_music),
+            ) {
+                (Some(start), Some(end)) if end > start => Some((start, end)),
+                _ => None,
+            }
+        } else {
+            None
         };
     }
 }
@@ -427,5 +518,128 @@ mod tests {
             .is_none()
         );
         assert!(ProcessContext::try_new(1, 48_000.0, 0, 0, MAX_PROCESS_EVENTS + 1).is_none());
+    }
+
+    /// A host context whose every musical field carries a value; individual
+    /// tests clear the state bits they want to prove are honored.
+    fn full_sys_context(state: u32) -> SysProcessContext {
+        SysProcessContext {
+            state,
+            sample_rate: 48_000.0,
+            project_time_samples: 96_000,
+            system_time: 0,
+            continous_time_samples: 0,
+            project_time_music: 8.5,
+            bar_position_music: 8.0,
+            cycle_start_music: 4.0,
+            cycle_end_music: 12.0,
+            tempo: 128.0,
+            time_sig_numerator: 7,
+            time_sig_denominator: 8,
+            chord: Default::default(),
+            smpte_offset_subframes: 0,
+            frame_rate: Default::default(),
+            samples_to_next_clock: 0,
+        }
+    }
+
+    fn context_with(state: u32) -> ProcessContext {
+        let mut context = ProcessContext::new(4, 48_000.0, 2, 2, 8);
+        let sys = full_sys_context(state);
+        context.update_transport_from_raw(&sys as *const SysProcessContext as *const c_void);
+        context
+    }
+
+    #[test]
+    fn transport_reports_every_valid_field() {
+        let context = context_with(
+            ProcessContextFlags::kPlaying
+                | ProcessContextFlags::kRecording
+                | ProcessContextFlags::kCycleActive
+                | ProcessContextFlags::kTempoValid
+                | ProcessContextFlags::kTimeSigValid
+                | ProcessContextFlags::kProjectTimeMusicValid
+                | ProcessContextFlags::kBarPositionValid
+                | ProcessContextFlags::kCycleValid,
+        );
+
+        assert_eq!(context.tempo(), Some(128.0));
+        assert!(context.is_playing());
+        assert!(context.is_recording());
+        assert!(context.is_loop_active());
+        assert_eq!(context.time_signature(), Some((7, 8)));
+        assert_eq!(context.song_pos_beats(), Some(8.5));
+        assert_eq!(context.bar_start_beats(), Some(8.0));
+        assert_eq!(context.loop_beats(), Some((4.0, 12.0)));
+        assert_eq!(context.sample_pos(), 96_000);
+        assert_eq!(context.song_pos_seconds(), Some(2.0));
+    }
+
+    #[test]
+    fn transport_hides_fields_the_host_did_not_validate() {
+        let context = context_with(0);
+
+        assert_eq!(context.tempo(), None);
+        assert!(!context.is_playing());
+        assert!(!context.is_recording());
+        assert!(!context.is_loop_active());
+        assert_eq!(context.time_signature(), None);
+        assert_eq!(context.song_pos_beats(), None);
+        assert_eq!(context.bar_start_beats(), None);
+        assert_eq!(context.loop_beats(), None);
+    }
+
+    #[test]
+    fn cycle_region_requires_an_active_cycle_and_a_sane_range() {
+        // Valid range but the cycle is switched off.
+        let inactive = context_with(ProcessContextFlags::kCycleValid);
+        assert_eq!(inactive.loop_beats(), None);
+
+        // Active cycle with an inverted range is rejected outright.
+        let mut context = ProcessContext::new(4, 48_000.0, 2, 2, 8);
+        let mut sys =
+            full_sys_context(ProcessContextFlags::kCycleActive | ProcessContextFlags::kCycleValid);
+        sys.cycle_end_music = sys.cycle_start_music;
+        context.update_transport_from_raw(&sys as *const SysProcessContext as *const c_void);
+        assert!(context.is_loop_active());
+        assert_eq!(context.loop_beats(), None);
+    }
+
+    #[test]
+    fn degenerate_values_are_rejected() {
+        let state = ProcessContextFlags::kTempoValid | ProcessContextFlags::kTimeSigValid;
+
+        let mut context = ProcessContext::new(4, 48_000.0, 2, 2, 8);
+        let mut sys = full_sys_context(state);
+        sys.tempo = -1.0;
+        sys.time_sig_denominator = 0;
+        context.update_transport_from_raw(&sys as *const SysProcessContext as *const c_void);
+        assert_eq!(context.tempo(), None);
+        assert_eq!(context.time_signature(), None);
+
+        let mut nan_context = ProcessContext::new(4, 48_000.0, 2, 2, 8);
+        let mut nan_sys = full_sys_context(state);
+        nan_sys.tempo = f64::NAN;
+        nan_context
+            .update_transport_from_raw(&nan_sys as *const SysProcessContext as *const c_void);
+        assert_eq!(nan_context.tempo(), None);
+    }
+
+    #[test]
+    fn a_null_host_context_clears_every_musical_field() {
+        let mut context = context_with(
+            ProcessContextFlags::kPlaying
+                | ProcessContextFlags::kTempoValid
+                | ProcessContextFlags::kTimeSigValid
+                | ProcessContextFlags::kProjectTimeMusicValid,
+        );
+        assert_eq!(context.tempo(), Some(128.0));
+
+        context.update_transport_from_raw(std::ptr::null());
+
+        assert_eq!(context.tempo(), None);
+        assert_eq!(context.time_signature(), None);
+        assert_eq!(context.song_pos_beats(), None);
+        assert_eq!(context.sample_pos(), 0);
     }
 }

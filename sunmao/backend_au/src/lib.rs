@@ -124,11 +124,14 @@ impl<P: SunmaoPlugin> Plugin for SunmaoAuWrapper<P> {
 
         // Create process context
         let transport = au_rs::current_transport();
+        // AU stays on the Phase 1 transport subset; the Phase 2 musical fields
+        // are absent until AU returns to the gate.
         let ctx = SunmaoProcessContext {
             sample_rate: self.sample_rate,
             tempo: transport.tempo,
             is_playing: transport.is_playing.unwrap_or(true),
             sample_pos: transport.sample_pos.unwrap_or(0),
+            ..Default::default()
         };
 
         // Create event queue with pending MIDI

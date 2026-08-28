@@ -19,6 +19,26 @@ pub enum ProcessStatus {
 }
 
 /// Context information provided during processing.
+///
+/// Every musical field is optional because both VST3 and CLAP let the host
+/// declare which parts of its timeline are valid; a `None` means "the host did
+/// not provide this", never "zero". Beat positions are expressed in quarter
+/// notes, which is the native unit of both formats.
+///
+/// ```
+/// # use sunmao_core::plugin::ProcessContext;
+/// let context = ProcessContext {
+///     sample_rate: 48_000.0,
+///     tempo: Some(120.0),
+///     time_signature: Some((3, 4)),
+///     ..Default::default()
+/// };
+/// // One bar of 3/4 at 120 BPM lasts three quarter notes.
+/// let beats_per_bar = context.time_signature.map(|(num, _)| f64::from(num));
+/// assert_eq!(beats_per_bar, Some(3.0));
+/// assert_eq!(context.bar_number, None);
+/// ```
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct ProcessContext {
     /// Current sample rate in Hz.
     pub sample_rate: f64,
@@ -26,8 +46,24 @@ pub struct ProcessContext {
     pub tempo: Option<f64>,
     /// Whether the transport is playing.
     pub is_playing: bool,
+    /// Whether the host is recording.
+    pub is_recording: bool,
+    /// Whether the host's loop/cycle region is active.
+    pub is_loop_active: bool,
     /// Current position in samples from the start.
     pub sample_pos: i64,
+    /// Time signature as `(numerator, denominator)`.
+    pub time_signature: Option<(u16, u16)>,
+    /// Song position in quarter notes.
+    pub song_pos_beats: Option<f64>,
+    /// Song position in seconds.
+    pub song_pos_seconds: Option<f64>,
+    /// Musical start of the current bar, in quarter notes.
+    pub bar_start_beats: Option<f64>,
+    /// Index of the current bar. CLAP-only; VST3 hosts report `None`.
+    pub bar_number: Option<i32>,
+    /// Active loop region as `(start, end)` in quarter notes.
+    pub loop_beats: Option<(f64, f64)>,
 }
 
 /// The core plugin trait that developers implement.

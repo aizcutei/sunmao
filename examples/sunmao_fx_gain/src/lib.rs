@@ -158,6 +158,7 @@ mod tests {
                 tempo: None,
                 is_playing: true,
                 sample_pos: 0,
+                ..Default::default()
             },
         );
 
@@ -197,6 +198,7 @@ mod tests {
                 tempo: None,
                 is_playing: true,
                 sample_pos: 0,
+                ..Default::default()
             },
         );
 

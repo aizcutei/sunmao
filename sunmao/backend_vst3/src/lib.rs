@@ -528,7 +528,16 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
             sample_rate: self.sample_rate,
             tempo: ctx.tempo(),
             is_playing: ctx.is_playing(),
+            is_recording: ctx.is_recording(),
+            is_loop_active: ctx.is_loop_active(),
             sample_pos: ctx.sample_pos(),
+            time_signature: ctx.time_signature(),
+            song_pos_beats: ctx.song_pos_beats(),
+            song_pos_seconds: ctx.song_pos_seconds(),
+            bar_start_beats: ctx.bar_start_beats(),
+            // VST3 reports the bar's musical start, not an index.
+            bar_number: None,
+            loop_beats: ctx.loop_beats(),
         };
 
         // VST3 supplies one queue per parameter. vst3_rs has already flattened
@@ -656,6 +665,9 @@ mod tests {
     use vst3_rs::vst3_sys::vst::ieditcontroller::{IComponentHandlerVtbl, IEditControllerVtbl};
     use vst3_rs::vst3_sys::vst::ievents::{
         Event as Vst3Event, EventData as Vst3EventData, EventTypes, IEventListVtbl, NoteOnEvent,
+    };
+    use vst3_rs::vst3_sys::vst::processcontext::{
+        ProcessContext as SysProcessContext, ProcessContextFlags,
     };
     use vst3_rs::vst3_sys::vst::types::{ProcessModes, SymbolicSampleSizes};
     use vst3_rs::wrapper::{GuiControllerWrapper, ProcessorWrapper};
@@ -1905,5 +1917,181 @@ mod tests {
         assert_eq!(events.iter().count(), 1);
         assert!(matches!(events.iter().next(), Some(Event::Midi(_))));
         assert!(midi.is_empty());
+    }
+
+    #[derive(Default)]
+    struct TransportPlugin;
+
+    static OBSERVED_TRANSPORT: Mutex<Option<SunmaoProcessContext>> = Mutex::new(None);
+    /// `OBSERVED_TRANSPORT` is process-wide, so transport observations must not
+    /// run concurrently with each other.
+    static TRANSPORT_OBSERVATION: Mutex<()> = Mutex::new(());
+
+    impl SunmaoPlugin for TransportPlugin {
+        const NAME: &'static str = "Transport Test";
+        const VENDOR: &'static str = "SunMao Test";
+        const URL: &'static str = "https://example.invalid";
+        type Params = EmptyParams;
+
+        fn params(&self) -> Arc<Self::Params> {
+            Arc::new(EmptyParams)
+        }
+
+        fn process(
+            &mut self,
+            _buffer: &mut AudioBuffer,
+            _events: &EventQueue,
+            context: &SunmaoProcessContext,
+        ) -> ProcessStatus {
+            *OBSERVED_TRANSPORT.lock().unwrap() = Some(context.clone());
+            ProcessStatus::Normal
+        }
+    }
+
+    /// Runs one block through the VST3 wrapper with the given host context and
+    /// returns the context the plugin observed.
+    fn observe_transport(context: Option<&mut SysProcessContext>) -> SunmaoProcessContext {
+        let _serialized = TRANSPORT_OBSERVATION
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *OBSERVED_TRANSPORT.lock().unwrap() = None;
+
+        unsafe {
+            let processor = ProcessorWrapper::<SunmaoVst3Wrapper<TransportPlugin>>::new([0; 16]);
+            let component = processor.cast::<c_void>();
+            let component_vtbl = *(component as *const *const IComponentVtbl);
+            assert_eq!(
+                ((*component_vtbl).base.initialize)(component, std::ptr::null_mut()),
+                kResultOk
+            );
+
+            let mut audio = std::ptr::null_mut();
+            assert_eq!(
+                ((*component_vtbl).base.unknown.query_interface)(
+                    component,
+                    &vst3_rs::vst3_sys::vst::iid::IAudioProcessor,
+                    &mut audio,
+                ),
+                kResultOk
+            );
+            let audio_vtbl = *(audio as *const *const IAudioProcessorVtbl);
+            let mut setup = ProcessSetup {
+                process_mode: ProcessModes::kRealtime,
+                symbolic_sample_size: SymbolicSampleSizes::kSample32,
+                max_samples_per_block: 8,
+                sample_rate: 48_000.0,
+            };
+            assert_eq!(
+                ((*audio_vtbl).setup_processing)(audio, &mut setup),
+                kResultOk
+            );
+            assert_eq!(((*component_vtbl).set_active)(component, 1), kResultOk);
+            assert_eq!(((*audio_vtbl).set_processing)(audio, 1), kResultOk);
+
+            let mut left = [0.0_f32; 8];
+            let mut right = [0.0_f32; 8];
+            let mut channels = [
+                left.as_mut_ptr().cast::<c_void>(),
+                right.as_mut_ptr().cast::<c_void>(),
+            ];
+            let mut outputs = [AudioBusBuffers {
+                num_channels: 2,
+                silence_flags: 0,
+                buffers: channels.as_mut_ptr(),
+            }];
+            let mut data = ProcessData {
+                process_mode: ProcessModes::kRealtime,
+                symbolic_sample_size: SymbolicSampleSizes::kSample32,
+                num_samples: 8,
+                num_inputs: 0,
+                num_outputs: 1,
+                inputs: std::ptr::null_mut(),
+                outputs: outputs.as_mut_ptr(),
+                input_parameter_changes: std::ptr::null_mut(),
+                output_parameter_changes: std::ptr::null_mut(),
+                input_events: std::ptr::null_mut(),
+                output_events: std::ptr::null_mut(),
+                process_context: context
+                    .map(|value| (value as *mut SysProcessContext).cast::<c_void>())
+                    .unwrap_or(std::ptr::null_mut()),
+            };
+
+            assert_eq!(((*audio_vtbl).process)(audio, &mut data), kResultOk);
+            assert_eq!(((*audio_vtbl).set_processing)(audio, 0), kResultOk);
+            assert_eq!(((*component_vtbl).set_active)(component, 0), kResultOk);
+            ((*component_vtbl).base.terminate)(component);
+            ((*component_vtbl).base.unknown.release)(component);
+        }
+
+        OBSERVED_TRANSPORT
+            .lock()
+            .unwrap()
+            .take()
+            .expect("plugin must observe a process context")
+    }
+
+    fn full_host_context(state: u32) -> SysProcessContext {
+        SysProcessContext {
+            state,
+            sample_rate: 48_000.0,
+            project_time_samples: 96_000,
+            system_time: 0,
+            continous_time_samples: 0,
+            project_time_music: 8.5,
+            bar_position_music: 8.0,
+            cycle_start_music: 4.0,
+            cycle_end_music: 12.0,
+            tempo: 128.0,
+            time_sig_numerator: 7,
+            time_sig_denominator: 8,
+            chord: Default::default(),
+            smpte_offset_subframes: 0,
+            frame_rate: Default::default(),
+            samples_to_next_clock: 0,
+        }
+    }
+
+    #[test]
+    fn vst3_transport_fields_reach_the_plugin() {
+        let mut host_context = full_host_context(
+            ProcessContextFlags::kPlaying
+                | ProcessContextFlags::kRecording
+                | ProcessContextFlags::kCycleActive
+                | ProcessContextFlags::kTempoValid
+                | ProcessContextFlags::kTimeSigValid
+                | ProcessContextFlags::kProjectTimeMusicValid
+                | ProcessContextFlags::kBarPositionValid
+                | ProcessContextFlags::kCycleValid,
+        );
+
+        let context = observe_transport(Some(&mut host_context));
+
+        assert_eq!(context.tempo, Some(128.0));
+        assert!(context.is_playing);
+        assert!(context.is_recording);
+        assert!(context.is_loop_active);
+        assert_eq!(context.time_signature, Some((7, 8)));
+        assert_eq!(context.song_pos_beats, Some(8.5));
+        assert_eq!(context.bar_start_beats, Some(8.0));
+        assert_eq!(context.loop_beats, Some((4.0, 12.0)));
+        assert_eq!(context.sample_pos, 96_000);
+        assert_eq!(context.song_pos_seconds, Some(2.0));
+        // VST3 has no bar index; the documented degradation is `None`.
+        assert_eq!(context.bar_number, None);
+    }
+
+    #[test]
+    fn a_host_without_a_process_context_leaves_every_musical_field_absent() {
+        let context = observe_transport(None);
+
+        assert_eq!(context.tempo, None);
+        assert!(context.is_playing, "a context-less host keeps running");
+        assert!(!context.is_recording);
+        assert!(!context.is_loop_active);
+        assert_eq!(context.time_signature, None);
+        assert_eq!(context.song_pos_beats, None);
+        assert_eq!(context.bar_number, None);
+        assert_eq!(context.loop_beats, None);
+        assert_eq!(context.sample_pos, 0);
     }
 }

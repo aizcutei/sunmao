@@ -31,3 +31,21 @@
 - Result: macOS ARM64、Windows x86_64、Ubuntu x86_64 三个 job 同一 commit 全部 success。新增的 blocking 步骤 "Test Phase 2 acceptance fixtures" 在三平台均 success；Phase 1 既有全部 gate（格式适配、standalone、GUI matrix、packager、runner、打包 helper）保持绿色，无回归。
 - Evidence/artifact: run #27 上传 `phase1-macOS-ARM64`（50.7MB）、`phase1-Windows-X64`（76.7MB）、`phase1-Linux-X64`（954.4MB）。
 - Unresolved: M0 完成，进入 M1。M1 底层盘点结论：`_sys` 两侧 transport 绑定已完整（`clap_sys` tsig/bar/loop + 8 flags；`vst3_sys::ProcessContext` tempo/tsig/bar/cycle + valid 位），工作从 `_rs` 层开始——`clap_rs::Transport` 需补 tsig/bar/loop/recording 访问器，vst3_rs 需向上暴露 ProcessContext，再设计 core 统一结构。
+
+### 2026-08-28 — M1 transport/timing 实现（待 hosted 验证）
+
+- Command/platform: macOS ARM64，分支 `phase2/advanced-plugin-contract`。
+- Change（自底向上）：
+  - `_sys`：无需改动，两侧绑定已完整。
+  - `_rs`：`clap_rs::Transport` 补 `is_recording`/`is_loop_active`/`is_within_pre_roll`/`time_signature`/`bar_start_beats`/`bar_number`/`loop_beats`/`loop_seconds`；`vst3_rs::ProcessContext` 补对称访问器，并在 `update_transport_from_raw` 按 `ProcessContextFlags` 解析 tempo/tsig/bar/cycle，`song_pos_seconds` 由采样时间轴推导。两侧一致拒绝退化值（非有限、tempo<0、tsig 分母为 0、loop `end<=start`），loop 必须 active 才下发。
+  - core：`ProcessContext` 扩展为 11 个字段并 `#[derive(Debug, Clone, PartialEq, Default)]`，带 doc-test；`None` 表示"宿主未提供"而非 0。既有 `tempo`/`is_playing`/`sample_pos` 字段名不变。
+  - backend：VST3 与 CLAP 同时映射全部字段；VST3 无 bar 序号故 `bar_number: None`（测试显式断言）。AU 与 standalone runtime 用 `..Default::default()` 保持 Phase 1 子集，不回归。
+  - fixture：tempo delay 增加 `sync`/`division` 参数并按 `context.tempo` 计算延迟；宿主无 tempo 或 tempo 退化时回落到毫秒时间。
+  - `docs/phase2/semantics.md`：transport 行填入落地 API，并新增 bar 序号、loop 区间、秒制位置三行降级记录（含对应测试名）。
+- Result:
+  - 新增测试：`clap_rs` 4（42/42）、`vst3_rs` 5（46/46）、两个 backend 各 2（各 18/18）、tempo delay fixture 5（7/7）。
+  - 完整 `RUSTFLAGS=-Awarnings cargo test --locked`：104 套件全绿、0 失败；`cargo metadata --locked`、`cargo fmt --all -- --check`、`git diff --check` 通过。
+  - `cargo check --locked --target x86_64-pc-windows-msvc`（两个 backend + fixture）通过；`tools/package_examples.sh --debug --test` 退出 0，Phase 1 的 20 个 runner 套件仍各 16/16，standalone smoke 全绿。
+  - 过程中发现并修复：两个 backend 的 transport 观测测试共用进程级 static，并行执行时互相抢结果（VST3 侧因此假失败），已加序列化锁。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/phase2_m1_test.log`、`/tmp/phase2_m1_pkg.log`）——本地证据等级。
+- Unresolved: 三平台 hosted 验证本 commit 后 M1 才算完成；runner 侧尚未加 transport 宿主注入测试，随 M2 的 latency/tail 断言一并设计。

@@ -2,8 +2,9 @@ use crate::events::Event;
 use clap_sys::audio_buffer::clap_audio_buffer_t;
 use clap_sys::events::{
     CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_SECONDS_TIMELINE,
-    CLAP_TRANSPORT_HAS_TEMPO, CLAP_TRANSPORT_IS_PLAYING, clap_event_transport_t,
-    clap_input_events_t, clap_output_events_t,
+    CLAP_TRANSPORT_HAS_TEMPO, CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_LOOP_ACTIVE,
+    CLAP_TRANSPORT_IS_PLAYING, CLAP_TRANSPORT_IS_RECORDING, CLAP_TRANSPORT_IS_WITHIN_PRE_ROLL,
+    clap_event_transport_t, clap_input_events_t, clap_output_events_t,
 };
 use clap_sys::fixedpoint::{CLAP_BEATTIME_FACTOR, CLAP_SECTIME_FACTOR, clap_sectime};
 use clap_sys::process::{clap_process_status, clap_process_t};
@@ -546,6 +547,86 @@ impl Transport {
             None
         }
     }
+
+    pub fn is_recording(&self) -> bool {
+        (self.raw.flags & CLAP_TRANSPORT_IS_RECORDING) != 0
+    }
+
+    pub fn is_loop_active(&self) -> bool {
+        (self.raw.flags & CLAP_TRANSPORT_IS_LOOP_ACTIVE) != 0
+    }
+
+    pub fn is_within_pre_roll(&self) -> bool {
+        (self.raw.flags & CLAP_TRANSPORT_IS_WITHIN_PRE_ROLL) != 0
+    }
+
+    /// Time signature as `(numerator, denominator)`; `None` when the host does
+    /// not provide one or reports a degenerate value.
+    pub fn time_signature(&self) -> Option<(u16, u16)> {
+        if (self.raw.flags & CLAP_TRANSPORT_HAS_TIME_SIGNATURE) != 0
+            && self.raw.tsig_num > 0
+            && self.raw.tsig_denom > 0
+        {
+            Some((self.raw.tsig_num, self.raw.tsig_denom))
+        } else {
+            None
+        }
+    }
+
+    /// Musical start of the current bar, in beats.
+    pub fn bar_start_beats(&self) -> Option<f64> {
+        if (self.raw.flags & CLAP_TRANSPORT_HAS_BEATS_TIMELINE) != 0 {
+            let value = fixed_to_f64(self.raw.bar_start, CLAP_BEATTIME_FACTOR);
+            value.is_finite().then_some(value)
+        } else {
+            None
+        }
+    }
+
+    /// Index of the current bar; the host may report negative values before
+    /// the song start, so the raw value is passed through unclamped.
+    pub fn bar_number(&self) -> Option<i32> {
+        (self.raw.flags & CLAP_TRANSPORT_HAS_BEATS_TIMELINE)
+            .ne(&0)
+            .then_some(self.raw.bar_number)
+    }
+
+    /// Loop region in beats, `None` unless the loop is active and the beats
+    /// timeline is valid.
+    pub fn loop_beats(&self) -> Option<(f64, f64)> {
+        self.loop_region(
+            CLAP_TRANSPORT_HAS_BEATS_TIMELINE,
+            self.raw.loop_start_beats,
+            self.raw.loop_end_beats,
+            CLAP_BEATTIME_FACTOR,
+        )
+    }
+
+    /// Loop region in seconds, `None` unless the loop is active and the
+    /// seconds timeline is valid.
+    pub fn loop_seconds(&self) -> Option<(f64, f64)> {
+        self.loop_region(
+            CLAP_TRANSPORT_HAS_SECONDS_TIMELINE,
+            self.raw.loop_start_seconds,
+            self.raw.loop_end_seconds,
+            CLAP_SECTIME_FACTOR,
+        )
+    }
+
+    fn loop_region(
+        &self,
+        timeline_flag: u32,
+        start: clap_sectime,
+        end: clap_sectime,
+        factor: i64,
+    ) -> Option<(f64, f64)> {
+        if !self.is_loop_active() || (self.raw.flags & timeline_flag) == 0 {
+            return None;
+        }
+        let start = fixed_to_f64(start, factor);
+        let end = fixed_to_f64(end, factor);
+        (start.is_finite() && end.is_finite() && end > start).then_some((start, end))
+    }
 }
 
 fn fixed_to_f64(value: clap_sectime, factor: i64) -> f64 {
@@ -584,6 +665,8 @@ impl<'a> Iterator for InputEventIterator<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap_sys::events::clap_event_header_t;
+    use clap_sys::fixedpoint::clap_beattime;
     use clap_sys::process::{CLAP_PROCESS_CONTINUE, CLAP_PROCESS_ERROR};
     use std::ptr;
 
@@ -858,5 +941,121 @@ mod tests {
             ProcessBuffers::new(Vec::new(), vec![channels_over_sample_budget]);
         assert!(!too_many_samples.activate(MAX_PROCESS_FRAMES));
         assert!(!too_many_samples.active);
+    }
+
+    fn beats(value: f64) -> clap_beattime {
+        (value * CLAP_BEATTIME_FACTOR as f64) as clap_beattime
+    }
+
+    fn seconds(value: f64) -> clap_sectime {
+        (value * CLAP_SECTIME_FACTOR as f64) as clap_sectime
+    }
+
+    /// A transport whose every field is populated; individual tests clear the
+    /// flags they want to prove are honored.
+    fn full_transport(flags: u32) -> Transport {
+        Transport {
+            raw: clap_event_transport_t {
+                header: clap_event_header_t {
+                    size: std::mem::size_of::<clap_event_transport_t>() as u32,
+                    time: 0,
+                    space_id: 0,
+                    type_: 0,
+                    flags: 0,
+                },
+                flags,
+                song_pos_beats: beats(8.5),
+                song_pos_seconds: seconds(4.25),
+                tempo: 128.0,
+                tempo_inc: 0.0,
+                loop_start_beats: beats(4.0),
+                loop_end_beats: beats(12.0),
+                loop_start_seconds: seconds(2.0),
+                loop_end_seconds: seconds(6.0),
+                bar_start: beats(8.0),
+                bar_number: 3,
+                tsig_num: 7,
+                tsig_denom: 8,
+            },
+        }
+    }
+
+    #[test]
+    fn transport_reports_every_flagged_field() {
+        let transport = full_transport(
+            CLAP_TRANSPORT_HAS_TEMPO
+                | CLAP_TRANSPORT_HAS_BEATS_TIMELINE
+                | CLAP_TRANSPORT_HAS_SECONDS_TIMELINE
+                | CLAP_TRANSPORT_HAS_TIME_SIGNATURE
+                | CLAP_TRANSPORT_IS_PLAYING
+                | CLAP_TRANSPORT_IS_RECORDING
+                | CLAP_TRANSPORT_IS_LOOP_ACTIVE,
+        );
+
+        assert_eq!(transport.tempo(), Some(128.0));
+        assert!(transport.is_playing());
+        assert!(transport.is_recording());
+        assert!(transport.is_loop_active());
+        assert!(!transport.is_within_pre_roll());
+        assert_eq!(transport.time_signature(), Some((7, 8)));
+        assert_eq!(transport.bar_number(), Some(3));
+        assert_eq!(transport.bar_start_beats(), Some(8.0));
+        assert_eq!(transport.song_pos_beats(), Some(8.5));
+        assert_eq!(transport.song_pos_seconds(), Some(4.25));
+        assert_eq!(transport.loop_beats(), Some((4.0, 12.0)));
+        assert_eq!(transport.loop_seconds(), Some((2.0, 6.0)));
+    }
+
+    #[test]
+    fn transport_hides_fields_the_host_did_not_flag() {
+        // No flags at all: every optional field must read as absent even
+        // though the raw struct still carries values.
+        let transport = full_transport(0);
+
+        assert_eq!(transport.tempo(), None);
+        assert!(!transport.is_playing());
+        assert!(!transport.is_recording());
+        assert!(!transport.is_loop_active());
+        assert_eq!(transport.time_signature(), None);
+        assert_eq!(transport.bar_number(), None);
+        assert_eq!(transport.bar_start_beats(), None);
+        assert_eq!(transport.song_pos_beats(), None);
+        assert_eq!(transport.song_pos_seconds(), None);
+        assert_eq!(transport.loop_beats(), None);
+        assert_eq!(transport.loop_seconds(), None);
+    }
+
+    #[test]
+    fn loop_region_requires_an_active_loop_and_a_sane_range() {
+        let timelines = CLAP_TRANSPORT_HAS_BEATS_TIMELINE | CLAP_TRANSPORT_HAS_SECONDS_TIMELINE;
+
+        // Timelines valid but the loop is off.
+        let inactive = full_transport(timelines);
+        assert_eq!(inactive.loop_beats(), None);
+        assert_eq!(inactive.loop_seconds(), None);
+
+        // Active loop with an inverted range is rejected rather than passed
+        // through as a negative-length region.
+        let mut inverted = full_transport(timelines | CLAP_TRANSPORT_IS_LOOP_ACTIVE);
+        inverted.raw.loop_end_beats = inverted.raw.loop_start_beats;
+        assert_eq!(inverted.loop_beats(), None);
+        assert_eq!(inverted.loop_seconds(), Some((2.0, 6.0)));
+    }
+
+    #[test]
+    fn degenerate_values_are_rejected() {
+        let flags = CLAP_TRANSPORT_HAS_TEMPO | CLAP_TRANSPORT_HAS_TIME_SIGNATURE;
+
+        let mut negative_tempo = full_transport(flags);
+        negative_tempo.raw.tempo = -1.0;
+        assert_eq!(negative_tempo.tempo(), None);
+
+        let mut nan_tempo = full_transport(flags);
+        nan_tempo.raw.tempo = f64::NAN;
+        assert_eq!(nan_tempo.tempo(), None);
+
+        let mut zero_denominator = full_transport(flags);
+        zero_denominator.raw.tsig_denom = 0;
+        assert_eq!(zero_denominator.time_signature(), None);
     }
 }

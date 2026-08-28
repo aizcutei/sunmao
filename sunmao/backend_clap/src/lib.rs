@@ -770,23 +770,29 @@ impl<P: SunmaoPlugin> AudioProcessor for SunmaoClapProcessor<P> {
         let mut audio_buffer =
             AudioBuffer::from_planar(&self.input_buffers, &mut self.output_buffers, frames);
 
-        // Create process context
-        let mut tempo = None;
-        let mut is_playing = true;
-        let mut sample_pos = 0i64;
+        // Create process context. A host may omit the transport entirely, in
+        // which case every musical field stays absent and the plugin sees a
+        // free-running block.
+        let mut sunmao_ctx = SunmaoProcessContext {
+            sample_rate: self.sample_rate,
+            is_playing: true,
+            ..Default::default()
+        };
         if let Some(transport) = ctx.transport() {
-            tempo = transport.tempo();
-            is_playing = transport.is_playing();
+            sunmao_ctx.tempo = transport.tempo();
+            sunmao_ctx.is_playing = transport.is_playing();
+            sunmao_ctx.is_recording = transport.is_recording();
+            sunmao_ctx.is_loop_active = transport.is_loop_active();
+            sunmao_ctx.time_signature = transport.time_signature();
+            sunmao_ctx.song_pos_beats = transport.song_pos_beats();
+            sunmao_ctx.song_pos_seconds = transport.song_pos_seconds();
+            sunmao_ctx.bar_start_beats = transport.bar_start_beats();
+            sunmao_ctx.bar_number = transport.bar_number();
+            sunmao_ctx.loop_beats = transport.loop_beats();
             if let Some(seconds) = transport.song_pos_seconds() {
-                sample_pos = (seconds * self.sample_rate) as i64;
+                sunmao_ctx.sample_pos = (seconds * self.sample_rate) as i64;
             }
         }
-        let sunmao_ctx = SunmaoProcessContext {
-            sample_rate: self.sample_rate,
-            tempo,
-            is_playing,
-            sample_pos,
-        };
 
         // Call the actual plugin process
         let status = self
@@ -963,11 +969,15 @@ mod tests {
     use super::*;
     use clap_rs::clap_sys::audio_buffer::clap_audio_buffer_t;
     use clap_rs::clap_sys::events::{
-        clap_event_header_t, clap_event_note_t, clap_event_param_value_t, clap_input_events_t,
-        CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE,
+        clap_event_header_t, clap_event_note_t, clap_event_param_value_t, clap_event_transport_t,
+        clap_input_events_t, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE,
+        CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_SECONDS_TIMELINE,
+        CLAP_TRANSPORT_HAS_TEMPO, CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_LOOP_ACTIVE,
+        CLAP_TRANSPORT_IS_PLAYING, CLAP_TRANSPORT_IS_RECORDING,
     };
     use clap_rs::clap_sys::ext::gui::{clap_host_gui_t, CLAP_EXT_GUI};
     use clap_rs::clap_sys::ext::params::{clap_host_params_t, CLAP_EXT_PARAMS};
+    use clap_rs::clap_sys::fixedpoint::{CLAP_BEATTIME_FACTOR, CLAP_SECTIME_FACTOR};
     use clap_rs::clap_sys::host::clap_host_t;
     use clap_rs::clap_sys::process::{clap_process_t, CLAP_PROCESS_CONTINUE, CLAP_PROCESS_ERROR};
     use std::alloc::{GlobalAlloc, Layout, System};
@@ -2106,6 +2116,192 @@ mod tests {
         );
         assert!(processor.is_none());
         assert!(wrapper.plugin.is_some());
+    }
+
+    #[derive(Default)]
+    struct TransportPlugin;
+
+    static OBSERVED_TRANSPORT: Mutex<Option<SunmaoProcessContext>> = Mutex::new(None);
+    /// `OBSERVED_TRANSPORT` is process-wide, so transport observations must not
+    /// run concurrently with each other.
+    static TRANSPORT_OBSERVATION: Mutex<()> = Mutex::new(());
+
+    impl SunmaoPlugin for TransportPlugin {
+        const NAME: &'static str = "Transport Test";
+        const VENDOR: &'static str = "SunMao Test";
+        const URL: &'static str = "https://example.invalid";
+        type Params = RealtimeParams;
+
+        fn params(&self) -> Arc<Self::Params> {
+            Arc::new(RealtimeParams)
+        }
+
+        fn process(
+            &mut self,
+            _buffer: &mut AudioBuffer,
+            _events: &EventQueue,
+            context: &SunmaoProcessContext,
+        ) -> ProcessStatus {
+            *OBSERVED_TRANSPORT.lock().unwrap() = Some(context.clone());
+            ProcessStatus::Normal
+        }
+    }
+
+    fn beats(value: f64) -> i64 {
+        (value * CLAP_BEATTIME_FACTOR as f64) as i64
+    }
+
+    fn seconds(value: f64) -> i64 {
+        (value * CLAP_SECTIME_FACTOR as f64) as i64
+    }
+
+    /// Runs one block through the CLAP wrapper with the given transport and
+    /// returns the context the plugin observed.
+    fn observe_transport(transport: Option<&clap_event_transport_t>) -> SunmaoProcessContext {
+        let _serialized = TRANSPORT_OBSERVATION
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *OBSERVED_TRANSPORT.lock().unwrap() = None;
+
+        let plugin = unsafe {
+            clap_rs::entry::PluginEntry::create_plugin::<SunmaoClapWrapper<TransportPlugin>>(
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        assert!(!plugin.is_null());
+        unsafe {
+            assert!(((*plugin).init.unwrap())(plugin));
+            assert!(((*plugin).activate.unwrap())(plugin, 48_000.0, 1, 8));
+            assert!(((*plugin).start_processing.unwrap())(plugin));
+        }
+
+        let input_left = [0.0_f32; 8];
+        let input_right = [0.0_f32; 8];
+        let mut input_channels = [
+            input_left.as_ptr() as *mut f32,
+            input_right.as_ptr() as *mut f32,
+        ];
+        let input_buffers = [clap_audio_buffer_t {
+            data32: input_channels.as_mut_ptr(),
+            data64: std::ptr::null_mut(),
+            channel_count: 2,
+            latency: 0,
+            constant_mask: 0,
+        }];
+        let mut output_left = [0.0_f32; 8];
+        let mut output_right = [0.0_f32; 8];
+        let mut output_channels = [output_left.as_mut_ptr(), output_right.as_mut_ptr()];
+        let mut output_buffers = [clap_audio_buffer_t {
+            data32: output_channels.as_mut_ptr(),
+            data64: std::ptr::null_mut(),
+            channel_count: 2,
+            latency: 0,
+            constant_mask: 0,
+        }];
+        let mut empty_events = NoteInputEvents {
+            events: std::array::from_fn(|index| raw_note_event(index as u32)),
+        };
+        let input_events = clap_input_events_t {
+            ctx: (&mut empty_events as *mut NoteInputEvents).cast::<c_void>(),
+            size: Some(no_events),
+            get: Some(note_event_get),
+        };
+        let process = clap_process_t {
+            steady_time: 0,
+            frames_count: 8,
+            transport: transport
+                .map(|value| value as *const clap_event_transport_t)
+                .unwrap_or(std::ptr::null()),
+            audio_inputs: input_buffers.as_ptr(),
+            audio_outputs: output_buffers.as_mut_ptr(),
+            audio_inputs_count: 1,
+            audio_outputs_count: 1,
+            in_events: &input_events,
+            out_events: std::ptr::null(),
+        };
+
+        unsafe {
+            assert_eq!(
+                ((*plugin).process.unwrap())(plugin, &process),
+                CLAP_PROCESS_CONTINUE
+            );
+            ((*plugin).stop_processing.unwrap())(plugin);
+            ((*plugin).deactivate.unwrap())(plugin);
+            ((*plugin).destroy.unwrap())(plugin);
+        }
+
+        OBSERVED_TRANSPORT
+            .lock()
+            .unwrap()
+            .take()
+            .expect("plugin must observe a process context")
+    }
+
+    unsafe extern "C" fn no_events(_list: *const clap_input_events_t) -> u32 {
+        0
+    }
+
+    #[test]
+    fn clap_transport_fields_reach_the_plugin() {
+        let transport = clap_event_transport_t {
+            header: clap_event_header_t {
+                size: std::mem::size_of::<clap_event_transport_t>() as u32,
+                time: 0,
+                space_id: CLAP_CORE_EVENT_SPACE_ID,
+                type_: 0,
+                flags: 0,
+            },
+            flags: CLAP_TRANSPORT_HAS_TEMPO
+                | CLAP_TRANSPORT_HAS_BEATS_TIMELINE
+                | CLAP_TRANSPORT_HAS_SECONDS_TIMELINE
+                | CLAP_TRANSPORT_HAS_TIME_SIGNATURE
+                | CLAP_TRANSPORT_IS_PLAYING
+                | CLAP_TRANSPORT_IS_RECORDING
+                | CLAP_TRANSPORT_IS_LOOP_ACTIVE,
+            song_pos_beats: beats(8.5),
+            song_pos_seconds: seconds(2.0),
+            tempo: 128.0,
+            tempo_inc: 0.0,
+            loop_start_beats: beats(4.0),
+            loop_end_beats: beats(12.0),
+            loop_start_seconds: seconds(1.0),
+            loop_end_seconds: seconds(3.0),
+            bar_start: beats(8.0),
+            bar_number: 3,
+            tsig_num: 7,
+            tsig_denom: 8,
+        };
+
+        let context = observe_transport(Some(&transport));
+
+        assert_eq!(context.tempo, Some(128.0));
+        assert!(context.is_playing);
+        assert!(context.is_recording);
+        assert!(context.is_loop_active);
+        assert_eq!(context.time_signature, Some((7, 8)));
+        assert_eq!(context.song_pos_beats, Some(8.5));
+        assert_eq!(context.song_pos_seconds, Some(2.0));
+        assert_eq!(context.bar_start_beats, Some(8.0));
+        assert_eq!(context.bar_number, Some(3));
+        assert_eq!(context.loop_beats, Some((4.0, 12.0)));
+        // The sample cursor is derived from the seconds timeline.
+        assert_eq!(context.sample_pos, 96_000);
+    }
+
+    #[test]
+    fn a_host_without_a_transport_leaves_every_musical_field_absent() {
+        let context = observe_transport(None);
+
+        assert_eq!(context.tempo, None);
+        assert!(context.is_playing, "a transport-less host keeps running");
+        assert!(!context.is_recording);
+        assert!(!context.is_loop_active);
+        assert_eq!(context.time_signature, None);
+        assert_eq!(context.song_pos_beats, None);
+        assert_eq!(context.bar_number, None);
+        assert_eq!(context.loop_beats, None);
+        assert_eq!(context.sample_pos, 0);
     }
 }
 

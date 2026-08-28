@@ -13,8 +13,13 @@ const MAX_DELAY_SECONDS: f64 = 2.0;
 /// Tempo delay parameters.
 #[derive(Params)]
 pub struct TempoDelayParams {
-    /// Delay time in milliseconds (M1 turns this into a tempo division).
+    /// Delay time in milliseconds, used when sync is off or the host provides
+    /// no tempo.
     pub time_ms: FloatParam,
+    /// Whether the delay time follows the host tempo.
+    pub sync: BoolParam,
+    /// Tempo division as a number of quarter notes (1 = quarter, 2 = half).
+    pub division: FloatParam,
     /// Feedback amount fed back into the delay line.
     pub feedback: FloatParam,
     /// Dry/wet mix.
@@ -25,6 +30,8 @@ impl Default for TempoDelayParams {
     fn default() -> Self {
         Self {
             time_ms: FloatParam::new("time_ms", "Time", 250.0, 1.0, 2000.0),
+            sync: BoolParam::new("sync", "Tempo Sync", true),
+            division: FloatParam::new("division", "Division", 1.0, 0.25, 4.0),
             feedback: FloatParam::new("feedback", "Feedback", 0.3, 0.0, 0.95),
             mix: FloatParam::new("mix", "Mix", 0.5, 0.0, 1.0),
         }
@@ -82,7 +89,7 @@ impl SunmaoPlugin for TempoDelayPlugin {
         &mut self,
         buffer: &mut AudioBuffer,
         events: &EventQueue,
-        _context: &ProcessContext,
+        context: &ProcessContext,
     ) -> ProcessStatus {
         buffer.copy_input_to_output();
 
@@ -108,8 +115,20 @@ impl SunmaoPlugin for TempoDelayPlugin {
         if len == 0 {
             return ProcessStatus::Normal;
         }
-        let delay_samples =
-            ((f64::from(time_ms) / 1000.0 * self.sample_rate) as usize).clamp(1, len - 1);
+
+        // Tempo sync is best-effort: a host that reports no tempo (or a
+        // degenerate one) falls back to the millisecond time rather than
+        // producing a silent or zero-length delay.
+        let synced_seconds = self
+            .params
+            .sync
+            .get()
+            .then(|| context.tempo)
+            .flatten()
+            .filter(|tempo| *tempo > 0.0)
+            .map(|tempo| f64::from(self.params.division.get()) * 60.0 / tempo);
+        let delay_seconds = synced_seconds.unwrap_or_else(|| f64::from(time_ms) / 1000.0);
+        let delay_samples = ((delay_seconds * self.sample_rate) as usize).clamp(1, len - 1);
 
         let channels = buffer.num_output_channels().min(2);
         for sample_index in 0..buffer.num_samples() {
@@ -151,6 +170,15 @@ mod tests {
         input: &[f32],
         output: &mut [f32],
     ) -> ProcessStatus {
+        process_block_with_tempo(plugin, input, output, None)
+    }
+
+    fn process_block_with_tempo(
+        plugin: &mut TempoDelayPlugin,
+        input: &[f32],
+        output: &mut [f32],
+        tempo: Option<f64>,
+    ) -> ProcessStatus {
         let input_right = input.to_vec();
         let inputs: [&[f32]; 2] = [input, &input_right];
         let mut output_right = vec![0.0; output.len()];
@@ -163,11 +191,111 @@ mod tests {
             &events,
             &ProcessContext {
                 sample_rate: 1000.0,
-                tempo: None,
+                tempo,
                 is_playing: true,
                 sample_pos: 0,
+                ..Default::default()
             },
         )
+    }
+
+    /// Configures a fully wet, non-feeding delay so a single impulse marks the
+    /// delay length exactly.
+    fn impulse_probe(plugin: &mut TempoDelayPlugin) {
+        plugin.initialize(1000.0, 32);
+        plugin.params.mix.set(1.0);
+        plugin.params.feedback.set(0.0);
+    }
+
+    /// Returns the sample index where the delayed impulse lands.
+    fn echo_position(output: &[f32]) -> Option<usize> {
+        output
+            .iter()
+            .position(|sample| (*sample - 1.0).abs() < 1e-6)
+    }
+
+    #[test]
+    fn tempo_sync_derives_the_delay_from_the_host_tempo() {
+        let mut plugin = TempoDelayPlugin::default();
+        impulse_probe(&mut plugin);
+        plugin.params.sync.set(true);
+        plugin.params.division.set(1.0);
+        // The fixture runs at 1 kHz, so an exaggerated tempo keeps one quarter
+        // note inside a short test block: 60 / 12000 s = 5 samples.
+        plugin.params.time_ms.set(20.0); // deliberately different from the sync time
+
+        let mut input = [0.0f32; 16];
+        input[0] = 1.0;
+        let mut output = [0.0f32; 16];
+        process_block_with_tempo(&mut plugin, &input, &mut output, Some(12_000.0));
+
+        assert_eq!(
+            echo_position(&output),
+            Some(5),
+            "a quarter note at 12000 BPM is 5 samples, got {output:?}"
+        );
+    }
+
+    #[test]
+    fn the_division_scales_the_synced_delay() {
+        let mut plugin = TempoDelayPlugin::default();
+        impulse_probe(&mut plugin);
+        plugin.params.sync.set(true);
+        plugin.params.division.set(2.0); // half note
+
+        let mut input = [0.0f32; 16];
+        input[0] = 1.0;
+        let mut output = [0.0f32; 16];
+        process_block_with_tempo(&mut plugin, &input, &mut output, Some(12_000.0));
+
+        assert_eq!(echo_position(&output), Some(10), "got {output:?}");
+    }
+
+    #[test]
+    fn a_host_without_tempo_falls_back_to_the_millisecond_time() {
+        let mut plugin = TempoDelayPlugin::default();
+        impulse_probe(&mut plugin);
+        plugin.params.sync.set(true);
+        plugin.params.division.set(1.0);
+        plugin.params.time_ms.set(7.0); // 7 samples at 1 kHz
+
+        let mut input = [0.0f32; 16];
+        input[0] = 1.0;
+        let mut output = [0.0f32; 16];
+        process_block_with_tempo(&mut plugin, &input, &mut output, None);
+
+        assert_eq!(echo_position(&output), Some(7), "got {output:?}");
+    }
+
+    #[test]
+    fn a_degenerate_tempo_falls_back_instead_of_collapsing_the_delay() {
+        let mut plugin = TempoDelayPlugin::default();
+        impulse_probe(&mut plugin);
+        plugin.params.sync.set(true);
+        plugin.params.time_ms.set(7.0);
+
+        let mut input = [0.0f32; 16];
+        input[0] = 1.0;
+        let mut output = [0.0f32; 16];
+        process_block_with_tempo(&mut plugin, &input, &mut output, Some(0.0));
+
+        assert_eq!(echo_position(&output), Some(7), "got {output:?}");
+    }
+
+    #[test]
+    fn sync_off_ignores_the_host_tempo() {
+        let mut plugin = TempoDelayPlugin::default();
+        impulse_probe(&mut plugin);
+        plugin.params.sync.set(false);
+        plugin.params.division.set(1.0);
+        plugin.params.time_ms.set(9.0);
+
+        let mut input = [0.0f32; 16];
+        input[0] = 1.0;
+        let mut output = [0.0f32; 16];
+        process_block_with_tempo(&mut plugin, &input, &mut output, Some(12_000.0));
+
+        assert_eq!(echo_position(&output), Some(9), "got {output:?}");
     }
 
     #[test]
