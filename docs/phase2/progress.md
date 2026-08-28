@@ -119,3 +119,10 @@
   - Windows target check 通过；`tools/package_examples.sh --debug --test` 退出 0，Phase 1 的 20 个 runner 套件仍各 16/16。
 - Evidence/artifact: macOS ARM64 本地日志（`/tmp/phase2_m4_test4.log`、`/tmp/phase2_m4_pkg.log`）——本地证据等级。
 - Unresolved: 三平台 hosted 验证本 commit 后 M4 才算完成。未做：backend 层的 expression/mod 端到端映射测试（目前覆盖在 `_rs` 与 core/fixture 两端）、VST3 note-id ↔ channel/key 的 backend 侧映射表，列为 M6 收口项。
+
+### 2026-08-28 — M4 完成：hosted run #35 三平台全绿
+
+- Command/platform: push `051e754` 触发 GitHub Actions #35：https://github.com/aizcutei/sunmao/actions/runs/33162478028
+- Result: macOS ARM64、Windows x86_64、Ubuntu x86_64 三个 job 同一 commit 全部 success。modulation、per-note expression、voice-info 在两种格式、三个平台通过；Phase 1 既有 gate 与 Phase 2 fixture 步骤保持绿色。
+- Evidence/artifact: run #35 上传 `phase1-macOS-ARM64`（51.1MB）、`phase1-Windows-X64`（76.9MB）、`phase1-Linux-X64`（956.0MB）。
+- Unresolved: M4 完成，进入 M5（最后一个实现里程碑）。M5 盘点：`vst3_rs/src/state.rs` 已有 `STATE_MAGIC`+`STATE_VERSION=1` 的参数编码，CLAP 侧另有一份；**关键缺口是 `decode_header` 对版本不符直接返回 `None`（`vst3_rs/src/state.rs:94`），旧版本 state 会被整体拒绝而非迁移**，且版本头分散在两个格式层，与 semantics.md 约定的"版本头由 SunMao 层定义、格式无关"不符。
