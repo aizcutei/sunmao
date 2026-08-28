@@ -4,6 +4,7 @@ use super::{
 };
 use crate::gui_window::PluginGuiWindow;
 use std::ffi::c_void;
+use std::mem::ManuallyDrop;
 use std::ptr;
 use std::sync::atomic::{
     AtomicBool, AtomicI32, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering,
@@ -94,7 +95,18 @@ impl Vst3HostPlugFrame {
 
 pub struct Vst3HostPlugin {
     info: PluginInfo,
-    _lib: libloading::Library,
+    /// Deliberately never unloaded.
+    ///
+    /// A plugin that has initialized a GPU backend (D3D12 via WGPU, in
+    /// particular) is not safely unloadable: the graphics runtime retains
+    /// callbacks and global state that live inside the plugin's own module, so
+    /// `FreeLibrary` leaves dangling pointers that fault during the process's
+    /// remaining cleanup. Run #65 reproduced exactly that — every GUI assertion
+    /// passed, "Done." printed, then exit 139.
+    ///
+    /// Leaking is the right trade here: the runner is about to exit anyway, and
+    /// real hosts commonly keep plugin modules resident for the same reason.
+    _lib: ManuallyDrop<libloading::Library>,
     component: *mut c_void,
     processor: *mut c_void,
     controller: *mut c_void,
@@ -508,7 +520,7 @@ impl Vst3HostPlugin {
 
             Ok(Self {
                 info,
-                _lib: lib,
+                _lib: ManuallyDrop::new(lib),
                 component: component_ptr,
                 processor,
                 controller,

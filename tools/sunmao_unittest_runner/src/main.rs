@@ -2175,6 +2175,11 @@ fn cmd_gui_test(args: &[String]) -> bool {
         return false;
     }
     println!("Done.");
+    // Printed after the plugin and its host objects have been dropped. If a
+    // future run exits non-zero *after* this line, the fault is in process
+    // teardown outside the runner's control rather than in plugin release —
+    // run #65 crashed before it, at DLL unload.
+    println!("Teardown complete.");
     true
 }
 

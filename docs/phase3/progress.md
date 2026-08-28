@@ -717,3 +717,38 @@
   voice/synth 抽象（或由宏生成 process 循环），那是超出 DSP crate 的设计决定，
   我没有在 M3 里顺手引入。`template_size.rs` 的钉子已从 90 收紧到 85 以锁住这次改进。
   M3 三个家族（filters/envelopes/oscillators）至此齐备，待 hosted 后进 M4。
+
+### 2026-08-29 — run #65：Windows WGPU 收尾段错误**已复现**，按规则深入析构路径而非重试
+
+- Command/platform: hosted run #65（commit `c9e549d`）：https://github.com/aizcutei/sunmao/actions/runs/33197739950
+- Result: macOS ARM64 与 Ubuntu x86_64 **success**（M3 的 envelopes/oscillators 在两平台通过）；
+  Windows x86_64 **failure**，失败步骤 "Package and exercise native GUI backends"。
+- 诊断（经 `/check-runs/<id>/annotations`，本机无 gh 且日志下载需 admin）：
+  失败 fixture 是 **`SunMao Gain WGPU (VST3)`**，且**全部断言均通过**——pixels 验证、
+  输入验证（`'Gain' changed 0.500000 -> 0.922414`）、gesture 验证（begin +2/value +17/end +2）、
+  recreate 后 pixels 再验证，随后打印 `GUI test complete.` 与 `Done.`，**然后 exit 139（SIGSEGV）**。
+  这**正是** loop 边界里记录的已知 flake（"断言全过、打印 Done. 后 exit 139，run #37 一次未复现；
+  再复现则深入 WGPU/D3D 析构路径，不要盲目重试"）。**本轮即为复现**，故按规则不重试。
+  另注：#46 的 UIA 拖动竞态与本项无关，本轮输入一次命中（无 `took n attempts`），加固有效。
+- 根因分析与修复：`Vst3HostPlugin`/`ClapHostPlugin` 均**无 `Drop` impl**，字段按声明序释放，
+  而 `_lib: libloading::Library` 声明在第 2 位——即**进程收尾时会 `FreeLibrary` 卸载插件 DLL**。
+  一个已初始化 GPU 后端（WGPU→D3D12）的插件模块**不可安全卸载**：图形运行时保留了指向该模块
+  内部的回调与全局状态，卸载后这些指针悬空，在进程剩余清理阶段 fault——与"断言全过、
+  Done. 之后崩"的现象完全吻合。修复：两个 host 的库改为 `ManuallyDrop<libloading::Library>`
+  **永不卸载**（附注释说明理由）。这不是回避：runner 本就即将退出，真实宿主也普遍让插件模块
+  常驻，正是同一个原因。
+  并新增收尾标记 `Teardown complete.`（在 plugin 与 host 对象释放之后打印），
+  使**将来若仍崩可定位**：崩在该行之前＝释放/卸载路径，之后＝运行器之外的进程收尾。
+- Result（本地）：macOS `SunMao Gain WGPU.vst3` 的 gui-test **exit 0**，
+  并如期打印 `Done.` → `Teardown complete.`；
+  `RUSTFLAGS=-Awarnings cargo test --locked` 123 套件全绿；
+  metadata/fmt/diff-check、Windows 交叉 check、
+  `tools/package_examples.sh --debug --test`（24 套件各 19/19）通过。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/wgpu_gui.log`、`/tmp/m3c_test.log`、
+  `/tmp/m3c_pkg.log`、`/tmp/m3c_win.log`）——本地证据等级。
+- Unresolved（**诚实标注**）：**我无法在本机复现该 Windows 崩溃**（macOS 环境），
+  因此"DLL 卸载即根因"是基于机制与现象吻合的**推断**，不是实测确认；
+  确认只能靠 hosted Windows。若下一轮 Windows 仍在 `Teardown complete.` **之前**崩，
+  则说明还有另一处释放顺序问题；若崩在其**之后**，则问题在运行器之外的进程收尾。
+  M3 的 envelopes/oscillators 本身在 #65 的 macOS/Linux 已通过，但按"同 commit 三平台全绿"
+  的判定标准仍未验收，将与本修复一并验收。
