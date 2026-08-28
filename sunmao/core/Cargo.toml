@@ -9,3 +9,6 @@ license = "MIT OR Apache-2.0"
 # Basic utilities
 anyhow = "1.0"
 atomic_float = "0.1"
+
+[dev-dependencies]
+proptest = "1.11.0"

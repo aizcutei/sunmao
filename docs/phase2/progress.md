@@ -141,3 +141,12 @@
   - Windows target check 通过；`tools/package_examples.sh --debug --test` 退出 0，Phase 1 的 20 个 runner 套件仍各 16/16——runner 的 state round-trip 用例是这次改动的直接回归面。
 - Evidence/artifact: macOS ARM64 本地日志（`/tmp/phase2_m5_test.log`、`/tmp/phase2_m5_pkg.log`）——本地证据等级。
 - Unresolved: 三平台 hosted 验证本 commit 后 M5 才算完成。未做：`clap.preset-load` 宿主驱动的 preset 载入路径、VST3 program list 映射、backend 侧调用 `migrate_state` 的端到端接线（目前钩子与解码器已就绪，backend 尚未在 load 后回调），列为 M6 收口项。
+
+### 2026-08-28 — hosted CI #37 Windows WGPU 收尾段错误（疑似 flake，待二次取证）
+
+- Command/platform: push `1ea2be2` 触发 GitHub Actions #37：https://github.com/aizcutei/sunmao/actions/runs/33163982575
+- Result: macOS 与 Linux 全绿；Windows 失败于 "Package and exercise native GUI backends"。
+- 证据（annotation）：`SunMao Gain WGPU (VST3)` 的**全部断言都通过**——窗口创建、520x220 resize、像素校验、Win32 原生鼠标输入使参数 0.5→0.78、host gesture、close/recreate、recreate 后像素校验——并打印了 "GUI test complete." 与 "Done."；随后进程以 **exit 139（段错误）** 结束。即崩溃发生在测试逻辑完成后的收尾/析构阶段。
+- 判断：本 commit 只改了两个 `_rs` 的 state 解码与 core 的迁移钩子，未触及 GUI/WGPU 路径；同一步骤在 run #27/29/31/33/35 连续五轮通过。倾向于 Windows WGPU 收尾期的偶发崩溃（与 run #24 的 UIA 超时 flake 类似），但**不以"flake"为由跳过**：下一次 push 会在新 commit 上重跑同一 gate 作为第二个数据点；若复现，则深入 WGPU/D3D 析构路径而非重试。
+- Evidence/artifact: check-run annotations（job 全量日志需 admin 权限）。
+- Unresolved: M5 尚未取得三平台 hosted 证据。
