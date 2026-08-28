@@ -616,3 +616,16 @@
   M3 落地后应重测并把 `template_size.rs` 的 instrument 断言改为预算。
   已识别的另一个减负杠杆：让 `#[derive(Params)]` 依属性生成 `Default`
   （`#[param(default=, min=, max=)]`），两个模板各可再省约 7 行——未做，属独立改动。
+
+### 2026-08-29 — M2 完成：template 验收（hosted run #61 三平台全绿）
+
+- Command/platform: push `3374c5f` 触发 GitHub Actions #61：https://github.com/aizcutei/sunmao/actions/runs/33194134348
+- Result: 三平台三个 job 同一 commit 全部 success、逐步骤零非成功步骤，
+  "Test Phase 3 acceptance fixtures"（现含两个 template crate）三平台均 success。
+  **M2 三项（参数分组/嵌套、零分配 smoothing、effect/instrument template）
+  各自在独立 commit 上取得三平台 hosted 绿**：run #57 / #59 / #61。
+- Evidence/artifact: run #61 上传三平台 artifacts（50.0MB / 74.2MB / 918.2MB），均可下载。
+- Unresolved: M2 唯一未达标项是 instrument 模板 86 行（目标 ≤50），原因与处置见上一条
+  日志；`sunmao/tests/template_size.rs` 会在它降到预算内时主动失败以提醒收紧断言。
+  进入 M3：新建 `sunmao/dsp`（filters/envelopes/oscillators），并让 SVF fixture
+  换用组件实现且**测试语义不变**，同时用 oscillator/envelope 把 instrument 模板压进预算。
