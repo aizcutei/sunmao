@@ -575,3 +575,12 @@
 - Unresolved: 待三平台 hosted 全绿。smoothing 非 host-facing（无格式映射），故未加
   semantics.md 行；与 automation/modulation 的关系记在模块文档。M2 余下最后一项：
   effect/instrument template（新插件样板 ≤50 行）。
+
+### 2026-08-29 — M2 smoothing 验收：hosted run #59 三平台全绿
+
+- Command/platform: push `d0a13d3` 触发 GitHub Actions #59：https://github.com/aizcutei/sunmao/actions/runs/33192422381
+- Result: 三平台三个 job 同一 commit 全部 success、逐步骤零非成功步骤。新增的
+  2 个 smoothing proptest 与零分配实测在三平台原生构建下通过；realtime allocation
+  matrix 保持绿色。
+- Evidence/artifact: run #59 上传三平台 artifacts（50.0MB / 74.2MB / 918.2MB），均可下载。
+- Unresolved: M2 余下最后一项：effect/instrument template（新插件样板 ≤50 行）。
