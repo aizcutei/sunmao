@@ -312,3 +312,17 @@
   下一个瓶颈是第 5 项 `migrate_state` backend 接线。**遗留观察**：测试中发现
   `DenseEventList` 等既有测试用 COM 结构未标 `#[repr(C)]`，其 vtbl 在首字段属侥幸；
   本次新增的 `ExprEventList` 已显式标注，既有的未改（不在本项范围，且当前行为正确）。
+
+### 2026-08-28 — M1 第 4 项验收：hosted run #49 三平台全绿
+
+- Command/platform: push `03a53eb` 触发 GitHub Actions #49：https://github.com/aizcutei/sunmao/actions/runs/33180224229
+- Result: macOS ARM64、Windows x86_64、Ubuntu x86_64 三个 job 同一 commit 全部
+  success，逐步骤复查零非成功步骤。VST3 expression 修复（`pending_expressions`
+  暂存 + 三路 offset 归并）与两个 backend 端到端测试在三平台原生构建下全部通过；
+  realtime allocation matrix 保持绿色，零分配未回退。#46 的 Windows GUI 输入
+  竞态未复现（本轮亦无 `took n attempts` 证据可查，原因同前：日志需 admin 权限）。
+- Evidence/artifact: run #49 上传 `phase1-macOS-ARM64`（49.5MB）、
+  `phase1-Windows-X64`（73.9MB）、`phase1-Linux-X64`（915.6MB），均可下载。
+- Unresolved: phase2/status.md 遗留表第 4 项已改为"已实现"（4/7 关闭）。
+  下一个瓶颈是第 5 项：backend 在 state load 后按版本回调 `migrate_state`
+  （两格式接线 + 测试）。
