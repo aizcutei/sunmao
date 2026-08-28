@@ -1,9 +1,6 @@
 //! SunMao sine synthesizer with an embeddable platform WebView editor.
 
-use std::sync::Arc;
-
-use sunmao_core::prelude::*;
-use sunmao_view_baseview::{BaseviewConfig, BaseviewWebView, WebViewState, WindowScalePolicy};
+use sunmao::prelude::*;
 
 #[path = "../../sunmao_sine_engine.rs"]
 mod sine_engine;
@@ -67,7 +64,7 @@ impl SunmaoPlugin for SineSynthWebView {
             width: 400,
             height: 120,
             scale_policy: WindowScalePolicy::SystemScaleFactor,
-            background: sunmao_gui::Color::rgb(0.08, 0.11, 0.14),
+            background: Color::rgb(0.08, 0.11, 0.14),
         };
         Some(Box::new(BaseviewWebView::new(
             config,

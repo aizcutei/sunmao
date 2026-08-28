@@ -4,10 +4,7 @@
 //! example wraps it in a `SunmaoPlugin` implementation and supplies one view
 //! backend, while the audio/MIDI behavior stays identical across all builds.
 
-use std::sync::Arc;
-
-use sunmao_core::prelude::*;
-use sunmao_macros::Params;
+use sunmao::prelude::*;
 
 #[derive(Params)]
 pub struct SineParams {

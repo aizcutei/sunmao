@@ -1,14 +1,6 @@
 //! SunMao sine synthesizer with an embeddable WGPU editor.
 
-use std::sync::Arc;
-
-use sunmao_core::prelude::*;
-use sunmao_gui::wgpu::WgpuContext;
-use sunmao_gui::{
-    Color, Event as GuiEvent, Fill, GuiContext, MouseButton as GuiMouseButton, ParameterWidget,
-    Rect, Slider, Widget,
-};
-use sunmao_view_baseview::{BaseviewConfig, BaseviewWgpuView, WgpuViewState, WindowScalePolicy};
+use sunmao::prelude::*;
 
 #[path = "../../sunmao_sine_engine.rs"]
 mod sine_engine;

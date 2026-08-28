@@ -4,7 +4,10 @@
 
 use clap_rs::ext::gui::{GuiApi, GuiHandler, GuiResizeHints};
 use clap_rs::gui::prepare_view;
-use clap_rs::process::ProcessContext;
+use clap_rs::process::{
+    ProcessContext, MAX_PROCESS_AUDIO_SAMPLES, MAX_PROCESS_CHANNELS, MAX_PROCESS_EVENTS,
+    MAX_PROCESS_FRAMES,
+};
 use clap_rs::{
     clap_sys::process::clap_process_status, events::Event as ClapEvent, AudioPortInfo,
     AudioProcessor, HostHandle, NotePortInfo, ParameterInfo, Plugin,
@@ -24,6 +27,20 @@ use sunmao_core::{
 use sunmao_core::{ParentWindow, SunmaoView, ViewHandle};
 
 pub use clap_rs::{export_clap_plugin, export_clap_plugin_with_gui, PluginInfo};
+
+const DEFAULT_EFFECT_FEATURES: &[&str] = &["audio-effect"];
+const DEFAULT_SYNTH_FEATURES: &[&str] = &["instrument", "synthesizer"];
+
+/// Resolve the default CLAP features without requiring format-specific code in
+/// a minimal plugin implementation.
+#[doc(hidden)]
+pub fn default_clap_features<P: SunmaoPlugin>() -> &'static [&'static str] {
+    if P::default().input_channels() == 0 {
+        DEFAULT_SYNTH_FEATURES
+    } else {
+        DEFAULT_EFFECT_FEATURES
+    }
+}
 
 #[doc(hidden)]
 pub mod __private {
@@ -59,45 +76,55 @@ macro_rules! __export_sunmao_clap_plugin {
             unsafe impl Send for OwnedDescriptor {}
             unsafe impl Sync for OwnedDescriptor {}
 
-            fn c_string(field: &str, value: &str) -> CString {
-                CString::new(value).unwrap_or_else(|_| {
-                    panic!("SunMao CLAP {field} metadata contains an interior NUL byte")
-                })
+            fn c_string(value: &str) -> Option<CString> {
+                CString::new(value).ok()
             }
 
-            fn owned_descriptor() -> &'static OwnedDescriptor {
-                static DESCRIPTOR: OnceLock<OwnedDescriptor> = OnceLock::new();
-                DESCRIPTOR.get_or_init(|| {
-                    let format_info =
-                        <$plugin_type as $crate::__private::sunmao_core::SunmaoPlugin>::clap_info();
-                    let id = c_string("id", format_info.id);
-                    let name = c_string(
-                        "name",
-                        <$plugin_type as $crate::__private::sunmao_core::SunmaoPlugin>::NAME,
-                    );
-                    let vendor = c_string(
-                        "vendor",
-                        <$plugin_type as $crate::__private::sunmao_core::SunmaoPlugin>::VENDOR,
-                    );
-                    let url = c_string(
-                        "url",
-                        <$plugin_type as $crate::__private::sunmao_core::SunmaoPlugin>::URL,
-                    );
-                    let manual_url = c_string("manual_url", "");
-                    let support_url = c_string("support_url", "");
-                    let version = c_string(
-                        "version",
-                        <$plugin_type as $crate::__private::sunmao_core::SunmaoPlugin>::VERSION,
-                    );
-                    let description = c_string(
-                        "description",
-                        <$plugin_type as $crate::__private::sunmao_core::SunmaoPlugin>::NAME,
-                    );
-                    let feature_strings: Vec<CString> = format_info
-                        .features
-                        .iter()
-                        .map(|feature| c_string("feature", feature))
-                        .collect();
+            fn owned_descriptor() -> Option<&'static OwnedDescriptor> {
+                // Metadata is supplied by the plugin author, so descriptor
+                // construction must remain fallible at the C ABI boundary.
+                // Cache the failure as `None` to make every subsequent query
+                // deterministic without repeatedly allocating or panicking.
+                static DESCRIPTOR: OnceLock<Option<OwnedDescriptor>> = OnceLock::new();
+                DESCRIPTOR
+                    .get_or_init(|| {
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            let format_info = <$plugin_type as $crate::__private::sunmao_core::SunmaoPlugin>::clap_info();
+                            let resolved_id = if format_info.id.is_empty() {
+                                $crate::__private::sunmao_core::derive_clap_id(
+                                    <$plugin_type as $crate::__private::sunmao_core::SunmaoPlugin>::VENDOR,
+                                    <$plugin_type as $crate::__private::sunmao_core::SunmaoPlugin>::NAME,
+                                )
+                            } else {
+                                format_info.id.to_owned()
+                            };
+                            let id = c_string(&resolved_id)?;
+                            let name = c_string(
+                                <$plugin_type as $crate::__private::sunmao_core::SunmaoPlugin>::NAME,
+                            )?;
+                            let vendor = c_string(
+                                <$plugin_type as $crate::__private::sunmao_core::SunmaoPlugin>::VENDOR,
+                            )?;
+                            let url = c_string(
+                                <$plugin_type as $crate::__private::sunmao_core::SunmaoPlugin>::URL,
+                            )?;
+                            let manual_url = c_string("")?;
+                            let support_url = c_string("")?;
+                            let version = c_string(
+                                <$plugin_type as $crate::__private::sunmao_core::SunmaoPlugin>::VERSION,
+                            )?;
+                            let description = c_string(
+                                <$plugin_type as $crate::__private::sunmao_core::SunmaoPlugin>::NAME,
+                            )?;
+                            let resolved_features = if format_info.features.is_empty() {
+                                $crate::default_clap_features::<$plugin_type>()
+                            } else {
+                                format_info.features
+                            };
+                            let feature_strings: Vec<CString> = resolved_features
+                                .iter()
+                                .map(|feature| c_string(feature))
+                                .collect::<Option<Vec<_>>>()?;
                     let mut feature_ptrs: Vec<*const c_char> = feature_strings
                         .iter()
                         .map(|feature| feature.as_ptr())
@@ -117,7 +144,7 @@ macro_rules! __export_sunmao_clap_plugin {
                         features: feature_ptrs.as_ptr(),
                     };
 
-                    OwnedDescriptor {
+                            Some(OwnedDescriptor {
                         descriptor,
                         _id: id,
                         _name: name,
@@ -129,12 +156,16 @@ macro_rules! __export_sunmao_clap_plugin {
                         _description: description,
                         _feature_strings: feature_strings,
                         _feature_ptrs: feature_ptrs,
-                    }
-                })
+                            })
+                        }))
+                        .ok()
+                        .flatten()
+                    })
+                    .as_ref()
             }
 
-            fn descriptor() -> &'static clap_sys::plugin::clap_plugin_descriptor_t {
-                &owned_descriptor().descriptor
+            fn descriptor() -> Option<&'static clap_sys::plugin::clap_plugin_descriptor_t> {
+                owned_descriptor().map(|descriptor| &descriptor.descriptor)
             }
 
             #[repr(transparent)]
@@ -152,7 +183,7 @@ macro_rules! __export_sunmao_clap_plugin {
             unsafe extern "C" fn get_plugin_count(
                 _factory: *const clap_sys::factory::plugin_factory::clap_plugin_factory_t,
             ) -> u32 {
-                1
+                u32::from(descriptor().is_some())
             }
 
             unsafe extern "C" fn get_plugin_descriptor(
@@ -160,7 +191,7 @@ macro_rules! __export_sunmao_clap_plugin {
                 index: u32,
             ) -> *const clap_sys::plugin::clap_plugin_descriptor_t {
                 if index == 0 {
-                    descriptor()
+                    descriptor().map_or(std::ptr::null(), |descriptor| descriptor as *const _)
                 } else {
                     std::ptr::null()
                 }
@@ -171,19 +202,22 @@ macro_rules! __export_sunmao_clap_plugin {
                 host: *const clap_sys::host::clap_host_t,
                 plugin_id: *const c_char,
             ) -> *const clap_sys::plugin::clap_plugin_t {
-                if plugin_id.is_null()
-                    || CStr::from_ptr(plugin_id) != CStr::from_ptr(descriptor().id)
-                {
+                if plugin_id.is_null() {
+                    return std::ptr::null();
+                }
+                let Some(descriptor) = descriptor() else {
+                    return std::ptr::null();
+                };
+                if CStr::from_ptr(plugin_id) != CStr::from_ptr(descriptor.id) {
                     return std::ptr::null();
                 }
                 $crate::__private::clap_rs::entry::$entry_type::create_plugin::<
                     $crate::SunmaoClapWrapper<$plugin_type>,
-                >(host, descriptor())
+                >(host, descriptor)
             }
 
             unsafe extern "C" fn entry_init(_path: *const c_char) -> bool {
-                let _ = owned_descriptor();
-                true
+                descriptor().is_some()
             }
 
             unsafe extern "C" fn entry_deinit() {}
@@ -272,9 +306,22 @@ fn parameter_from_clap_value(descriptor: &ParamDescriptor, value: f64) -> Option
     }
 }
 
+/// Map a host event timestamp to a sample offset that the core contract can
+/// safely consume. CLAP requires timestamps to be inside the current block,
+/// but a malformed host must not be able to make a user plugin index past the
+/// active audio buffer.
+fn event_sample_offset(time: u32, frames: usize) -> u32 {
+    if frames == 0 {
+        0
+    } else {
+        time.min(frames.saturating_sub(1) as u32)
+    }
+}
+
 fn timed_parameter_change(
     descriptors: &[ParamDescriptor],
     event: &clap_rs::events::ParamValueEvent,
+    frames: usize,
 ) -> Option<ParamChange> {
     let descriptor = descriptors
         .iter()
@@ -283,7 +330,31 @@ fn timed_parameter_change(
     Some(ParamChange {
         id: descriptor.id,
         value,
-        offset: event.time,
+        offset: event_sample_offset(event.time, frames),
+    })
+}
+
+fn note_event_to_midi(
+    note: &clap_rs::events::NoteEvent,
+    frames: usize,
+    note_on: bool,
+) -> Option<MidiMessage> {
+    // A single SunMao note port is exposed. CLAP permits -1 for an
+    // unspecified port, which is equivalent to the only port here; any other
+    // port cannot be represented without silently routing to the wrong input.
+    if !matches!(note.port_index, -1 | 0)
+        || !(0..=15).contains(&note.channel)
+        || !(0..=127).contains(&note.key)
+        || !note.velocity.is_finite()
+    {
+        return None;
+    }
+    let velocity = (note.velocity.clamp(0.0, 1.0) * 127.0).round() as u8;
+    let offset = event_sample_offset(note.time, frames);
+    Some(if note_on {
+        MidiMessage::note_on(offset, note.channel as u8, note.key as u8, velocity)
+    } else {
+        MidiMessage::note_off(offset, note.channel as u8, note.key as u8, velocity)
     })
 }
 
@@ -305,6 +376,38 @@ fn prepare_output_buffers(
         }
         output[copied..].fill(0.0);
     }
+}
+
+/// Copy one host input channel into activation-owned scratch without retaining
+/// samples from a previous block when the host provides a short or missing
+/// channel.
+fn copy_input_buffer(dst: &mut [f32], src: &[f32], frames: usize) {
+    let active_len = frames.min(dst.len());
+    dst[..active_len].fill(0.0);
+    let copy_len = active_len.min(src.len());
+    dst[..copy_len].copy_from_slice(&src[..copy_len]);
+}
+
+fn allocate_audio_buffers(channel_count: u32, max_frames: u32) -> Option<Vec<Vec<f32>>> {
+    let channel_count = usize::try_from(channel_count).ok()?;
+    let max_frames = usize::try_from(max_frames).ok()?;
+    if max_frames > MAX_PROCESS_FRAMES as usize
+        || channel_count > MAX_PROCESS_CHANNELS
+        || channel_count
+            .checked_mul(max_frames)
+            .is_none_or(|samples| samples > MAX_PROCESS_AUDIO_SAMPLES)
+    {
+        return None;
+    }
+    let mut buffers = Vec::new();
+    buffers.try_reserve_exact(channel_count).ok()?;
+    for _ in 0..channel_count {
+        let mut buffer = Vec::new();
+        buffer.try_reserve_exact(max_frames).ok()?;
+        buffer.resize(max_frames, 0.0);
+        buffers.push(buffer);
+    }
+    Some(buffers)
 }
 
 /// Wrapper that adapts a SunmaoPlugin to clap_rs::Plugin.
@@ -382,6 +485,8 @@ pub struct SunmaoClapProcessor<P: SunmaoPlugin> {
     params: Arc<P::Params>,
     param_descriptors: Vec<ParamDescriptor>,
     sample_rate: f64,
+    is_synth: bool,
+    accepts_midi: bool,
     input_buffers: Vec<Vec<f32>>,
     output_buffers: Vec<Vec<f32>>,
     event_queue: EventQueue,
@@ -393,7 +498,9 @@ impl<P: SunmaoPlugin> Plugin for SunmaoClapWrapper<P> {
     fn new(host: HostHandle) -> Self {
         let plugin = P::default();
         let params = plugin.params();
-        let param_descriptors = params.descriptors();
+        let param_descriptors = params
+            .validated_descriptors()
+            .unwrap_or_else(|error| panic!("invalid SunMao parameter layout: {error}"));
         let input_channels = plugin.input_channels();
         let output_channels = plugin.output_channels();
         let accepts_midi = plugin.accepts_midi();
@@ -416,24 +523,66 @@ impl<P: SunmaoPlugin> Plugin for SunmaoClapWrapper<P> {
     fn activate(
         &mut self,
         sample_rate: f64,
-        _min_frames: u32,
+        min_frames: u32,
         max_frames: u32,
     ) -> Option<Self::AudioProcessor> {
+        if !sample_rate.is_finite()
+            || sample_rate <= 0.0
+            || min_frames > max_frames
+            || max_frames > MAX_PROCESS_FRAMES
+            || P::MAX_EVENTS_PER_BLOCK > MAX_PROCESS_EVENTS
+        {
+            return None;
+        }
         let mut plugin = self.plugin.take()?;
-        plugin.initialize(sample_rate, max_frames);
+        let Some(input_buffers) = allocate_audio_buffers(self.input_channels, max_frames) else {
+            self.plugin = Some(plugin);
+            return None;
+        };
+        let Some(output_buffers) = allocate_audio_buffers(self.output_channels, max_frames) else {
+            self.plugin = Some(plugin);
+            return None;
+        };
+        let Ok(event_queue) = EventQueue::try_with_capacity(P::MAX_EVENTS_PER_BLOCK) else {
+            // Keep ownership available for a later activation attempt. In
+            // particular, do not drop the plugin after a hostile or invalid
+            // MAX_EVENTS_PER_BLOCK causes a fallible scratch allocation to
+            // fail.
+            self.plugin = Some(plugin);
+            return None;
+        };
+        // Initialization is user code. Keep ownership recoverable if it
+        // panics while the generic CLAP lifecycle guard converts the failure
+        // to a rejected activation.
+        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            plugin.initialize(sample_rate, max_frames);
+        }))
+        .is_err()
+        {
+            self.plugin = Some(plugin);
+            return None;
+        }
         Some(SunmaoClapProcessor {
             plugin,
             params: self.params.clone(),
             param_descriptors: self.param_descriptors.clone(),
             sample_rate,
-            input_buffers: vec![vec![0.0; max_frames as usize]; self.input_channels as usize],
-            output_buffers: vec![vec![0.0; max_frames as usize]; self.output_channels as usize],
-            event_queue: EventQueue::with_capacity(P::MAX_EVENTS_PER_BLOCK),
+            is_synth: self.input_channels == 0,
+            accepts_midi: self.accepts_midi,
+            input_buffers,
+            output_buffers,
+            event_queue,
         })
     }
 
     fn deactivate(&mut self, mut processor: Self::AudioProcessor) {
-        processor.plugin.reset();
+        // A reset panic must not consume the processor before ownership is
+        // returned to the controller. The host has no error return for
+        // deactivate, so containment here is the only way to keep destroy and
+        // a later lifecycle transition memory-safe.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            processor.plugin.reset();
+        }));
         self.plugin = Some(processor.plugin);
     }
 
@@ -534,52 +683,60 @@ impl<P: SunmaoPlugin> AudioProcessor for SunmaoClapProcessor<P> {
 
     fn process(&mut self, mut ctx: ProcessContext) -> clap_process_status {
         let frames = ctx.frames_count as usize;
-        let is_synth = self.plugin.input_channels() == 0;
+        // Channel topology is fixed for an instance. Cache it at activation so
+        // a user-defined topology method cannot allocate or panic on the
+        // realtime thread.
+        let is_synth = self.is_synth;
 
         let Some(event_count) = ctx.event_count() else {
             return clap_rs::clap_sys::process::CLAP_PROCESS_ERROR;
         };
-        if event_count as usize > P::MAX_EVENTS_PER_BLOCK {
+        if event_count as usize > P::MAX_EVENTS_PER_BLOCK
+            || event_count as usize > MAX_PROCESS_EVENTS
+        {
             return clap_rs::clap_sys::process::CLAP_PROCESS_ERROR;
         }
 
         // Preserve CLAP input order so same-offset parameter changes remain deterministic.
         self.event_queue.clear();
+        // The note-port extension is omitted for plugins that do not opt into
+        // MIDI. Hosts normally respect that declaration, but malformed or
+        // older hosts can still send note/MIDI events. Do not let those events
+        // cross the format-neutral boundary into a plugin that cannot consume
+        // them.
+        let accepts_midi = self.accepts_midi;
         for event in ctx.events() {
             match event {
-                ClapEvent::NoteOn(note) => {
-                    let midi = MidiMessage::note_on(
-                        note.time,
-                        note.channel as u8,
-                        note.key as u8,
-                        (note.velocity * 127.0) as u8,
-                    );
-                    if !self.event_queue.push(SunmaoEvent::Midi(midi)) {
-                        return clap_rs::clap_sys::process::CLAP_PROCESS_ERROR;
+                ClapEvent::NoteOn(note) if accepts_midi => {
+                    if let Some(midi) = note_event_to_midi(&note, frames, true) {
+                        if !self.event_queue.push(SunmaoEvent::Midi(midi)) {
+                            return clap_rs::clap_sys::process::CLAP_PROCESS_ERROR;
+                        }
                     }
                 }
-                ClapEvent::NoteOff(note) => {
-                    let midi = MidiMessage::note_off(
-                        note.time,
-                        note.channel as u8,
-                        note.key as u8,
-                        (note.velocity * 127.0) as u8,
-                    );
-                    if !self.event_queue.push(SunmaoEvent::Midi(midi)) {
-                        return clap_rs::clap_sys::process::CLAP_PROCESS_ERROR;
+                ClapEvent::NoteOff(note) if accepts_midi => {
+                    if let Some(midi) = note_event_to_midi(&note, frames, false) {
+                        if !self.event_queue.push(SunmaoEvent::Midi(midi)) {
+                            return clap_rs::clap_sys::process::CLAP_PROCESS_ERROR;
+                        }
                     }
                 }
-                ClapEvent::Midi(midi) => {
-                    let msg = MidiMessage {
-                        offset: midi.time,
-                        data: midi.data,
-                    };
-                    if !self.event_queue.push(SunmaoEvent::Midi(msg)) {
-                        return clap_rs::clap_sys::process::CLAP_PROCESS_ERROR;
+                ClapEvent::Midi(midi) if accepts_midi => {
+                    // This adapter exposes exactly one MIDI/note port.
+                    if midi.port_index == 0 {
+                        let msg = MidiMessage {
+                            offset: event_sample_offset(midi.time, frames),
+                            data: midi.data,
+                        };
+                        if !self.event_queue.push(SunmaoEvent::Midi(msg)) {
+                            return clap_rs::clap_sys::process::CLAP_PROCESS_ERROR;
+                        }
                     }
                 }
                 ClapEvent::ParamValue(param) => {
-                    if let Some(change) = timed_parameter_change(&self.param_descriptors, &param) {
+                    if let Some(change) =
+                        timed_parameter_change(&self.param_descriptors, &param, frames)
+                    {
                         if !self.event_queue.push_param_change(change) {
                             return clap_rs::clap_sys::process::CLAP_PROCESS_ERROR;
                         }
@@ -589,11 +746,15 @@ impl<P: SunmaoPlugin> AudioProcessor for SunmaoClapProcessor<P> {
             }
         }
 
-        // Copy CLAP input to temp buffers
+        // Copy CLAP input to temp buffers. Clear every declared channel first
+        // so a short/missing host channel cannot expose a prior block.
+        for buffer in &mut self.input_buffers {
+            let active_len = frames.min(buffer.len());
+            buffer[..active_len].fill(0.0);
+        }
         for (ch, input) in ctx.audio_inputs.iter().enumerate() {
             if ch < self.input_buffers.len() {
-                let len = frames.min(input.len()).min(self.input_buffers[ch].len());
-                self.input_buffers[ch][..len].copy_from_slice(&input[..len]);
+                copy_input_buffer(&mut self.input_buffers[ch], input, frames);
             }
         }
 
@@ -910,14 +1071,50 @@ mod tests {
         assert_eq!(outputs[1], [0.0, 0.0, 0.0]);
     }
 
+    #[test]
+    fn short_input_channels_do_not_retain_previous_block_samples() {
+        let mut buffer = vec![9.0; 4];
+        copy_input_buffer(&mut buffer, &[1.0, 2.0], 4);
+        assert_eq!(buffer, [1.0, 2.0, 0.0, 0.0]);
+
+        copy_input_buffer(&mut buffer, &[], 4);
+        assert_eq!(buffer, [0.0; 4]);
+    }
+
+    #[test]
+    fn clap_event_offsets_stay_inside_the_active_block() {
+        assert_eq!(event_sample_offset(0, 8), 0);
+        assert_eq!(event_sample_offset(7, 8), 7);
+        assert_eq!(event_sample_offset(u32::MAX, 8), 7);
+        assert_eq!(event_sample_offset(u32::MAX, 0), 0);
+    }
+
+    #[test]
+    fn malformed_note_fields_are_rejected_before_midi_conversion() {
+        let mut note = clap_rs::events::NoteEvent {
+            time: 99,
+            port_index: 0,
+            channel: 0,
+            key: 60,
+            note_id: -1,
+            velocity: 0.5,
+        };
+        assert!(note_event_to_midi(&note, 8, true).is_some());
+
+        note.channel = -1;
+        assert!(note_event_to_midi(&note, 8, true).is_none());
+        note.channel = 0;
+        note.key = 128;
+        assert!(note_event_to_midi(&note, 8, true).is_none());
+        note.key = 60;
+        note.velocity = f64::NAN;
+        assert!(note_event_to_midi(&note, 8, true).is_none());
+    }
+
     #[derive(Default)]
     struct RealtimeParams;
 
     impl Params for RealtimeParams {
-        fn ids() -> &'static [&'static str] {
-            &[]
-        }
-
         fn get_normalized(&self, _id: &str) -> Option<f32> {
             None
         }
@@ -966,6 +1163,40 @@ mod tests {
         ) -> ProcessStatus {
             REALTIME_PROCESS_CALLS.fetch_add(1, Ordering::SeqCst);
             REALTIME_EVENT_COUNT.store(events.iter().count(), Ordering::SeqCst);
+            ProcessStatus::Normal
+        }
+    }
+
+    #[derive(Default)]
+    struct NoMidiPlugin;
+
+    static NO_MIDI_EVENT_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    impl SunmaoPlugin for NoMidiPlugin {
+        const NAME: &'static str = "No MIDI Test";
+        const VENDOR: &'static str = "SunMao Test";
+        const URL: &'static str = "https://example.invalid";
+        type Params = RealtimeParams;
+
+        fn input_channels(&self) -> u32 {
+            0
+        }
+
+        fn output_channels(&self) -> u32 {
+            0
+        }
+
+        fn params(&self) -> Arc<Self::Params> {
+            Arc::new(RealtimeParams)
+        }
+
+        fn process(
+            &mut self,
+            _buffer: &mut AudioBuffer,
+            events: &EventQueue,
+            _context: &SunmaoProcessContext,
+        ) -> ProcessStatus {
+            NO_MIDI_EVENT_COUNT.store(events.iter().count(), Ordering::SeqCst);
             ProcessStatus::Normal
         }
     }
@@ -1159,6 +1390,58 @@ mod tests {
         }
     }
 
+    #[test]
+    fn midi_events_are_not_delivered_to_plugins_without_a_note_port() {
+        NO_MIDI_EVENT_COUNT.store(usize::MAX, Ordering::SeqCst);
+
+        let plugin = unsafe {
+            clap_rs::entry::PluginEntry::create_plugin::<SunmaoClapWrapper<NoMidiPlugin>>(
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        assert!(!plugin.is_null());
+
+        unsafe {
+            assert!(((*plugin).init.unwrap())(plugin));
+            assert!(((*plugin).activate.unwrap())(plugin, 48_000.0, 1, 8));
+            assert!(((*plugin).start_processing.unwrap())(plugin));
+        }
+
+        // Deliberately send note events even though this plugin advertises no
+        // note input. The adapter should keep them out of the core queue and
+        // continue processing the block.
+        let mut raw_events = NoteInputEvents {
+            events: std::array::from_fn(|index| raw_note_event(index as u32)),
+        };
+        let input_events = clap_input_events_t {
+            ctx: (&mut raw_events as *mut NoteInputEvents).cast::<c_void>(),
+            size: Some(note_event_count),
+            get: Some(note_event_get),
+        };
+        let process = clap_process_t {
+            steady_time: 0,
+            frames_count: 8,
+            transport: std::ptr::null(),
+            audio_inputs: std::ptr::null(),
+            audio_outputs: std::ptr::null_mut(),
+            audio_inputs_count: 0,
+            audio_outputs_count: 0,
+            in_events: &input_events,
+            out_events: std::ptr::null(),
+        };
+
+        let status = unsafe { ((*plugin).process.unwrap())(plugin, &process) };
+        assert_eq!(status, CLAP_PROCESS_CONTINUE);
+        assert_eq!(NO_MIDI_EVENT_COUNT.load(Ordering::SeqCst), 0);
+
+        unsafe {
+            ((*plugin).stop_processing.unwrap())(plugin);
+            ((*plugin).deactivate.unwrap())(plugin);
+            ((*plugin).destroy.unwrap())(plugin);
+        }
+    }
+
     struct AutomationParams {
         automated: FloatParam,
     }
@@ -1172,10 +1455,6 @@ mod tests {
     }
 
     impl Params for AutomationParams {
-        fn ids() -> &'static [&'static str] {
-            &["automated"]
-        }
-
         fn get_normalized(&self, id: &str) -> Option<f32> {
             (id == "automated").then(|| self.automated.get_normalized())
         }
@@ -1531,10 +1810,6 @@ mod tests {
     }
 
     impl Params for MetadataParams {
-        fn ids() -> &'static [&'static str] {
-            &["mix", "voices", "bypass"]
-        }
-
         fn get_normalized(&self, id: &str) -> Option<f32> {
             match id {
                 "mix" => Some(self.mix.get_normalized()),
@@ -1748,6 +2023,89 @@ mod tests {
             assert_eq!(wrapper.get_parameter(voices), step as f64);
             assert_eq!(wrapper.params.voices.get(), step + 1);
         }
+    }
+
+    #[test]
+    fn adapter_activation_rejects_oversized_host_block() {
+        let host = unsafe { HostHandle::from_raw(std::ptr::null()) };
+        let mut wrapper = <SunmaoClapWrapper<MetadataPlugin> as Plugin>::new(host);
+        assert!(<SunmaoClapWrapper<MetadataPlugin> as Plugin>::activate(
+            &mut wrapper,
+            48_000.0,
+            9,
+            8,
+        )
+        .is_none());
+        assert!(<SunmaoClapWrapper<MetadataPlugin> as Plugin>::activate(
+            &mut wrapper,
+            48_000.0,
+            1,
+            MAX_PROCESS_FRAMES + 1,
+        )
+        .is_none());
+
+        let processor = <SunmaoClapWrapper<MetadataPlugin> as Plugin>::activate(
+            &mut wrapper,
+            48_000.0,
+            1,
+            8192,
+        )
+        .expect("normal host block should activate");
+        <SunmaoClapWrapper<MetadataPlugin> as Plugin>::deactivate(&mut wrapper, processor);
+    }
+
+    #[test]
+    fn adapter_audio_allocation_rejects_oversized_channel_and_sample_budgets() {
+        assert!(allocate_audio_buffers(MAX_PROCESS_CHANNELS as u32 + 1, 1).is_none());
+        let channels_over_sample_budget =
+            (MAX_PROCESS_AUDIO_SAMPLES / MAX_PROCESS_FRAMES as usize + 1) as u32;
+        assert!(allocate_audio_buffers(channels_over_sample_budget, MAX_PROCESS_FRAMES).is_none());
+    }
+
+    #[derive(Default)]
+    struct HugeEventCapacityPlugin;
+
+    impl SunmaoPlugin for HugeEventCapacityPlugin {
+        const NAME: &'static str = "Huge Event Capacity";
+        const VENDOR: &'static str = "SunMao Test";
+        const URL: &'static str = "https://example.invalid";
+        const MAX_EVENTS_PER_BLOCK: usize = usize::MAX;
+        type Params = RealtimeParams;
+
+        fn input_channels(&self) -> u32 {
+            0
+        }
+
+        fn output_channels(&self) -> u32 {
+            0
+        }
+
+        fn params(&self) -> Arc<Self::Params> {
+            Arc::new(RealtimeParams)
+        }
+
+        fn process(
+            &mut self,
+            _buffer: &mut AudioBuffer,
+            _events: &EventQueue,
+            _context: &SunmaoProcessContext,
+        ) -> ProcessStatus {
+            ProcessStatus::Normal
+        }
+    }
+
+    #[test]
+    fn activation_rejects_unallocatable_event_capacity_and_retains_plugin() {
+        let host = unsafe { HostHandle::from_raw(std::ptr::null()) };
+        let mut wrapper = <SunmaoClapWrapper<HugeEventCapacityPlugin> as Plugin>::new(host);
+        let processor = <SunmaoClapWrapper<HugeEventCapacityPlugin> as Plugin>::activate(
+            &mut wrapper,
+            48_000.0,
+            1,
+            8,
+        );
+        assert!(processor.is_none());
+        assert!(wrapper.plugin.is_some());
     }
 }
 

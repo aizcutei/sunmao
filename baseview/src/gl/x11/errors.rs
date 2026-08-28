@@ -2,16 +2,28 @@ use std::ffi::CStr;
 use std::fmt::{Debug, Display, Formatter};
 use x11::xlib;
 
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::error::Error;
 use std::os::raw::{c_int, c_uchar, c_ulong};
 use std::panic::AssertUnwindSafe;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+
+type XLibErrorHandler = unsafe extern "C" fn(*mut xlib::Display, *mut xlib::XErrorEvent) -> c_int;
+
+// XSetErrorHandler changes process-global state. Multiple plug-in instances may
+// create or render editors on different threads, so every temporary handler
+// installation must be serialized.
+static XLIB_ERROR_HANDLER_LOCK: Mutex<()> = Mutex::new(());
+static PREVIOUS_XLIB_ERROR_HANDLER: AtomicUsize = AtomicUsize::new(0);
 
 thread_local! {
     /// Used as part of [`XErrorHandler::handle()`]. When an X11 error occurs during this function,
     /// the error gets copied to this RefCell after which the program is allowed to resume. The
     /// error can then be converted to a regular Rust Result value afterward.
     static CURRENT_X11_ERROR: RefCell<Option<XLibError>> = const { RefCell::new(None) };
+    static ACTIVE_X11_DISPLAY: Cell<*mut xlib::Display> = const { Cell::new(std::ptr::null_mut()) };
 }
 
 /// A helper struct for safe X11 error handling
@@ -49,50 +61,76 @@ impl<'a> XErrorHandler<'a> {
         /// # Safety
         /// The given display and error pointers *must* be valid for the duration of this function.
         unsafe extern "C" fn error_handler(
-            _dpy: *mut xlib::Display,
+            dpy: *mut xlib::Display,
             err: *mut xlib::XErrorEvent,
         ) -> i32 {
-            // SAFETY: the error pointer should be safe to access
-            let err = &*err;
-
-            CURRENT_X11_ERROR.with(|error| {
-                let mut error = error.borrow_mut();
-                match error.as_mut() {
-                    // If multiple errors occur, keep the first one since that's likely going to be the
-                    // cause of the other errors
-                    Some(_) => 1,
-                    None => {
-                        *error = Some(XLibError::from_event(err));
-                        0
-                    }
+            let handled = ACTIVE_X11_DISPLAY.with(|active_display| {
+                if active_display.get() != dpy || dpy.is_null() || err.is_null() {
+                    return false;
                 }
-            })
+
+                // Xlib invokes the handler synchronously while processing the
+                // error, so the event pointer is valid for this callback.
+                let err = unsafe { &*err };
+                CURRENT_X11_ERROR.with(|error| {
+                    let mut error = error.borrow_mut();
+                    if error.is_none() {
+                        *error = Some(unsafe { XLibError::from_event(err) });
+                    }
+                });
+                true
+            });
+            if handled {
+                return 0;
+            }
+
+            // Do not swallow unrelated Xlib errors from a host thread while
+            // our temporary process-global handler is installed.
+            let previous = PREVIOUS_XLIB_ERROR_HANDLER.load(Ordering::Acquire);
+            if previous != 0 && previous != error_handler as usize {
+                let previous: XLibErrorHandler = unsafe { std::mem::transmute(previous) };
+                return unsafe { previous(dpy, err) };
+            }
+            0
         }
+
+        let lock = XLIB_ERROR_HANDLER_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         // Flush all possible previous errors
         unsafe {
             xlib::XSync(display, 0);
         }
 
-        CURRENT_X11_ERROR.with(|error| {
+        let result = CURRENT_X11_ERROR.with(|error| {
             // Make sure to clear any errors from the last call to this function
             {
                 *error.borrow_mut() = None;
             }
 
+            ACTIVE_X11_DISPLAY.with(|active_display| active_display.set(display));
             let old_handler = unsafe { xlib::XSetErrorHandler(Some(error_handler)) };
+            PREVIOUS_XLIB_ERROR_HANDLER.store(
+                old_handler.map_or(0, |handler| handler as usize),
+                Ordering::Release,
+            );
             let panic_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
                 let mut h = XErrorHandler { display, error };
                 handler(&mut h)
             }));
             // Whatever happened, restore old error handler
             unsafe { xlib::XSetErrorHandler(old_handler) };
+            ACTIVE_X11_DISPLAY.with(|active_display| active_display.set(std::ptr::null_mut()));
+            PREVIOUS_XLIB_ERROR_HANDLER.store(0, Ordering::Release);
+            panic_result
+        });
+        drop(lock);
 
-            match panic_result {
-                Ok(v) => v,
-                Err(e) => std::panic::resume_unwind(e),
-            }
-        })
+        match result {
+            Ok(value) => value,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }
 }
 
@@ -137,7 +175,7 @@ impl XLibError {
             );
         }
 
-        *buf.last_mut().unwrap() = 0;
+        buf[buf.len() - 1] = 0;
         // SAFETY: whatever XGetErrorText did or not, we guaranteed there is a nul byte at the end of the buffer
         let cstr = unsafe { CStr::from_ptr(buf.as_mut_ptr().cast()) };
 

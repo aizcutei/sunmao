@@ -2,7 +2,7 @@
 
 use super::next_widget_id;
 use crate::{
-    Color, Event, Fill, GuiContext, MouseButton, ParameterWidget, Rect, Stroke, Widget, WidgetId,
+    Color, Event, Fill, GuiContext, MouseButton, ParameterWidget, Rect, Widget, WidgetId,
     WidgetState,
 };
 
@@ -24,6 +24,7 @@ pub struct Slider {
     orientation: Orientation,
     // Drag state
     is_dragging: bool,
+    value_changed: Option<Box<dyn Fn(f32) + Send>>,
     // Visual settings
     pub track_color: Color,
     pub value_color: Color,
@@ -42,6 +43,7 @@ impl Slider {
             default_value: 0.5,
             orientation: Orientation::Horizontal,
             is_dragging: false,
+            value_changed: None,
             track_color: Color::rgb(0.3, 0.3, 0.35),
             value_color: Color::ACCENT,
             thumb_color: Color::FOREGROUND,
@@ -60,9 +62,43 @@ impl Slider {
     }
 
     pub fn with_default(mut self, default: f32) -> Self {
+        let default = if default.is_finite() {
+            default.clamp(0.0, 1.0)
+        } else {
+            0.5
+        };
         self.default_value = default;
         self.value = default;
         self
+    }
+
+    pub fn set_disabled(&mut self, disabled: bool) {
+        self.state.disabled = disabled;
+        if disabled {
+            self.state.pressed = false;
+            self.is_dragging = false;
+        }
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        self.state.disabled
+    }
+
+    fn set_value_internal(&mut self, value: f32, notify: bool) {
+        let value = if value.is_finite() {
+            value.clamp(0.0, 1.0)
+        } else {
+            self.value
+        };
+        if (value - self.value).abs() <= f32::EPSILON {
+            return;
+        }
+        self.value = value;
+        if notify {
+            if let Some(callback) = self.value_changed.as_ref() {
+                callback(value);
+            }
+        }
     }
 
     fn value_from_position(&self, x: f32, y: f32) -> f32 {
@@ -117,17 +153,27 @@ impl Widget for Slider {
     fn set_bounds(&mut self, bounds: Rect) {
         self.bounds = bounds;
     }
+    fn set_focused(&mut self, focused: bool) {
+        self.state.focused = focused;
+    }
     fn state(&self) -> WidgetState {
         self.state
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
+        if self.state.disabled {
+            self.state.hovered = false;
+            self.state.pressed = false;
+            self.is_dragging = false;
+            return false;
+        }
         match event {
             Event::MouseMove { x, y, .. } => {
                 self.state.hovered = self.bounds.contains(*x, *y);
 
                 if self.is_dragging {
-                    self.value = self.value_from_position(*x, *y);
+                    let value = self.value_from_position(*x, *y);
+                    self.set_value_internal(value, true);
                     return true;
                 }
                 false
@@ -146,9 +192,10 @@ impl Widget for Slider {
 
                     // Ctrl/Cmd+click to reset
                     if modifiers.ctrl || modifiers.meta {
-                        self.value = self.default_value;
+                        self.set_value_internal(self.default_value, true);
                     } else {
-                        self.value = self.value_from_position(*x, *y);
+                        let value = self.value_from_position(*x, *y);
+                        self.set_value_internal(value, true);
                     }
 
                     return true;
@@ -170,8 +217,11 @@ impl Widget for Slider {
 
             Event::Scroll { x, y, delta_y, .. } => {
                 if self.bounds.contains(*x, *y) {
+                    if !delta_y.is_finite() {
+                        return false;
+                    }
                     let delta = *delta_y * 0.01;
-                    self.value = (self.value + delta).clamp(0.0, 1.0);
+                    self.set_value_internal(self.value + delta, true);
                     return true;
                 }
                 false
@@ -273,6 +323,69 @@ impl ParameterWidget for Slider {
         self.value
     }
     fn set_value(&mut self, value: f32) {
-        self.value = value.clamp(0.0, 1.0);
+        self.set_value_internal(value, false);
+    }
+
+    fn on_value_changed(&mut self, callback: Box<dyn Fn(f32) + Send>) {
+        self.value_changed = Some(callback);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Event, Modifiers};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn slider_reports_interactive_value_changes_once() {
+        let mut slider = Slider::new("gain").with_bounds(Rect::new(0.0, 0.0, 100.0, 20.0));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&calls);
+        slider.on_value_changed(Box::new(move |_value| {
+            observed.fetch_add(1, Ordering::Relaxed);
+        }));
+
+        slider.handle_event(&Event::MouseDown {
+            x: 50.0,
+            y: 10.0,
+            button: MouseButton::Left,
+            modifiers: Modifiers::none(),
+        });
+        slider.handle_event(&Event::MouseMove {
+            x: 75.0,
+            y: 10.0,
+            modifiers: Modifiers::none(),
+        });
+        slider.handle_event(&Event::MouseUp {
+            x: 75.0,
+            y: 10.0,
+            button: MouseButton::Left,
+            modifiers: Modifiers::none(),
+        });
+
+        assert!((slider.value() - 0.8).abs() < 0.02);
+        assert!(calls.load(Ordering::Relaxed) >= 1);
+        let calls_before_sync = calls.load(Ordering::Relaxed);
+        slider.set_value(0.25);
+        assert_eq!(calls.load(Ordering::Relaxed), calls_before_sync);
+        slider.set_value(f32::NAN);
+        assert!(slider.value().is_finite());
+    }
+
+    #[test]
+    fn disabled_slider_does_not_consume_or_mutate_input() {
+        let mut slider = Slider::new("gain");
+        slider.state.disabled = true;
+        let before = slider.value();
+        let consumed = slider.handle_event(&Event::MouseDown {
+            x: 10.0,
+            y: 10.0,
+            button: MouseButton::Left,
+            modifiers: Modifiers::none(),
+        });
+        assert!(!consumed);
+        assert_eq!(slider.value(), before);
     }
 }

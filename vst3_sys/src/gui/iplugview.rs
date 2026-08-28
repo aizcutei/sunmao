@@ -93,3 +93,47 @@ pub struct IPlugFrameVtbl {
         new_size: *mut ViewRect,
     ) -> tresult,
 }
+
+// =============================================================================
+// Linux host run-loop interfaces
+// =============================================================================
+
+/// Millisecond interval used by [`IRunLoopVtbl::register_timer`].
+pub type TimerInterval = uint64;
+
+/// Native file descriptor watched by a Linux VST3 host run loop.
+pub type FileDescriptor = int32;
+
+/// Plug-in callback invoked when a registered file descriptor is readable.
+#[repr(C)]
+pub struct IEventHandlerVtbl {
+    pub unknown: IUnknownVtbl,
+    pub on_fd_is_set: unsafe extern "system" fn(this: *mut c_void, fd: FileDescriptor),
+}
+
+/// Plug-in callback invoked by a registered host timer.
+#[repr(C)]
+pub struct ITimerHandlerVtbl {
+    pub unknown: IUnknownVtbl,
+    pub on_timer: unsafe extern "system" fn(this: *mut c_void),
+}
+
+/// Linux host run loop used to marshal GUI work onto the host UI thread.
+#[repr(C)]
+pub struct IRunLoopVtbl {
+    pub unknown: IUnknownVtbl,
+    pub register_event_handler: unsafe extern "system" fn(
+        this: *mut c_void,
+        handler: *mut c_void,
+        fd: FileDescriptor,
+    ) -> tresult,
+    pub unregister_event_handler:
+        unsafe extern "system" fn(this: *mut c_void, handler: *mut c_void) -> tresult,
+    pub register_timer: unsafe extern "system" fn(
+        this: *mut c_void,
+        handler: *mut c_void,
+        milliseconds: TimerInterval,
+    ) -> tresult,
+    pub unregister_timer:
+        unsafe extern "system" fn(this: *mut c_void, handler: *mut c_void) -> tresult,
+}

@@ -12,12 +12,7 @@ default = []
 au = ["dep:sunmao_backend_au"]
 
 [dependencies]
-sunmao_core = { path = "../../sunmao/core" }
-sunmao_macros = { path = "../../sunmao/macros" }
-sunmao_gui = { path = "../../sunmao/gui", features = ["gl"] }
-sunmao_view_baseview = { path = "../../sunmao/view_baseview", features = ["wgpu"] }
-sunmao_backend_vst3 = { path = "../../sunmao/backend_vst3" }
-sunmao_backend_clap = { path = "../../sunmao/backend_clap" }
+sunmao = { path = "../../sunmao", features = ["gui-gl"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 sunmao_backend_au = { path = "../../sunmao/backend_au", optional = true }

@@ -199,7 +199,7 @@ impl Layout {
             padding: Padding::all(0.0),
             spacing: 8.0,
             direction: Direction::Horizontal,
-            cursor: 0.0,
+            cursor: bounds.x,
         }
     }
 
@@ -249,18 +249,58 @@ impl Layout {
     /// Get remaining space
     pub fn remaining(&self) -> Rect {
         match self.direction {
-            Direction::Horizontal => Rect::new(
-                self.cursor,
-                self.bounds.y,
-                self.bounds.right() - self.cursor,
-                self.bounds.height,
-            ),
-            Direction::Vertical => Rect::new(
-                self.bounds.x,
-                self.cursor,
-                self.bounds.width,
-                self.bounds.bottom() - self.cursor,
-            ),
+            Direction::Horizontal => {
+                let x = self.cursor + self.padding.left;
+                Rect::new(
+                    x,
+                    self.bounds.y + self.padding.top,
+                    (self.bounds.right() - self.padding.right - x).max(0.0),
+                    (self.bounds.height - self.padding.top - self.padding.bottom).max(0.0),
+                )
+            }
+            Direction::Vertical => {
+                let y = self.cursor + self.padding.top;
+                Rect::new(
+                    self.bounds.x + self.padding.left,
+                    y,
+                    (self.bounds.width - self.padding.left - self.padding.right).max(0.0),
+                    (self.bounds.bottom() - self.padding.bottom - y).max(0.0),
+                )
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layout_starts_at_bounds_origin_and_accounts_for_padding() {
+        let mut layout = Layout::horizontal(Rect::new(10.0, 20.0, 100.0, 40.0));
+        layout.padding = Padding::new(2.0, 4.0, 6.0, 8.0);
+        layout.spacing = 3.0;
+
+        assert_eq!(
+            layout.allocate(20.0, 10.0),
+            Rect::new(18.0, 22.0, 20.0, 10.0)
+        );
+        assert_eq!(
+            layout.allocate(10.0, 10.0),
+            Rect::new(41.0, 22.0, 10.0, 10.0)
+        );
+        assert_eq!(layout.remaining(), Rect::new(54.0, 22.0, 52.0, 32.0));
+    }
+
+    #[test]
+    fn vertical_layout_clamps_remaining_space_when_exhausted() {
+        let mut layout = Layout::vertical(Rect::new(0.0, 5.0, 30.0, 20.0));
+        layout.padding = Padding::all(2.0);
+        layout.allocate(10.0, 30.0);
+        let remaining = layout.remaining();
+        assert_eq!(remaining.x, 2.0);
+        assert_eq!(remaining.y, 45.0);
+        assert_eq!(remaining.width, 26.0);
+        assert_eq!(remaining.height, 0.0);
     }
 }

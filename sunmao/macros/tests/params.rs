@@ -5,10 +5,36 @@ use sunmao_macros::Params;
 
 #[derive(Params)]
 struct AllParamTypes {
-    #[id = "mix"]
     mix: FloatParam,
     voices: IntParam,
     bypass: BoolParam,
+}
+
+#[derive(Params)]
+struct ParamAttributeSyntax {
+    #[param(unit = "Generic")]
+    value: FloatParam,
+}
+
+#[derive(Params)]
+struct FullyQualifiedParamType {
+    gain: sunmao_core::params::FloatParam,
+}
+
+impl Default for FullyQualifiedParamType {
+    fn default() -> Self {
+        Self {
+            gain: sunmao_core::params::FloatParam::new("gain", "Gain", 0.5, 0.0, 1.0),
+        }
+    }
+}
+
+impl Default for ParamAttributeSyntax {
+    fn default() -> Self {
+        Self {
+            value: FloatParam::new("renamed", "Value", 0.25, 0.0, 1.0),
+        }
+    }
 }
 
 impl Default for AllParamTypes {
@@ -26,8 +52,14 @@ fn derive_describes_float_int_and_bool_parameters() {
     let params = AllParamTypes::default();
     let descriptors = params.descriptors();
 
-    assert_eq!(AllParamTypes::ids(), &["mix", "voices", "bypass"]);
     assert_eq!(descriptors.len(), 3);
+    assert_eq!(
+        descriptors
+            .iter()
+            .map(|descriptor| descriptor.id)
+            .collect::<Vec<_>>(),
+        ["mix", "voices", "bypass"]
+    );
 
     assert_eq!(descriptors[0].name, "Dry/Wet");
     assert_eq!(descriptors[0].numeric_id, stable_param_id("mix"));
@@ -57,4 +89,17 @@ fn derive_clamps_normalized_writes_for_discrete_parameters() {
 
     assert_eq!(params.voices.get(), 5);
     assert!(params.bypass.get());
+}
+
+#[test]
+fn derive_accepts_param_namespace_attribute() {
+    let params = ParamAttributeSyntax::default();
+    assert_eq!(params.get_normalized("renamed"), Some(0.25));
+    assert_eq!(params.descriptors()[0].id, "renamed");
+}
+
+#[test]
+fn derive_accepts_fully_qualified_parameter_types() {
+    let params = FullyQualifiedParamType::default();
+    assert_eq!(params.get_normalized("gain"), Some(0.5));
 }

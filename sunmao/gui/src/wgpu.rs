@@ -109,8 +109,10 @@ impl WgpuContext {
 
     /// Resize the context
     pub fn resize(&mut self, width: f32, height: f32) {
-        self.width = width;
-        self.height = height;
+        if width.is_finite() && height.is_finite() && width >= 0.0 && height >= 0.0 {
+            self.width = width;
+            self.height = height;
+        }
     }
 
     /// Get a reference to the wgpu device
@@ -125,7 +127,9 @@ impl WgpuContext {
 
     /// Set the scale factor
     pub fn set_scale(&mut self, scale: f32) {
-        self.scale = scale;
+        if scale.is_finite() && scale > 0.0 {
+            self.scale = scale;
+        }
     }
 
     /// Begin a new frame
@@ -182,8 +186,18 @@ impl WgpuContext {
     }
 
     fn push_vertex(&mut self, x: f32, y: f32) {
-        let nx = (x / self.width) * 2.0 - 1.0;
-        let ny = 1.0 - (y / self.height) * 2.0;
+        let width = if self.width.is_finite() && self.width > 0.0 {
+            self.width
+        } else {
+            1.0
+        };
+        let height = if self.height.is_finite() && self.height > 0.0 {
+            self.height
+        } else {
+            1.0
+        };
+        let nx = (x / width) * 2.0 - 1.0;
+        let ny = 1.0 - (y / height) * 2.0;
         self.vertices.push(Vertex {
             position: [nx, ny],
             color: [
@@ -226,6 +240,10 @@ mod tests {
 impl GuiContext for WgpuContext {
     fn size(&self) -> (f32, f32) {
         (self.width, self.height)
+    }
+
+    fn scale_factor(&self) -> f32 {
+        self.scale
     }
 
     fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, fill: Fill) {

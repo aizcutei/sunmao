@@ -1,14 +1,16 @@
 # SunMao 长期路线图
 
-本路线图以 VST3/CLAP 跨平台基础能力稳定为前提；AU 不参与第一阶段验收。
+本路线图以 VST3/CLAP/standalone 跨平台基础能力稳定为前提；AU 不参与第一阶段验收。
 
 ## Phase 1：跨平台基础插件矩阵（当前）
 
-同一份 SunMao Rust 插件实现输出 VST3 与 CLAP，在 macOS、Windows、Linux 上完成 effect + instrument 基础处理、MIDI、Float/Int/Bool 参数、sample-offset automation、reset、版本化参数 state、无分配实时回调、Cocoa/Win32/X11 的 GL/WGPU/WebView GUI 生命周期、target-aware 打包器和 CLI/GUI 测试宿主。以 native hosted CI 和可下载 artifacts 作为最终证据；AU、Wayland、物理 Linux 音频设备、ScreenCaptureKit 实捕获和真实 DAW GUI automation recording 明确延期。
+同一份 SunMao Rust 插件实现输出 VST3、CLAP 与 standalone，在 macOS、Windows、Linux 上完成 effect + instrument 基础处理、MIDI、Float/Int/Bool 参数、sample-offset automation、reset、版本化参数 state、无分配实时回调、Cocoa/Win32/X11 的 GL/WGPU/WebView 插件 GUI 与 standalone 顶层窗口生命周期、target-aware 打包器和 CLI/GUI 测试宿主。以 native hosted CI 和可下载 artifacts 作为最终证据；AU、Wayland、物理 Linux 音频设备、ScreenCaptureKit 实捕获和真实 DAW GUI automation recording 明确延期。
+
+Phase 1 的历史 VST3/CLAP baseline 已由 run #21（commit `885d2a5`）验收；该 run 不包含 standalone。任何后续 ABI、生命周期、GUI、standalone、packager 或 runner hardening 都必须在新 commit 上重新通过 macOS ARM64、Windows x86_64、Ubuntu x86_64 hosted native jobs，并重新上传插件 bundles、standalone 应用、runner/GUI 日志和 packager 报告；本地或历史 run 不能替代该 revalidation gate。扩展 gate 通过后才可创建 Phase 2 实现目标。
 
 ## Phase 2：高级插件契约与实时性
 
-增加多 audio bus/sidechain、动态 routing 与 speaker layout、modulation/per-note expression、transport/timing 完整模型、latency/tail/offline render、voice-info、plugin-owned state、preset 与 migration；继续以无分配、无阻塞 audio thread 为约束，并加入 fuzz/property tests。
+增加多 audio bus/sidechain、动态 routing 与 speaker layout、modulation/per-note expression、transport/timing 完整模型、latency/tail/offline render、voice-info、plugin-owned state、preset 与 migration；继续以无分配、无阻塞 audio thread 为约束，并加入 fuzz/property tests。standalone 先保持 Phase 1 的基础设备/窗口契约，不在本阶段扩展为完整 DAW host。
 
 ## Phase 3：框架、DSP 与组件库
 

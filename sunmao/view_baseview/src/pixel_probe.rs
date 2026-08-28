@@ -5,12 +5,36 @@
 //! The GL/WGPU views copy a downsampled frame into this slot after drawing;
 //! `sunmao_unittest_runner` then `dlsym`s [`sunmao_debug_read_frame`].
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Mutex;
 
 static LAST_FRAME: Mutex<Option<(u32, u32, Vec<u32>)>> = Mutex::new(None);
+static STATUS: AtomicU8 = AtomicU8::new(STATUS_UNSUPPORTED);
+
+const STATUS_UNSUPPORTED: u8 = 0;
+const STATUS_WAITING: u8 = 1;
+const STATUS_READY: u8 = 2;
 
 pub fn enabled() -> bool {
     std::env::var_os("SUNMAO_GUI_PIXEL_PROBE").is_some()
+}
+
+fn reset(status: u8) {
+    if let Ok(mut slot) = LAST_FRAME.lock() {
+        *slot = None;
+    }
+    STATUS.store(status, Ordering::Release);
+}
+
+/// Start a new GL/WGPU editor session and invalidate evidence from any
+/// previously closed editor.
+pub fn begin_renderer_session() {
+    reset(STATUS_WAITING);
+}
+
+/// Start a new editor session that must use a platform-native capture path.
+pub fn begin_native_session() {
+    reset(STATUS_UNSUPPORTED);
 }
 
 pub fn store_sampled_rgba(
@@ -66,7 +90,17 @@ pub fn store_sampled(width: u32, height: u32, mut pixel: impl FnMut(u32, u32) ->
     }
     if let Ok(mut slot) = LAST_FRAME.lock() {
         *slot = Some((cols, rows, pixels));
+        STATUS.store(STATUS_READY, Ordering::Release);
     }
+}
+
+/// Report whether this editor session supports the renderer-owned probe.
+///
+/// Returns 0 when native capture is required, 1 while a GL/WGPU frame is
+/// pending, and 2 after renderer evidence is available.
+#[no_mangle]
+pub extern "C" fn sunmao_debug_pixel_probe_status() -> i32 {
+    i32::from(STATUS.load(Ordering::Acquire))
 }
 
 /// Copy the last rendered GUI thumbnail for the unittest runner.
@@ -106,9 +140,19 @@ pub unsafe extern "C" fn sunmao_debug_read_frame(
 mod tests {
     use super::*;
 
+    // The probe is intentionally process-global because the unittest runner
+    // discovers its exported C symbols from a loaded plugin. Keep unit tests
+    // that model separate editor sessions from interleaving their global
+    // session state when Rust runs this module in parallel.
+    static TEST_SESSION_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn sampled_store_round_trips_through_the_exported_probe() {
+        let _session_guard = TEST_SESSION_LOCK.lock().expect("pixel probe test lock");
+        begin_renderer_session();
+        assert_eq!(sunmao_debug_pixel_probe_status(), i32::from(STATUS_WAITING));
         store_sampled(8, 8, |x, y| u32::from_ne_bytes([x as u8, y as u8, 40, 0]));
+        assert_eq!(sunmao_debug_pixel_probe_status(), i32::from(STATUS_READY));
         let mut width = 0;
         let mut height = 0;
         let mut pixels = vec![0_u32; 16];
@@ -119,5 +163,26 @@ mod tests {
         assert_eq!(width, 8);
         assert_eq!(height, 8);
         assert_ne!(pixels[0], pixels[count as usize - 1]);
+    }
+
+    #[test]
+    fn native_session_clears_stale_renderer_evidence() {
+        let _session_guard = TEST_SESSION_LOCK.lock().expect("pixel probe test lock");
+        begin_renderer_session();
+        store_sampled(2, 2, |x, y| x + y * 2 + 1);
+        assert_eq!(sunmao_debug_pixel_probe_status(), i32::from(STATUS_READY));
+
+        begin_native_session();
+        assert_eq!(
+            sunmao_debug_pixel_probe_status(),
+            i32::from(STATUS_UNSUPPORTED)
+        );
+        let mut width = 0;
+        let mut height = 0;
+        let mut pixel = 0;
+        assert_eq!(
+            unsafe { sunmao_debug_read_frame(&mut width, &mut height, &mut pixel, 1) },
+            0
+        );
     }
 }

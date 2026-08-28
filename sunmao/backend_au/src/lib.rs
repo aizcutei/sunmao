@@ -33,6 +33,7 @@ pub fn au_params<P: SunmaoAuParamList>() -> &'static [ParameterInfo] {
 pub struct SunmaoAuWrapper<P: SunmaoPlugin> {
     plugin: P,
     params: Arc<P::Params>,
+    param_descriptors: Vec<sunmao_core::ParamDescriptor>,
     sample_rate: f64,
     max_frames: u32,
     is_synth: bool,
@@ -51,6 +52,9 @@ impl<P: SunmaoPlugin> Plugin for SunmaoAuWrapper<P> {
         let mut plugin = P::default();
         plugin.initialize(sample_rate, max_frames);
         let params = plugin.params();
+        let param_descriptors = params
+            .validated_descriptors()
+            .unwrap_or_else(|error| panic!("invalid SunMao parameter layout: {error}"));
         let is_synth = plugin.input_channels() == 0;
         let in_ch = plugin.input_channels() as usize;
         let out_ch = plugin.output_channels() as usize;
@@ -58,6 +62,7 @@ impl<P: SunmaoPlugin> Plugin for SunmaoAuWrapper<P> {
         Self {
             plugin,
             params,
+            param_descriptors,
             sample_rate,
             max_frames,
             is_synth,
@@ -151,18 +156,16 @@ impl<P: SunmaoPlugin> Plugin for SunmaoAuWrapper<P> {
     }
 
     fn get_parameter(&self, id: u32) -> f32 {
-        let ids = P::Params::ids();
-        if let Some(&param_id) = ids.get(id as usize) {
-            self.params.get_normalized(param_id).unwrap_or(0.0)
+        if let Some(descriptor) = self.param_descriptors.get(id as usize) {
+            self.params.get_normalized(descriptor.id).unwrap_or(0.0)
         } else {
             0.0
         }
     }
 
     fn set_parameter(&mut self, id: u32, value: f32) {
-        let ids = P::Params::ids();
-        if let Some(&param_id) = ids.get(id as usize) {
-            self.params.set_normalized(param_id, value);
+        if let Some(descriptor) = self.param_descriptors.get(id as usize) {
+            self.params.set_normalized(descriptor.id, value);
         }
     }
 

@@ -1,6 +1,9 @@
 use std::cell::RefCell;
 use std::collections::hash_map::{Entry, HashMap};
 use std::error::Error;
+use std::io::{Error as IoError, ErrorKind};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Once;
 
 use x11::{xlib, xlib::Display, xlib_xcb};
 
@@ -13,6 +16,9 @@ use x11rb::xcb_ffi::XCBConnection;
 use crate::MouseCursor;
 
 use super::cursor;
+
+static INITIALIZE_XLIB_THREADS: Once = Once::new();
+static XLIB_THREADS_AVAILABLE: AtomicBool = AtomicBool::new(false);
 
 x11rb::atom_manager! {
     pub Atoms: AtomsCookie {
@@ -36,12 +42,57 @@ pub struct XcbConnection {
 
 impl XcbConnection {
     pub fn new() -> Result<Self, Box<dyn Error>> {
-        let dpy = unsafe { xlib::XOpenDisplay(std::ptr::null()) };
-        assert!(!dpy.is_null());
-        let xcb_connection = unsafe { xlib_xcb::XGetXCBConnection(dpy) };
-        assert!(!xcb_connection.is_null());
+        struct DisplayGuard(*mut Display);
+
+        impl Drop for DisplayGuard {
+            fn drop(&mut self) {
+                if !self.0.is_null() {
+                    unsafe {
+                        xlib::XCloseDisplay(self.0);
+                    }
+                }
+            }
+        }
+
+        INITIALIZE_XLIB_THREADS.call_once(|| {
+            XLIB_THREADS_AVAILABLE.store(unsafe { xlib::XInitThreads() } != 0, Ordering::Release);
+        });
+        if !XLIB_THREADS_AVAILABLE.load(Ordering::Acquire) {
+            return Err(IoError::new(
+                ErrorKind::Other,
+                "XInitThreads failed; refusing unsafe multi-threaded Xlib access",
+            )
+            .into());
+        }
+
+        let display = DisplayGuard(unsafe { xlib::XOpenDisplay(std::ptr::null()) });
+        if display.0.is_null() {
+            return Err(IoError::new(
+                ErrorKind::NotConnected,
+                "XOpenDisplay failed; DISPLAY is unset or the X server is unavailable",
+            )
+            .into());
+        }
+
+        let xcb_connection = unsafe { xlib_xcb::XGetXCBConnection(display.0) };
+        if xcb_connection.is_null() {
+            return Err(IoError::new(
+                ErrorKind::NotConnected,
+                "XGetXCBConnection returned a null connection",
+            )
+            .into());
+        }
+
+        let dpy = display.0;
         let screen = unsafe { xlib::XDefaultScreen(dpy) } as usize;
         let conn = unsafe { XCBConnection::from_raw_xcb_connection(xcb_connection, false)? };
+        if screen >= conn.setup().roots.len() {
+            return Err(IoError::new(
+                ErrorKind::InvalidData,
+                format!("XDefaultScreen returned unavailable screen index {screen}"),
+            )
+            .into());
+        }
         unsafe {
             xlib_xcb::XSetEventQueueOwner(dpy, xlib_xcb::XEventQueueOwner::XCBOwnsEventQueue)
         };
@@ -50,7 +101,7 @@ impl XcbConnection {
         let resources = resource_manager::new_from_default(&conn)?;
         let cursor_handle = CursorHandle::new(&conn, screen, &resources)?.reply()?;
 
-        Ok(Self {
+        let connection = Self {
             dpy,
             conn,
             screen,
@@ -58,7 +109,9 @@ impl XcbConnection {
             resources,
             cursor_handle,
             cursor_cache: RefCell::new(HashMap::new()),
-        })
+        };
+        std::mem::forget(display);
+        Ok(connection)
     }
 
     // Try to get the scaling with this function first.
@@ -89,18 +142,25 @@ impl XcbConnection {
         let width_mm = screen.width_in_millimeters as f64;
         let height_px = screen.height_in_pixels as f64;
         let height_mm = screen.height_in_millimeters as f64;
-        let _xres = width_px * 25.4 / width_mm;
-        let yres = height_px * 25.4 / height_mm;
+        let xres = (width_mm > 0.0).then(|| width_px * 25.4 / width_mm);
+        let yres = (height_mm > 0.0).then(|| height_px * 25.4 / height_mm);
 
-        // TODO: choose between `xres` and `yres`? (probably both are the same?)
-        yres / 96.0
+        [xres, yres]
+            .iter()
+            .flatten()
+            .copied()
+            .find(|dpi| dpi.is_finite() && *dpi > 0.0)
+            .map(|dpi| dpi / 96.0)
+            .unwrap_or(1.0)
     }
 
     #[inline]
     pub fn get_scaling(&self) -> Result<f64, Box<dyn Error>> {
-        Ok(self
+        let scaling = self
             .get_scaling_xft()?
-            .unwrap_or(self.get_scaling_screen_dimensions()))
+            .filter(|scale| scale.is_finite() && *scale > 0.0)
+            .unwrap_or_else(|| self.get_scaling_screen_dimensions());
+        Ok(scaling)
     }
 
     #[inline]

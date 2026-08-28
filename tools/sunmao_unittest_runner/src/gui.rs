@@ -106,11 +106,11 @@ impl SunmaoTestRunnerApp {
                     "clap" => scanner::scan_clap(&path_obj),
                     "vst3" => scanner::scan_vst3(&path_obj),
                     "component" => {
-                        #[cfg(target_os = "macos")]
+                        #[cfg(all(target_os = "macos", feature = "au"))]
                         {
                             scanner::scan_au(&path_obj)
                         }
-                        #[cfg(not(target_os = "macos"))]
+                        #[cfg(not(all(target_os = "macos", feature = "au")))]
                         {
                             Vec::new()
                         }
@@ -120,7 +120,7 @@ impl SunmaoTestRunnerApp {
             } else {
                 Vec::new()
             };
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "au"))]
             {
                 let au = scanner::scan_au_system();
                 plugins.extend(au);
@@ -333,8 +333,8 @@ impl eframe::App for SunmaoTestRunnerApp {
                 if ui.button("Scan").clicked() {
                     self.start_scan();
                 }
+                #[cfg(all(target_os = "macos", feature = "au"))]
                 if ui.button("Scan System AU").clicked() {
-                    #[cfg(target_os = "macos")]
                     {
                         let result = self.pending_result.clone();
                         self.scan_state = ScanState::Scanning;
@@ -946,7 +946,7 @@ fn load_plugin(info: &PluginInfo) -> Result<Box<dyn HostPlugin>, String> {
             Ok(Box::new(p))
         }
         PluginFormat::AU => {
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "au"))]
             {
                 // First try matching by type-subtype-manufacturer ID
                 let components = crate::host::au_host::scan_au_components();
@@ -996,7 +996,7 @@ fn load_plugin(info: &PluginInfo) -> Result<Box<dyn HostPlugin>, String> {
                 }
                 Err(format!("AU component not found: {}", info.id))
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(all(target_os = "macos", feature = "au")))]
             {
                 Err("AU is only supported on macOS".into())
             }
@@ -1004,7 +1004,7 @@ fn load_plugin(info: &PluginInfo) -> Result<Box<dyn HostPlugin>, String> {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "au"))]
 fn fourcc(v: u32) -> String {
     let bytes = [(v >> 24) as u8, (v >> 16) as u8, (v >> 8) as u8, v as u8];
     String::from_utf8_lossy(&bytes).to_string()

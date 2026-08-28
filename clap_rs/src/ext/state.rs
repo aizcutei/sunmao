@@ -3,7 +3,7 @@
 use crate::ext::gui::GuiHandler;
 use crate::ext::params::ParameterInfo;
 use crate::plugin::Plugin;
-use crate::plugin_instance::{PluginInstance, PluginInstanceWithGui};
+use crate::plugin_instance::{ffi_guard, instance_ptr};
 use clap_sys::ext::state::clap_plugin_state_t;
 use clap_sys::plugin::clap_plugin_t;
 use clap_sys::stream::{clap_istream_t, clap_ostream_t};
@@ -18,14 +18,22 @@ pub(crate) unsafe extern "C" fn state_save<P: Plugin>(
     plugin: *const clap_plugin_t,
     stream: *const clap_ostream_t,
 ) -> bool {
-    if plugin.is_null() || stream.is_null() {
+    ffi_guard(false, || unsafe {
+        state_save_unchecked::<P>(plugin, stream)
+    })
+}
+
+unsafe fn state_save_unchecked<P: Plugin>(
+    plugin: *const clap_plugin_t,
+    stream: *const clap_ostream_t,
+) -> bool {
+    if stream.is_null() {
         return false;
     }
-    let plugin_data = unsafe { (*plugin).plugin_data };
-    if plugin_data.is_null() {
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
         return false;
-    }
-    let instance = unsafe { &*(plugin_data as *const PluginInstance<P>) };
+    };
+    let instance = unsafe { &*instance_ptr };
     unsafe { save_parameter_state(instance.controller(), &instance.params_cache, stream) }
 }
 
@@ -33,14 +41,22 @@ pub(crate) unsafe extern "C" fn state_load<P: Plugin>(
     plugin: *const clap_plugin_t,
     stream: *const clap_istream_t,
 ) -> bool {
-    if plugin.is_null() || stream.is_null() {
+    ffi_guard(false, || unsafe {
+        state_load_unchecked::<P>(plugin, stream)
+    })
+}
+
+unsafe fn state_load_unchecked<P: Plugin>(
+    plugin: *const clap_plugin_t,
+    stream: *const clap_istream_t,
+) -> bool {
+    if stream.is_null() {
         return false;
     }
-    let plugin_data = unsafe { (*plugin).plugin_data };
-    if plugin_data.is_null() {
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
         return false;
-    }
-    let instance = unsafe { &*(plugin_data as *const PluginInstance<P>) };
+    };
+    let instance = unsafe { &*instance_ptr };
     let loaded =
         unsafe { load_parameter_state(instance.controller_mut(), &instance.params_cache, stream) };
     if loaded {
@@ -61,14 +77,22 @@ pub(crate) unsafe extern "C" fn state_save_gui<P: Plugin + GuiHandler>(
     plugin: *const clap_plugin_t,
     stream: *const clap_ostream_t,
 ) -> bool {
-    if plugin.is_null() || stream.is_null() {
+    ffi_guard(false, || unsafe {
+        state_save_gui_unchecked::<P>(plugin, stream)
+    })
+}
+
+unsafe fn state_save_gui_unchecked<P: Plugin + GuiHandler>(
+    plugin: *const clap_plugin_t,
+    stream: *const clap_ostream_t,
+) -> bool {
+    if stream.is_null() {
         return false;
     }
-    let plugin_data = unsafe { (*plugin).plugin_data };
-    if plugin_data.is_null() {
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
         return false;
-    }
-    let instance = unsafe { &*(plugin_data as *const PluginInstanceWithGui<P>) };
+    };
+    let instance = unsafe { &*instance_ptr };
     unsafe { save_parameter_state(instance.controller(), &instance.params_cache, stream) }
 }
 
@@ -76,14 +100,22 @@ pub(crate) unsafe extern "C" fn state_load_gui<P: Plugin + GuiHandler>(
     plugin: *const clap_plugin_t,
     stream: *const clap_istream_t,
 ) -> bool {
-    if plugin.is_null() || stream.is_null() {
+    ffi_guard(false, || unsafe {
+        state_load_gui_unchecked::<P>(plugin, stream)
+    })
+}
+
+unsafe fn state_load_gui_unchecked<P: Plugin + GuiHandler>(
+    plugin: *const clap_plugin_t,
+    stream: *const clap_istream_t,
+) -> bool {
+    if stream.is_null() {
         return false;
     }
-    let plugin_data = unsafe { (*plugin).plugin_data };
-    if plugin_data.is_null() {
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
         return false;
-    }
-    let instance = unsafe { &*(plugin_data as *const PluginInstanceWithGui<P>) };
+    };
+    let instance = unsafe { &*instance_ptr };
     let loaded =
         unsafe { load_parameter_state(instance.controller_mut(), &instance.params_cache, stream) };
     if loaded {
@@ -136,12 +168,36 @@ unsafe fn load_parameter_state<P: Plugin>(
     let Some(entries) = decode_parameter_state(&bytes) else {
         return false;
     };
+    // CLAP parameter state is stored in the parameter's plain-value domain.
+    // Reject finite-but-invalid values before exposing *any* entry to plugin
+    // code, keeping a malformed state load atomic from the plugin's point of
+    // view.
+    for (id, value) in &entries {
+        if params.iter().any(|param| param.id == *id) && !state_value_valid(params, *id, *value) {
+            return false;
+        }
+    }
     for (id, value) in entries {
         if params.iter().any(|param| param.id == id) {
             plugin.set_parameter(id, value);
         }
     }
     true
+}
+
+fn state_value_valid(params: &[ParameterInfo], id: u32, value: f64) -> bool {
+    let Some(param) = params.iter().find(|param| param.id == id) else {
+        return true;
+    };
+    parameter_value_valid(param, value)
+}
+
+fn parameter_value_valid(param: &ParameterInfo, value: f64) -> bool {
+    value.is_finite()
+        && param.min_value.is_finite()
+        && param.max_value.is_finite()
+        && param.min_value <= param.max_value
+        && (param.min_value..=param.max_value).contains(&value)
 }
 
 fn encode_parameter_state(
@@ -158,7 +214,7 @@ fn encode_parameter_state(
     bytes.extend_from_slice(&count.to_le_bytes());
     for param in params {
         let value = value_for(param.id);
-        if !value.is_finite() {
+        if !parameter_value_valid(param, value) {
             return None;
         }
         bytes.extend_from_slice(&param.id.to_le_bytes());
@@ -297,5 +353,12 @@ mod tests {
         let mut bytes = encode_parameter_state(&params(), |_| 0.5).unwrap();
         bytes[HEADER_LEN + 4..HEADER_LEN + ENTRY_LEN].copy_from_slice(&f64::NAN.to_le_bytes());
         assert_eq!(decode_parameter_state(&bytes), None);
+    }
+
+    #[test]
+    fn out_of_range_state_values_are_rejected() {
+        assert!(!state_value_valid(&params(), 7, 2.0));
+        assert!(!state_value_valid(&params(), 7, f64::NAN));
+        assert!(state_value_valid(&params(), 999, 2.0));
     }
 }

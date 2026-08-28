@@ -3,16 +3,22 @@ use std::cell::UnsafeCell;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ffi::c_void;
+use std::ptr;
 use std::rc::Rc;
+use std::sync::Mutex;
 
 use cocoa::appkit::{
-    NSApp, NSApplication, NSApplicationActivationPolicyRegular, NSBackingStoreBuffered,
-    NSPasteboard, NSView, NSWindow, NSWindowStyleMask,
+    NSApp, NSApplication, NSApplicationActivationPolicyRegular, NSBackingStoreBuffered, NSEvent,
+    NSEventModifierFlags, NSEventSubtype, NSEventType, NSPasteboard, NSView, NSWindow,
+    NSWindowStyleMask,
 };
 use cocoa::base::{id, nil, BOOL, NO, YES};
 use cocoa::foundation::{NSAutoreleasePool, NSPoint, NSRect, NSSize, NSString};
+use core_foundation::base::TCFType;
 use core_foundation::runloop::{
-    __CFRunLoopTimer, kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopTimer, CFRunLoopTimerContext,
+    __CFRunLoopTimer, kCFRunLoopCommonModes, kCFRunLoopDefaultMode, CFRunLoop, CFRunLoopSource,
+    CFRunLoopSourceContext, CFRunLoopSourceCreate, CFRunLoopSourceInvalidate,
+    CFRunLoopSourceSignal, CFRunLoopTimer, CFRunLoopTimerContext, CFRunLoopWakeUp,
 };
 use keyboard_types::KeyboardEvent;
 use objc::class;
@@ -38,6 +44,108 @@ use crate::metal_layer::MetalLayer;
 
 pub struct WindowHandle {
     state: Rc<WindowState>,
+}
+
+static BLOCKING_EVENT_LOOP_STOP_SOURCE: Mutex<Option<usize>> = Mutex::new(None);
+
+fn stop_application_event_loop() {
+    unsafe {
+        let app = NSApp();
+        app.stop_(app);
+
+        // AppKit applies stop: after processing another event. Post one so an
+        // otherwise idle WebKit window cannot leave NSApplication::run stuck.
+        let wake_event = NSEvent::otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2_(
+            nil,
+            NSEventType::NSApplicationDefined,
+            NSPoint::new(0.0, 0.0),
+            NSEventModifierFlags::empty(),
+            0.0,
+            0,
+            nil,
+            NSEventSubtype::NSWindowExposedEventType,
+            0,
+            0,
+        );
+        if wake_event != nil {
+            app.postEvent_atStart_(wake_event, YES);
+        }
+    }
+}
+
+struct BlockingEventLoopRegistration {
+    source: CFRunLoopSource,
+}
+
+impl BlockingEventLoopRegistration {
+    fn new() -> Self {
+        extern "C" fn stop_application(_: *const c_void) {
+            stop_application_event_loop();
+        }
+
+        let mut context = CFRunLoopSourceContext {
+            version: 0,
+            info: ptr::null_mut(),
+            retain: None,
+            release: None,
+            copyDescription: None,
+            equal: None,
+            hash: None,
+            schedule: None,
+            cancel: None,
+            perform: stop_application,
+        };
+        let source = unsafe {
+            let source = CFRunLoopSourceCreate(ptr::null(), 0, &mut context);
+            CFRunLoopSource::wrap_under_create_rule(source)
+        };
+        let run_loop = CFRunLoop::get_main();
+        run_loop.add_source(&source, unsafe { kCFRunLoopCommonModes });
+
+        let source_ptr = source.as_concrete_TypeRef() as usize;
+        let mut registered = BLOCKING_EVENT_LOOP_STOP_SOURCE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(
+            registered.replace(source_ptr).is_none(),
+            "multiple blocking macOS event loops are not supported"
+        );
+
+        Self { source }
+    }
+}
+
+impl Drop for BlockingEventLoopRegistration {
+    fn drop(&mut self) {
+        let source_ptr = self.source.as_concrete_TypeRef() as usize;
+        let mut registered = BLOCKING_EVENT_LOOP_STOP_SOURCE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *registered == Some(source_ptr) {
+            *registered = None;
+        }
+
+        let run_loop = CFRunLoop::get_main();
+        run_loop.remove_source(&self.source, unsafe { kCFRunLoopCommonModes });
+        unsafe {
+            CFRunLoopSourceInvalidate(self.source.as_concrete_TypeRef());
+        }
+    }
+}
+
+/// Ask the main AppKit event loop to stop from a watchdog thread.
+pub fn request_event_loop_stop() {
+    let registered = BLOCKING_EVENT_LOOP_STOP_SOURCE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(source_ptr) = *registered else {
+        return;
+    };
+    let run_loop = CFRunLoop::get_main();
+    unsafe {
+        CFRunLoopSourceSignal(source_ptr as _);
+        CFRunLoopWakeUp(run_loop.as_concrete_TypeRef());
+    }
 }
 
 impl WindowHandle {
@@ -202,9 +310,8 @@ impl WindowInner {
         let () = msg_send![self.ns_view as id, release];
 
         // If in non-parented mode, quit the app altogether.
-        let app = self.ns_app.take();
-        if let Some(app) = app {
-            app.stop_(app);
+        if self.ns_app.take().is_some() {
+            stop_application_event_loop();
         }
 
         // Consume the ivar's raw ownership exactly once. The local clone keeps
@@ -316,6 +423,7 @@ impl<'a> Window<'a> {
         B: FnOnce(&mut crate::Window) -> H,
         B: Send + 'static,
     {
+        let _blocking_event_loop = BlockingEventLoopRegistration::new();
         let pool = unsafe { NSAutoreleasePool::new(nil) };
 
         // It seems prudent to run NSApp() here before doing other
@@ -327,6 +435,12 @@ impl<'a> Window<'a> {
 
         unsafe {
             app.setActivationPolicy_(NSApplicationActivationPolicyRegular);
+            // Command-line standalone binaries do not receive the normal
+            // application bootstrap performed by an AppKit app bundle. Finish
+            // launching before installing the window and frame timer so the
+            // main run loop actually services AppKit and CF callbacks.
+            app.finishLaunching();
+            app.activateIgnoringOtherApps_(YES);
         }
 
         let scaling = match options.scale {
@@ -405,14 +519,26 @@ impl<'a> Window<'a> {
             }
         }
 
-        let _window_handle = Self::finish(window_state, build);
+        let mut window_handle = Self::finish(window_state, build);
         initialization_guard.disarm();
 
+        let should_run = window_handle.is_open();
         unsafe {
             let () = msg_send![pool, drain];
 
-            app.run();
+            // A handler is allowed to reject initialization and close the
+            // window from its builder. Calling `run` after `stop_` was sent
+            // during that close starts a fresh AppKit loop with no live
+            // window, leaving callers blocked until an external wake-up.
+            if should_run {
+                app.run();
+            }
         }
+
+        // A watchdog can stop the CFRunLoop before AppKit delivers a close
+        // callback. Complete native teardown after the blocking loop returns;
+        // normal user/frame-driven closes make this a no-op.
+        window_handle.close();
     }
 
     fn prepare(window_inner: WindowInner, window_info: WindowInfo) -> Rc<WindowState> {

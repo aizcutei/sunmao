@@ -26,6 +26,7 @@ pub use vst::iaudioprocessor::*;
 pub use vst::icomponent::*;
 pub use vst::ieditcontroller::*;
 pub use vst::ievents::*;
+pub use vst::ihostapplication::*;
 pub use vst::iid as vst_iid;
 pub use vst::iparameters::*;
 pub use vst::ivstmessage::*;

@@ -1,10 +1,13 @@
 # Phase 1 状态
 
-更新时间：2026-08-14
+更新时间：2026-08-25
 
 ## 目标与边界
 
-一期只验收 VST3 + CLAP。每个 acceptance fixture 使用一份 Rust/SunMao 实现同时导出两种格式，目标平台为 macOS、Windows x86_64、Linux x86_64。AU 源码和显式 AU feature 保留，但不进入一期构建、测试、打包或完成条件。
+一期验收 VST3 + CLAP + standalone。每个 acceptance fixture 使用一份
+Rust/SunMao 实现导出两种插件格式和一个设备无关的 standalone 入口，目标
+平台为 macOS、Windows x86_64、Linux x86_64。AU 源码和显式 AU feature 保留，
+但不进入一期构建、测试、打包或完成条件。
 
 硬门槛：
 
@@ -13,7 +16,9 @@
 - audio callback 成功路径无 alloc/realloc/dealloc。
 - Cocoa、Win32、X11 上 GL/WGPU/WebView 的 attach、非空像素、输入、`520x220` resize、close/recreate。
 - `sunmao_packager` 的 Mach-O/PE/ELF 与架构检查、VST3/CLAP 目标布局、staging/rollback。
+- standalone runtime/facade 的设备无关 DSP/MIDI smoke；macOS `.app`、Windows `.exe`、Linux 可执行文件的 target-aware 打包和 executable 类型校验。
 - `sunmao_unittest_runner` 的 scan/info/test/process/gui/gui-test，失败/超时非零退出。
+- 六个 GL/WGPU/WebView standalone editor 的 raw 与 packaged `--gui-smoke` 生命周期通过。
 - 同一 commit 的 macOS、Windows、Ubuntu hosted CI 全绿并上传 bundles、日志和检查报告。
 
 明确延期：AU、Wayland/floating editor、多 bus、完整 latency/tail/offline/voice-info、preset/migration、完整 GUI toolkit、签名/notarization/installers/universal binary、Linux 物理声卡、ScreenCaptureKit 真实捕获、真实 DAW GUI gesture automation recording。
@@ -43,7 +48,7 @@
 - Hosted CI #18（`33b23dd`）：macOS + Windows 继续全绿；Linux GUI backends 步骤仍挂起（30 分钟+），说明 hang 不止在 drain。给 Linux GUI 调用加 3 分钟 `timeout` + 阶段化打点后：
 - Hosted CI #19（`041741c`）：注解定位到卡点——`SunMao Gain WebView (VST3)` 的 recreate 路径，`Reopening GUI...` 后卡死。根因：GTK/WebKitGTK 有永久线程亲和性，baseview 每次 open_gui 都新建 event 线程，第二次在新线程上创建 WebView 触发 WebKit 同步 IPC 死锁（伴随 Gdk frame-clock CRITICAL）。修复：Linux 上引入进程级专用 GTK 线程，所有 wry WebView 的创建/操作/销毁经 channel 编组到该线程执行，公开 `WebView` 变为代理（带 10s 应答超时防新死锁）。
 - Hosted CI #20（`c4465c2`）：GTK 线程修复生效——Gain WebView 在 Linux 上首次通过完整生命周期（含 close/recreate）；新的失败点是 `SunMao Sine Synth WebView (VST3)` 输入验证：XTEST 在 y=124 拖动未命中 WebKitGTK 布局下的 Volume slider（字体度量差异）。修复：pin 布局（显式 line-height + 24px slider box）使几何跨引擎一致，拖动坐标改为 y=138。
-- Hosted CI #21（`885d2a5`）：**三平台全绿**，https://github.com/aizcutei/sunmao/actions/runs/31771576307 。macOS（04:59–05:05）、Windows（04:59–05:07）、Linux（04:59–05:06）全部 success，同一 commit 上传 artifacts：`phase1-macOS-ARM64`（30MB）、`phase1-Windows-X64`（55MB）、`phase1-Linux-X64`（545MB），含 bundles、runner test/gui-test 日志与检查报告。
+- Hosted CI #21（`885d2a5`）：**旧版 VST3/CLAP gate 三平台全绿**，https://github.com/aizcutei/sunmao/actions/runs/31771576307 。macOS（04:59–05:05）、Windows（04:59–05:07）、Linux（04:59–05:06）全部 success，同一 commit 上传 artifacts：`phase1-macOS-ARM64`（30MB）、`phase1-Windows-X64`（55MB）、`phase1-Linux-X64`（545MB），含 bundles、runner test/gui-test 日志与检查报告；该 run 没有验证当前修正后 standalone 范围。
 - `cargo metadata --locked --no-deps`、`cargo fmt --all -- --check`、`git diff --check` 已在本机通过。
 - 默认 VST3/CLAP 二进制经 `nm` 确认无 `RustAUFactory|au_component_factory|SunmaoAUCocoa`。
 
@@ -54,21 +59,29 @@
 | workspace metadata / fmt / diff | 三平台 hosted 通过 | run #21 三 job success | — |
 | `_sys`/`_rs` ABI 与生命周期 | 三平台 hosted 通过 | run #21 "Test format adapters and host" | — |
 | SunMao core/backend | Int/Bool normalized API、offset automation、固定容量、state 三平台 hosted 通过 | run #21 tests + runner 16/16 | — |
-| packager | layout/format/arch/staging-rollback 三平台 hosted 通过 | run #21 packager tests + packaging steps | — |
+| 高层 facade API | `sunmao::prelude`、统一 VST3/CLAP 导出、一行 standalone 入口、GL/WGPU/WebView renderer feature 已落地；六个 GUI acceptance fixture 只依赖 `sunmao`（AU opt-in 除外） | macOS/Windows 六 fixture 独立 feature compile；本地完整 workspace tests | hosted 三平台重新验证 facade-only fixtures |
+| packager | VST3/CLAP layout/format/arch/staging-rollback 三平台 hosted 通过；standalone 本地实现和测试已通过 | run #21 旧 packager tests；当前本地 `sunmao_packager` tests | 新 workflow 三平台 raw/packaged standalone artifact |
 | runner | scan/info/test/process/gui-test 三平台 hosted 通过；缺失插件与未知命令非零退出 | run #21 runner steps | — |
 | macOS GUI | hosted GL/WGPU/WebView × VST3/CLAP 全绿，含 520x220、输入、gesture、close/recreate | run #21 macOS job + `phase1-macOS-ARM64` artifact | — |
 | Linux GUI | hosted X11 GL/WGPU/WebView 全绿（xvfb + XTEST，WebView 经专用 GTK 线程） | run #21 Linux job + `phase1-Linux-X64` artifact | — |
 | Windows GUI | hosted Win32 GL→WGPU fallback、WebView2 全绿（UIA 输入） | run #21 Windows job + `phase1-Windows-X64` artifact | — |
-| hosted CI | #21 三平台同 commit 全绿，artifacts 已上传 | [run 31771576307](https://github.com/aizcutei/sunmao/actions/runs/31771576307) | — |
+| standalone runtime/API | 设备无关 processor、panic/事件/参数边界、facade 宏、基础和 GUI binary 均已在 macOS 本地通过 | `cargo test --locked -p sunmao_runtime -p sunmao --features standalone`、八个示例 feature check、raw `--smoke` | 三平台 hosted test + raw/packaged smoke |
+| standalone GUI | GL/WGPU/WebView 顶层窗口契约和 macOS raw smoke 已通过；三平台尚无新 hosted 证据 | 本地 `--gui-smoke` 与 packager tests | 三平台 raw/packaged GUI smoke |
+| hosted CI | #21 仅证明旧 VST3/CLAP gate；扩展后的 standalone workflow 尚未在新 commit 运行 | [run 31771576307](https://github.com/aizcutei/sunmao/actions/runs/31771576307) | 提交后 macOS ARM64、Windows x86_64、Ubuntu x86_64 全绿并上传 standalone artifacts |
+| 当前工作区 hardening | macOS 本地 targeted tests 通过；尚未在新 commit 上重新 hosted 验证 | 本地 `cargo test --locked`、CLAP/VST3 lifecycle/ABI 回归测试 | 提交后重新跑 macOS ARM64、Windows x86_64、Ubuntu x86_64 hosted CI |
 
 ## 当前验证摘要
 
 本机 macOS（Apple Silicon host）已通过：
 
+- 完整 `RUSTFLAGS=-Awarnings cargo test --locked`：workspace unit tests 与 doc-tests 全绿；关键套件包括 runner 44/44、VST3 wrapper 41/41、CLAP safe wrapper 38/38、两个统一 backend 各 16/16。
+- 六个 GL/WGPU/WebView gain/sine acceptance fixture 均只依赖 `sunmao` facade，并分别在 macOS native 与 `x86_64-pc-windows-msvc` 条件编译通过；`sunmao --all-features` 通过。
+- `tools/package_examples.sh --debug --test`：10 个示例的 VST3/CLAP runner 各 16/16，8 个 raw 与 8 个 packaged standalone smoke 全部通过。
+- `cargo metadata`、`cargo fmt`、`git diff --check`、workflow YAML 与 packaging shell 语法检查通过。
 - selected `cargo test --locked`：clap/vst3 sys+rs、core/macros、backends、packager、view_baseview、runner、gain/sine、baseview `--all-features`。
 - release realtime allocator matrix：gain/sine × clap/vst3 sys+rs + unified backends。
 - gain+sine × VST3+CLAP `sunmao_unittest_runner test`：各 16/16。
-- GL/WGPU/WebView × VST3+CLAP native `gui-test --auto-close --verify-pixels --verify-input`：12/12，含 recreate。
+- 历史 run #21 的 GL/WGPU/WebView × VST3+CLAP native `gui-test --auto-close --verify-pixels --verify-input`：12/12，含 recreate；该结果对应旧版 commit `885d2a5`，不是当前未提交工作区的重新验证。
 - runner 失败路径：缺失插件、未知命令、无参数均为非零退出。
 
 Hosted 权威证据（run #21，commit `885d2a5`）：
@@ -80,6 +93,14 @@ Hosted 权威证据（run #21，commit `885d2a5`）：
 
 ## 完成规则
 
-在同一 commit 上，三个 hosted native jobs 全绿、基础 fixture 的两种格式 process/state/automation 全绿、renderer GUI matrix 全绿且 artifact 可下载后，才把此文件的状态改为“Phase 1 完成”。任何本地、guest 或 container 结果都必须明确标注平台和证据等级。
+在同一 commit 上，三个 hosted native jobs 全绿、基础 fixture 的两种格式
+process/state/automation 全绿、standalone raw/packaged smoke 全绿、renderer
+和顶层 standalone GUI matrix 全绿且 artifact 可下载后，才把此文件的状态改
+为“Phase 1 完成”。任何本地、guest 或 container 结果都必须明确标注平台和
+证据等级。
 
-当前状态：**Phase 1 完成**——run #21（commit `885d2a5`）满足全部完成条件：https://github.com/aizcutei/sunmao/actions/runs/31771576307
+## 当前工作区边界
+
+- **历史 baseline：旧版 VST3/CLAP gate 已完成。** Hosted run #21（commit `885d2a5`）满足当时定义的三平台完成条件，证据和 artifacts 仍然有效，但不包含 standalone 验收。
+- **当前工作区：实现候选已具备，扩展 gate 待 hosted 验证。** 当前 HEAD 为 `7271be3`，工作区包含后续未提交的 CLAP/VST3 ABI、生命周期、GUI、packager、runner、standalone 和 facade 加固；完整本地 workspace tests、macOS/Windows facade compile、VST3/CLAP runner 与 raw/packaged standalone smoke 已通过，但不能沿用 run #21 作为当前工作区的三平台证据。
+- **当前状态：Phase 1 candidate pending hosted revalidation.** 新 commit 必须重新跑扩展后的三平台 native jobs，并上传 VST3/CLAP、standalone 应用、runner/GUI 日志和 packager 报告后，才能把当前工作区标为已验收。

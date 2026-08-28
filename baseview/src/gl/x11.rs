@@ -44,8 +44,53 @@ type GlXSwapIntervalEXT =
 const GLX_FRAMEBUFFER_SRGB_CAPABLE_ARB: i32 = 0x20B2;
 
 fn get_proc_address(symbol: &str) -> *const c_void {
-    let symbol = CString::new(symbol).unwrap();
-    unsafe { glx::glXGetProcAddress(symbol.as_ptr() as *const u8).unwrap() as *const c_void }
+    let Ok(symbol) = CString::new(symbol) else {
+        return std::ptr::null();
+    };
+    unsafe {
+        glx::glXGetProcAddress(symbol.as_ptr() as *const u8)
+            .map_or(std::ptr::null(), |address| address as *const c_void)
+    }
+}
+
+struct ContextGuard {
+    display: *mut xlib::Display,
+    context: glx::GLXContext,
+    current: bool,
+}
+
+struct XFreeGuard<T>(*mut T);
+
+impl<T> Drop for XFreeGuard<T> {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                xlib::XFree(self.0.cast());
+            }
+        }
+    }
+}
+
+impl ContextGuard {
+    fn into_raw(mut self) -> glx::GLXContext {
+        let context = self.context;
+        self.context = std::ptr::null_mut();
+        context
+    }
+}
+
+impl Drop for ContextGuard {
+    fn drop(&mut self) {
+        if self.context.is_null() {
+            return;
+        }
+        unsafe {
+            if self.current {
+                let _ = glx::glXMakeCurrent(self.display, 0, std::ptr::null_mut());
+            }
+            glx::glXDestroyContext(self.display, self.context);
+        }
+    }
 }
 
 pub struct GlContext {
@@ -107,10 +152,9 @@ impl GlContext {
                     return Err(GlError::CreationFailed(
                         CreationFailedError::GetProcAddressFailed,
                     ));
-                } else {
-                    #[allow(clippy::missing_transmute_annotations)]
-                    std::mem::transmute(addr)
                 }
+                #[allow(clippy::missing_transmute_annotations)]
+                std::mem::transmute(addr)
             };
 
             error_handler.check()?;
@@ -143,8 +187,14 @@ impl GlContext {
                     CreationFailedError::ContextCreationFailed,
                 ));
             }
+            let mut context = ContextGuard {
+                display,
+                context,
+                current: false,
+            };
 
-            let res = glx::glXMakeCurrent(display, window, context);
+            let res = glx::glXMakeCurrent(display, window, context.context);
+            context.current = res != 0;
             error_handler.check()?;
             if res == 0 {
                 return Err(GlError::CreationFailed(
@@ -155,17 +205,19 @@ impl GlContext {
             glXSwapIntervalEXT(display, window, config.gl_config.vsync as i32);
             error_handler.check()?;
 
-            if glx::glXMakeCurrent(display, 0, std::ptr::null_mut()) == 0 {
-                error_handler.check()?;
+            let res = glx::glXMakeCurrent(display, 0, std::ptr::null_mut());
+            error_handler.check()?;
+            if res == 0 {
                 return Err(GlError::CreationFailed(
                     CreationFailedError::MakeCurrentFailed,
                 ));
             }
+            context.current = false;
 
             Ok(GlContext {
                 window,
                 display,
-                context,
+                context: context.into_raw(),
             })
         })
     }
@@ -177,6 +229,9 @@ impl GlContext {
         display: *mut xlib::_XDisplay,
         config: GlConfig,
     ) -> Result<(FbConfig, WindowConfig), GlError> {
+        if display.is_null() {
+            return Err(GlError::InvalidWindowHandle);
+        }
         errors::XErrorHandler::handle(display, |error_handler| {
             let screen = xlib::XDefaultScreen(display);
 
@@ -200,11 +255,12 @@ impl GlContext {
             ];
 
             let mut n_configs = 0;
-            let fb_config =
+            let fb_configs =
                 glx::glXChooseFBConfig(display, screen, fb_attribs.as_ptr(), &mut n_configs);
+            let fb_configs = XFreeGuard(fb_configs);
 
             error_handler.check()?;
-            if n_configs <= 0 || fb_config.is_null() {
+            if n_configs <= 0 || fb_configs.0.is_null() {
                 return Err(GlError::CreationFailed(
                     CreationFailedError::InvalidFBConfig,
                 ));
@@ -212,42 +268,51 @@ impl GlContext {
 
             // Now that we have a matching framebuffer config, we need to know which visual matches
             // thsi config so the window is compatible with the OpenGL context we're about to create
-            let fb_config = *fb_config;
+            let fb_config = *fb_configs.0;
             let visual = glx::glXGetVisualFromFBConfig(display, fb_config);
-            if visual.is_null() {
+            let visual = XFreeGuard(visual);
+            error_handler.check()?;
+            if visual.0.is_null() {
                 return Err(GlError::CreationFailed(CreationFailedError::NoVisual));
             }
+            let window_config = WindowConfig {
+                depth: (*visual.0).depth as u8,
+                visual: (*visual.0).visualid as u32,
+            };
 
             Ok((
                 FbConfig {
                     fb_config,
                     gl_config: config,
                 },
-                WindowConfig {
-                    depth: (*visual).depth as u8,
-                    visual: (*visual).visualid as u32,
-                },
+                window_config,
             ))
         })
     }
 
-    pub unsafe fn make_current(&self) {
+    pub unsafe fn make_current(&self) -> Result<(), GlError> {
         errors::XErrorHandler::handle(self.display, |error_handler| {
             let res = glx::glXMakeCurrent(self.display, self.window, self.context);
-            error_handler.check().unwrap();
+            error_handler.check()?;
             if res == 0 {
-                panic!("make_current failed")
+                return Err(GlError::CreationFailed(
+                    CreationFailedError::MakeCurrentFailed,
+                ));
             }
+            Ok(())
         })
     }
 
-    pub unsafe fn make_not_current(&self) {
+    pub unsafe fn make_not_current(&self) -> Result<(), GlError> {
         errors::XErrorHandler::handle(self.display, |error_handler| {
             let res = glx::glXMakeCurrent(self.display, 0, std::ptr::null_mut());
-            error_handler.check().unwrap();
+            error_handler.check()?;
             if res == 0 {
-                panic!("make_not_current failed")
+                return Err(GlError::CreationFailed(
+                    CreationFailedError::MakeCurrentFailed,
+                ));
             }
+            Ok(())
         })
     }
 
@@ -255,11 +320,11 @@ impl GlContext {
         get_proc_address(symbol)
     }
 
-    pub fn swap_buffers(&self) {
+    pub fn swap_buffers(&self) -> Result<(), GlError> {
         unsafe {
             errors::XErrorHandler::handle(self.display, |error_handler| {
                 glx::glXSwapBuffers(self.display, self.window);
-                error_handler.check().unwrap();
+                error_handler.check().map_err(GlError::from)
             })
         }
     }

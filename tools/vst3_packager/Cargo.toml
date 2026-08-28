@@ -6,3 +6,4 @@ license.workspace = true
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+sunmao_packager = { path = "../sunmao_packager" }

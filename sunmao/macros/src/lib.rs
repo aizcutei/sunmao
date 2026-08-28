@@ -6,11 +6,56 @@
 
 extern crate proc_macro;
 use proc_macro::TokenStream;
-use quote::{quote, ToTokens};
+use proc_macro_crate::{crate_name, FoundCrate};
+use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::token::Comma;
 use syn::{parse_macro_input, DeriveInput, Expr, Ident, Lit, Meta, Token, Type};
+
+fn core_crate_path() -> proc_macro2::TokenStream {
+    if let Ok(found) = crate_name("sunmao_core") {
+        return match found {
+            FoundCrate::Itself => quote!(crate),
+            FoundCrate::Name(name) => {
+                let ident = Ident::new(&name, proc_macro2::Span::call_site());
+                quote!(::#ident)
+            }
+        };
+    }
+
+    if let Ok(FoundCrate::Name(name)) = crate_name("sunmao") {
+        let ident = Ident::new(&name, proc_macro2::Span::call_site());
+        return quote!(::#ident::__private::sunmao_core);
+    }
+
+    // Preserve the historical diagnostic for callers that have not declared
+    // either supported dependency; the generated code then points directly at
+    // the missing crate and rustc reports the actionable dependency error.
+    quote!(::sunmao_core)
+}
+
+/// Resolve the facade crate under the dependency name chosen by the caller.
+///
+/// `sunmao_export!` is normally invoked through the `sunmao` facade, but
+/// Cargo permits dependencies to be renamed (for example, `sm = { package =
+/// "sunmao", ... }`).  Hard-coding `::sunmao` would make an otherwise valid
+/// plugin fail to compile in that common workspace setup.
+fn facade_crate_path() -> proc_macro2::TokenStream {
+    if let Ok(found) = crate_name("sunmao") {
+        return match found {
+            FoundCrate::Itself => quote!(crate),
+            FoundCrate::Name(name) => {
+                let ident = Ident::new(&name, proc_macro2::Span::call_site());
+                quote!(::#ident)
+            }
+        };
+    }
+
+    // Keep the old diagnostic for callers that did not declare the facade;
+    // rustc will point at the missing dependency in the generated expansion.
+    quote!(::sunmao)
+}
 
 /// Derives the `Params` trait for a parameter struct. Add the helper attribute
 /// `#[sunmao_au]` when the consuming crate also wants the AU parameter-list
@@ -19,10 +64,11 @@ use syn::{parse_macro_input, DeriveInput, Expr, Ident, Lit, Meta, Token, Type};
 ///
 /// Supported field types: `FloatParam`, `IntParam`, `BoolParam`.
 ///
-/// Optional attributes:
-/// - `#[id = "gain"]` overrides the parameter id (defaults to field name)
-/// - `#[unit = "LinearGain"]` sets AU unit (defaults to `Generic`)
-#[proc_macro_derive(Params, attributes(id, unit, name, nested, persist, sunmao_au))]
+/// The stable parameter ID comes from the `FloatParam`/`IntParam`/`BoolParam`
+/// constructor. This keeps host automation, DSP event matching, and GUI
+/// binding on one source of truth even when the Rust field is renamed.
+/// `#[unit = "LinearGain"]` sets the optional AU unit (defaults to `Generic`).
+#[proc_macro_derive(Params, attributes(id, unit, param, name, nested, persist, sunmao_au))]
 pub fn derive_params(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
@@ -48,29 +94,30 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
         }
     };
 
-    let mut ids = Vec::new();
-    let mut numeric_id_exprs = Vec::new();
-    let mut get_arms = Vec::new();
-    let mut set_arms = Vec::new();
+    let mut get_branches = Vec::new();
+    let mut set_branches = Vec::new();
     let mut descriptor_exprs = Vec::new();
     let mut au_param_exprs = Vec::new();
+    let core = core_crate_path();
 
     for (index, field) in fields.iter().enumerate() {
         let ident = field.ident.as_ref().unwrap();
-        let field_ty = field.ty.to_token_stream().to_string();
-        let type_ident = field_ty.split("::").last().unwrap_or("").to_string();
+        let type_ident = match &field.ty {
+            Type::Path(path) if path.qself.is_none() => path.path.segments.last().map(|s| &s.ident),
+            _ => None,
+        };
 
-        let mut id_value: Option<String> = None;
         let mut unit_value: Option<String> = None;
 
         for attr in &field.attrs {
             match &attr.meta {
                 Meta::NameValue(meta) if meta.path.is_ident("id") => {
-                    if let Expr::Lit(expr) = &meta.value {
-                        if let Lit::Str(lit) = &expr.lit {
-                            id_value = Some(lit.value());
-                        }
-                    }
+                    return syn::Error::new_spanned(
+                        attr,
+                        "parameter IDs are declared in the parameter constructor; remove #[id]",
+                    )
+                    .to_compile_error()
+                    .into();
                 }
                 Meta::NameValue(meta) if meta.path.is_ident("unit") => {
                     if let Expr::Lit(expr) = &meta.value {
@@ -86,11 +133,12 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                         for meta in nested {
                             if let Meta::NameValue(nv) = meta {
                                 if nv.path.is_ident("id") {
-                                    if let Expr::Lit(expr) = &nv.value {
-                                        if let Lit::Str(lit) = &expr.lit {
-                                            id_value = Some(lit.value());
-                                        }
-                                    }
+                                    return syn::Error::new_spanned(
+                                        nv,
+                                        "parameter IDs are declared in the parameter constructor; remove `id = ...`",
+                                    )
+                                    .to_compile_error()
+                                    .into();
                                 }
                                 if nv.path.is_ident("unit") {
                                     if let Expr::Lit(expr) = &nv.value {
@@ -107,30 +155,35 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
             }
         }
 
-        let id_str = id_value.unwrap_or_else(|| ident.to_string());
-        let id_lit = syn::LitStr::new(&id_str, ident.span());
-        ids.push(quote! { #id_lit });
-        numeric_id_exprs.push(quote! { sunmao_core::params::stable_param_id(#id_lit) });
-
-        match type_ident.as_str() {
-            "FloatParam" => {
-                get_arms.push(quote! { #id_lit => Some(self.#ident.get_normalized()) });
-                set_arms.push(quote! { #id_lit => self.#ident.set_normalized(value) });
+        match type_ident.map(|ident| ident.to_string()).as_deref() {
+            Some("FloatParam") => {
+                get_branches.push(quote! {
+                    if id == self.#ident.id {
+                        return Some(self.#ident.get_normalized());
+                    }
+                });
+                set_branches.push(quote! {
+                    if id == self.#ident.id {
+                        self.#ident.set_normalized(value);
+                        return;
+                    }
+                });
                 descriptor_exprs.push(quote! {
-                    sunmao_core::params::ParamDescriptor {
-                        id: #id_lit,
-                        numeric_id: sunmao_core::params::stable_param_id(#id_lit),
+                    #core::params::ParamDescriptor {
+                        id: self.#ident.id,
+                        numeric_id: #core::params::stable_param_id(self.#ident.id),
                         name: self.#ident.name,
                         default_normalized: {
-                            let range = self.#ident.max - self.#ident.min;
-                            if range.abs() <= f32::EPSILON {
+                            let range = self.#ident.max as f64 - self.#ident.min as f64;
+                            if range == 0.0 {
                                 0.0
                             } else {
-                                ((self.#ident.default - self.#ident.min) / range).clamp(0.0, 1.0)
+                                ((self.#ident.default as f64 - self.#ident.min as f64) / range)
+                                    .clamp(0.0, 1.0) as f32
                             }
                         },
                         step_count: 0,
-                        kind: sunmao_core::params::ParamKind::Float,
+                        kind: #core::params::ParamKind::Float,
                     }
                 });
                 let unit_ident =
@@ -147,26 +200,37 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                     }
                 });
             }
-            "IntParam" => {
-                get_arms.push(quote! { #id_lit => Some(self.#ident.get_normalized()) });
-                set_arms.push(quote! { #id_lit => self.#ident.set_normalized(value) });
+            Some("IntParam") => {
+                get_branches.push(quote! {
+                    if id == self.#ident.id {
+                        return Some(self.#ident.get_normalized());
+                    }
+                });
+                set_branches.push(quote! {
+                    if id == self.#ident.id {
+                        self.#ident.set_normalized(value);
+                        return;
+                    }
+                });
                 descriptor_exprs.push(quote! {
-                    sunmao_core::params::ParamDescriptor {
-                        id: #id_lit,
-                        numeric_id: sunmao_core::params::stable_param_id(#id_lit),
+                    #core::params::ParamDescriptor {
+                        id: self.#ident.id,
+                        numeric_id: #core::params::stable_param_id(self.#ident.id),
                         name: self.#ident.name,
                         default_normalized: {
-                            let min = self.#ident.min as f32;
-                            let max = self.#ident.max as f32;
-                            if (max - min).abs() <= f32::EPSILON {
+                            let min = self.#ident.min as f64;
+                            let max = self.#ident.max as f64;
+                            let range = max - min;
+                            if range == 0.0 {
                                 0.0
                             } else {
-                                ((self.#ident.default as f32 - min) / (max - min)).clamp(0.0, 1.0)
+                                ((self.#ident.default as f64 - min) / range).clamp(0.0, 1.0)
+                                    as f32
                             }
                         },
                         step_count: (self.#ident.max as i64 - self.#ident.min as i64)
                             .clamp(0, u32::MAX as i64) as u32,
-                        kind: sunmao_core::params::ParamKind::Int,
+                        kind: #core::params::ParamKind::Int,
                     }
                 });
                 let unit_ident =
@@ -183,17 +247,26 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                     }
                 });
             }
-            "BoolParam" => {
-                get_arms.push(quote! { #id_lit => Some(self.#ident.get_normalized()) });
-                set_arms.push(quote! { #id_lit => self.#ident.set_normalized(value) });
+            Some("BoolParam") => {
+                get_branches.push(quote! {
+                    if id == self.#ident.id {
+                        return Some(self.#ident.get_normalized());
+                    }
+                });
+                set_branches.push(quote! {
+                    if id == self.#ident.id {
+                        self.#ident.set_normalized(value);
+                        return;
+                    }
+                });
                 descriptor_exprs.push(quote! {
-                    sunmao_core::params::ParamDescriptor {
-                        id: #id_lit,
-                        numeric_id: sunmao_core::params::stable_param_id(#id_lit),
+                    #core::params::ParamDescriptor {
+                        id: self.#ident.id,
+                        numeric_id: #core::params::stable_param_id(self.#ident.id),
                         name: self.#ident.name,
                         default_normalized: if self.#ident.default { 1.0 } else { 0.0 },
                         step_count: 1,
-                        kind: sunmao_core::params::ParamKind::Bool,
+                        kind: #core::params::ParamKind::Bool,
                     }
                 });
                 let unit_ident =
@@ -240,42 +313,17 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
     };
 
     let expanded = quote! {
-        const _: () = {
-            const NUMERIC_IDS: &[u32] = &[#(#numeric_id_exprs),*];
-            let mut left = 0;
-            while left < NUMERIC_IDS.len() {
-                let mut right = left + 1;
-                while right < NUMERIC_IDS.len() {
-                    if NUMERIC_IDS[left] == NUMERIC_IDS[right] {
-                        panic!("Params contains duplicate or colliding numeric parameter IDs");
-                    }
-                    right += 1;
-                }
-                left += 1;
-            }
-        };
-
-        impl sunmao_core::params::Params for #name {
-            fn ids() -> &'static [&'static str] {
-                static IDS: &[&str] = &[#(#ids),*];
-                IDS
-            }
-
+        impl #core::params::Params for #name {
             fn get_normalized(&self, id: &str) -> Option<f32> {
-                match id {
-                    #(#get_arms,)*
-                    _ => None,
-                }
+                #(#get_branches)*
+                None
             }
 
             fn set_normalized(&self, id: &str, value: f32) {
-                match id {
-                    #(#set_arms,)*
-                    _ => {}
-                }
+                #(#set_branches)*
             }
 
-            fn descriptors(&self) -> Vec<sunmao_core::params::ParamDescriptor> {
+            fn descriptors(&self) -> Vec<#core::params::ParamDescriptor> {
                 vec![#(#descriptor_exprs),*]
             }
         }
@@ -328,19 +376,20 @@ pub fn sunmao_export(input: TokenStream) -> TokenStream {
         with_gui,
     } = parse_macro_input!(input as ExportInput);
 
+    let facade = facade_crate_path();
     let expanded = if with_gui {
         quote! {
-            ::sunmao::backend_vst3::export_vst3_plugin_with_gui!(
-                ::sunmao::backend_vst3::SunmaoVst3Wrapper<#plugin_type>
+            #facade::backend_vst3::export_vst3_plugin_with_gui!(
+                #facade::backend_vst3::SunmaoVst3Wrapper<#plugin_type>
             );
-            ::sunmao::backend_clap::export_sunmao_clap_plugin_with_gui!(#plugin_type);
+            #facade::backend_clap::export_sunmao_clap_plugin_with_gui!(#plugin_type);
         }
     } else {
         quote! {
-            ::sunmao::backend_vst3::export_vst3_plugin!(
-                ::sunmao::backend_vst3::SunmaoVst3Wrapper<#plugin_type>
+            #facade::backend_vst3::export_vst3_plugin!(
+                #facade::backend_vst3::SunmaoVst3Wrapper<#plugin_type>
             );
-            ::sunmao::backend_clap::export_sunmao_clap_plugin!(#plugin_type);
+            #facade::backend_clap::export_sunmao_clap_plugin!(#plugin_type);
         }
     };
 

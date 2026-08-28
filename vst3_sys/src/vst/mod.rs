@@ -4,6 +4,7 @@ pub mod iaudioprocessor;
 pub mod icomponent;
 pub mod ieditcontroller;
 pub mod ievents;
+pub mod ihostapplication;
 pub mod iparameters;
 pub mod ivstmessage;
 pub mod processcontext;
@@ -13,6 +14,7 @@ pub use iaudioprocessor::*;
 pub use icomponent::*;
 pub use ieditcontroller::*;
 pub use ievents::*;
+pub use ihostapplication::*;
 pub use iparameters::*;
 pub use ivstmessage::*;
 pub use processcontext::*;
@@ -37,5 +39,6 @@ pub mod iid {
     pub const IParamValueQueue: TUID = uid!(0x01263A18, 0xED074F6F, 0x98C9D356, 0x4686F9BA);
     pub const IComponentHandler: TUID = uid!(0x93A0BEA3, 0x0BD045DB, 0x8E890B0C, 0xC1E46AC6);
     pub const IComponentHandler2: TUID = uid!(0xF040B4B3, 0xA36045EC, 0xABCDC045, 0xB4D5A2CC);
+    pub const IHostApplication: TUID = uid!(0x58E595CC, 0xDB2D4969, 0x8B6AAF8C, 0x36A664E5);
     pub const IMidiMapping: TUID = uid!(0xDF0FF9F7, 0x49B74669, 0xB63AB732, 0x7ADBF5E5);
 }

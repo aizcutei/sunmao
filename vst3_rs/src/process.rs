@@ -3,6 +3,23 @@
 use std::ffi::c_void;
 use vst3_sys::vst::processcontext::{ProcessContext as SysProcessContext, ProcessContextFlags};
 
+/// Largest host-negotiated processing block accepted by the VST3 adapter.
+///
+/// VST3 carries this value in a signed 32-bit field. A host-provided maximum
+/// must still be bounded before activation allocates scratch buffers; one
+/// million frames is well above normal DAW block sizes and gives the bound a
+/// stable, cross-platform meaning.
+pub const MAX_PROCESS_FRAMES: u32 = 1 << 20;
+
+/// Largest flattened input or output topology accepted by the VST3 adapter.
+pub const MAX_PROCESS_CHANNELS: usize = 256;
+
+/// Maximum number of f32 samples reserved for one audio direction.
+pub const MAX_PROCESS_AUDIO_SAMPLES: usize = 16 << 20;
+
+/// Maximum number of parameter/note events retained for one block.
+pub const MAX_PROCESS_EVENTS: usize = 1 << 16;
+
 /// A normalized parameter value that becomes effective at a sample offset.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ParamChange {
@@ -56,22 +73,70 @@ impl ProcessContext {
         num_out_channels: usize,
         max_events: usize,
     ) -> Self {
-        Self {
+        Self::try_new(
+            num_samples,
+            sample_rate,
+            num_in_channels,
+            num_out_channels,
+            max_events,
+        )
+        .expect("process context allocation")
+    }
+
+    /// Fallible counterpart used at the ABI boundary. Hosts control the
+    /// negotiated block size, so setup must be able to reject an allocation
+    /// that cannot be represented instead of panicking across FFI.
+    pub(crate) fn try_new(
+        num_samples: usize,
+        sample_rate: f64,
+        num_in_channels: usize,
+        num_out_channels: usize,
+        max_events: usize,
+    ) -> Option<Self> {
+        if num_samples > MAX_PROCESS_FRAMES as usize
+            || num_in_channels > MAX_PROCESS_CHANNELS
+            || num_out_channels > MAX_PROCESS_CHANNELS
+            || num_in_channels
+                .checked_mul(num_samples)
+                .is_none_or(|samples| samples > MAX_PROCESS_AUDIO_SAMPLES)
+            || num_out_channels
+                .checked_mul(num_samples)
+                .is_none_or(|samples| samples > MAX_PROCESS_AUDIO_SAMPLES)
+            || max_events > MAX_PROCESS_EVENTS
+        {
+            return None;
+        }
+        fn channels(count: usize, num_samples: usize) -> Option<Vec<Vec<f32>>> {
+            let mut result = Vec::new();
+            result.try_reserve_exact(count).ok()?;
+            for _ in 0..count {
+                let mut channel = Vec::new();
+                channel.try_reserve_exact(num_samples).ok()?;
+                channel.resize(num_samples, 0.0);
+                result.push(channel);
+            }
+            Some(result)
+        }
+
+        let inputs = channels(num_in_channels, num_samples)?;
+        let outputs = channels(num_out_channels, num_samples)?;
+        let mut param_changes = Vec::new();
+        param_changes.try_reserve_exact(max_events).ok()?;
+        let mut param_sort_scratch = Vec::new();
+        param_sort_scratch.try_reserve_exact(max_events).ok()?;
+
+        Some(Self {
             num_samples,
             sample_rate,
             tempo: None,
             is_playing: true,
             sample_pos: 0,
-            inputs: (0..num_in_channels)
-                .map(|_| vec![0.0; num_samples])
-                .collect(),
-            outputs: (0..num_out_channels)
-                .map(|_| vec![0.0; num_samples])
-                .collect(),
-            param_changes: Vec::with_capacity(max_events),
-            param_sort_scratch: Vec::with_capacity(max_events),
+            inputs,
+            outputs,
+            param_changes,
+            param_sort_scratch,
             max_events,
-        }
+        })
     }
 
     /// Get input buffer for a channel
@@ -266,7 +331,10 @@ impl ProcessContext {
         let ctx = unsafe { &*(raw as *const SysProcessContext) };
         self.is_playing = (ctx.state & ProcessContextFlags::kPlaying) != 0;
         self.tempo = if (ctx.state & ProcessContextFlags::kTempoValid) != 0 {
-            Some(ctx.tempo)
+            ctx.tempo
+                .is_finite()
+                .then_some(ctx.tempo)
+                .filter(|tempo| *tempo >= 0.0)
         } else {
             None
         };
@@ -340,5 +408,24 @@ mod tests {
         );
         assert_eq!(context.param_changes.capacity(), capacity);
         assert_eq!(context.max_events(), 3);
+    }
+
+    #[test]
+    fn construction_rejects_resource_budgets_before_allocation() {
+        assert!(ProcessContext::try_new(1, 48_000.0, MAX_PROCESS_CHANNELS + 1, 0, 0,).is_none());
+
+        let channels_over_sample_budget =
+            MAX_PROCESS_AUDIO_SAMPLES / MAX_PROCESS_FRAMES as usize + 1;
+        assert!(
+            ProcessContext::try_new(
+                MAX_PROCESS_FRAMES as usize,
+                48_000.0,
+                0,
+                channels_over_sample_budget,
+                0,
+            )
+            .is_none()
+        );
+        assert!(ProcessContext::try_new(1, 48_000.0, 0, 0, MAX_PROCESS_EVENTS + 1).is_none());
     }
 }

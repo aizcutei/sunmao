@@ -403,6 +403,65 @@ pub struct PixelEvidence {
     pub intensity_std_dev: f64,
 }
 
+const PIXEL_SAMPLE_LIMIT: usize = 4096;
+const MIN_DISTINCT_COLORS: usize = 2;
+const MIN_INTENSITY_RANGE: u8 = 16;
+const MIN_INTENSITY_STD_DEV: f64 = 4.0;
+
+fn validate_pixel_evidence(evidence: PixelEvidence, source: &str) -> Result<PixelEvidence, String> {
+    let structurally_valid = evidence.width > 0
+        && evidence.height > 0
+        && (1..=PIXEL_SAMPLE_LIMIT).contains(&evidence.sampled_pixels)
+        && evidence.distinct_colors <= evidence.sampled_pixels
+        && evidence.intensity_std_dev.is_finite();
+    let visually_varied = evidence.distinct_colors >= MIN_DISTINCT_COLORS
+        && evidence.intensity_range >= MIN_INTENSITY_RANGE
+        && evidence.intensity_std_dev >= MIN_INTENSITY_STD_DEV;
+    if structurally_valid && visually_varied {
+        Ok(evidence)
+    } else {
+        Err(format!(
+            "{source} lacks valid visual variation ({}x{}, {} sampled pixels, {} colors, intensity range {}, std dev {:.2})",
+            evidence.width,
+            evidence.height,
+            evidence.sampled_pixels,
+            evidence.distinct_colors,
+            evidence.intensity_range,
+            evidence.intensity_std_dev
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PixelProbeStatus {
+    /// This editor backend requires platform-native capture.
+    Unsupported,
+    /// The renderer owns a probe but has not published a frame yet.
+    Waiting,
+    /// Renderer-owned pixel evidence is available.
+    Ready,
+}
+
+pub fn plugin_pixel_probe_status(
+    library: &libloading::Library,
+) -> Result<PixelProbeStatus, String> {
+    type StatusFn = unsafe extern "C" fn() -> i32;
+    let status = match unsafe { library.get::<StatusFn>(b"sunmao_debug_pixel_probe_status\0") } {
+        Ok(status) => unsafe { status() },
+        // Older or third-party plugins have no SunMao capability symbol.
+        // Preserve the native-capture compatibility path for those modules.
+        Err(_) => return Ok(PixelProbeStatus::Unsupported),
+    };
+    match status {
+        0 => Ok(PixelProbeStatus::Unsupported),
+        1 => Ok(PixelProbeStatus::Waiting),
+        2 => Ok(PixelProbeStatus::Ready),
+        status => Err(format!(
+            "plugin returned invalid GUI pixel probe status {status}"
+        )),
+    }
+}
+
 pub fn read_plugin_pixel_probe(library: &libloading::Library) -> Result<PixelEvidence, String> {
     type ProbeFn = unsafe extern "C" fn(*mut u32, *mut u32, *mut u32, usize) -> i32;
     let probe = unsafe {
@@ -427,11 +486,7 @@ fn non_uniform_pixel_evidence(
     height: u32,
     pixels: impl IntoIterator<Item = u32>,
 ) -> Result<PixelEvidence, String> {
-    const SAMPLE_LIMIT: usize = 4096;
-    const MIN_DISTINCT_COLORS: usize = 2;
-    const MIN_INTENSITY_RANGE: u8 = 16;
-    const MIN_INTENSITY_STD_DEV: f64 = 4.0;
-    let mut samples = [0_u32; SAMPLE_LIMIT];
+    let mut samples = [0_u32; PIXEL_SAMPLE_LIMIT];
     let mut distinct = 0;
     let mut sampled = 0;
     let mut min_intensity = u8::MAX;
@@ -439,7 +494,7 @@ fn non_uniform_pixel_evidence(
     let mut intensity_sum = 0.0;
     let mut intensity_square_sum = 0.0;
 
-    for pixel in pixels.into_iter().take(SAMPLE_LIMIT) {
+    for pixel in pixels.into_iter().take(PIXEL_SAMPLE_LIMIT) {
         let red = (pixel & 0xff) as u8;
         let green = ((pixel >> 8) & 0xff) as u8;
         let blue = ((pixel >> 16) & 0xff) as u8;
@@ -480,17 +535,7 @@ fn non_uniform_pixel_evidence(
         intensity_std_dev,
     };
 
-    if distinct >= MIN_DISTINCT_COLORS
-        && intensity_range >= MIN_INTENSITY_RANGE
-        && intensity_std_dev >= MIN_INTENSITY_STD_DEV
-    {
-        Ok(evidence)
-    } else {
-        Err(format!(
-            "captured GUI content lacks visual variation ({}x{}, {} sampled pixels, {} colors, intensity range {}, std dev {:.2})",
-            width, height, sampled, distinct, intensity_range, intensity_std_dev
-        ))
-    }
+    validate_pixel_evidence(evidence, "captured GUI content")
 }
 
 pub fn initialize_platform() -> Result<(), String> {
@@ -544,6 +589,11 @@ pub fn initialize_platform() -> Result<(), String> {
 #[cfg(target_os = "windows")]
 pub fn run_windows_ui_automation_helper(args: &[String]) -> Result<f64, String> {
     windows::run_ui_automation_helper(args)
+}
+
+#[cfg(target_os = "macos")]
+pub fn run_macos_capture_helper(args: &[String]) -> Result<PixelEvidence, String> {
+    macos::run_capture_helper(args)
 }
 
 impl Drop for PluginGuiWindow {
@@ -2299,7 +2349,65 @@ mod macos {
         kCGWindowListOptionIncludingWindow, CGDisplay,
     };
     use objc_ffi::*;
-    use std::time::Duration;
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    const CAPTURE_HELPER_COMMAND: &str = "__macos-capture-window";
+    const CAPTURE_EVIDENCE_PREFIX: &str = "SUNMAO_CAPTURE_EVIDENCE=";
+    const CAPTURE_HELPER_TIMEOUT: Duration = Duration::from_millis(1500);
+
+    #[derive(Debug, Clone, Copy)]
+    struct CaptureRegion {
+        window_id: u32,
+        content_x: u32,
+        content_bottom: u32,
+        content_frame_height: u32,
+        content_width: u32,
+        content_height: u32,
+    }
+
+    impl CaptureRegion {
+        fn parse(args: &[String]) -> Result<Self, String> {
+            if args.len() != 6 {
+                return Err("macOS capture helper expects six numeric arguments".into());
+            }
+            let parse = |index: usize, label: &str| {
+                args[index]
+                    .parse::<u32>()
+                    .map_err(|_| format!("invalid macOS capture {label}: '{}'", args[index]))
+            };
+            let region = Self {
+                window_id: parse(0, "window id")?,
+                content_x: parse(1, "content x")?,
+                content_bottom: parse(2, "content bottom")?,
+                content_frame_height: parse(3, "content frame height")?,
+                content_width: parse(4, "content width")?,
+                content_height: parse(5, "content height")?,
+            };
+            if region.window_id == 0 {
+                return Err("macOS capture window id must be non-zero".into());
+            }
+            if region.content_frame_height == 0
+                || region.content_width == 0
+                || region.content_height == 0
+            {
+                return Err("macOS capture region contains an empty dimension".into());
+            }
+            Ok(region)
+        }
+
+        fn arguments(self) -> [String; 6] {
+            [
+                self.window_id.to_string(),
+                self.content_x.to_string(),
+                self.content_bottom.to_string(),
+                self.content_frame_height.to_string(),
+                self.content_width.to_string(),
+                self.content_height.to_string(),
+            ]
+        }
+    }
 
     const NS_LEFT_MOUSE_DOWN: u64 = 1;
     const NS_LEFT_MOUSE_UP: u64 = 2;
@@ -2550,26 +2658,21 @@ mod macos {
         window: *mut c_void,
         content_view: *mut c_void,
     ) -> Result<PixelEvidence, String> {
-        let screenshot = screenshot_non_uniform_pixels(window, content_view);
-        if screenshot.is_ok() {
-            return screenshot;
-        }
-        match unsafe { bitmap_non_uniform_pixels(content_view) } {
+        let bitmap = unsafe { bitmap_non_uniform_pixels(content_view) };
+        match bitmap {
             Ok(evidence) => Ok(evidence),
-            Err(bitmap_error) => Err(format!(
-                "{}; {}",
-                screenshot
-                    .err()
-                    .unwrap_or_else(|| "CoreGraphics capture failed".into()),
-                bitmap_error
-            )),
+            Err(bitmap_error) => match isolated_screenshot_non_uniform_pixels(window, content_view)
+            {
+                Ok(evidence) => Ok(evidence),
+                Err(screenshot_error) => Err(format!("{bitmap_error}; {screenshot_error}")),
+            },
         }
     }
 
-    fn screenshot_non_uniform_pixels(
+    fn capture_region(
         window: *mut c_void,
         content_view: *mut c_void,
-    ) -> Result<PixelEvidence, String> {
+    ) -> Result<CaptureRegion, String> {
         if window.is_null() || content_view.is_null() {
             return Err("macOS GUI window or content view is null".into());
         }
@@ -2580,10 +2683,156 @@ mod macos {
             u32::try_from(function(window, selector))
                 .map_err(|_| "macOS window number is outside the CoreGraphics range")?
         };
+        if window_id == 0 {
+            return Err("macOS GUI window has no captureable window number".into());
+        }
+        let (surface, frame) = unsafe { plugin_surface(content_view)? };
+        let surface_bounds = unsafe {
+            let selector = sel_registerName(b"bounds\0".as_ptr().cast());
+            msg_send_rect0(surface, selector)
+        };
+        let rounded_u32 = |value: f64, label: &str| {
+            if !value.is_finite() || value < 0.0 || value > f64::from(u32::MAX) {
+                Err(format!(
+                    "macOS capture {label} is outside the supported range"
+                ))
+            } else {
+                Ok(value.round() as u32)
+            }
+        };
+        let region = CaptureRegion {
+            window_id,
+            content_x: rounded_u32(frame.origin.x, "content x")?,
+            content_bottom: rounded_u32(frame.origin.y, "content bottom")?,
+            content_frame_height: rounded_u32(frame.size.height, "content frame height")?,
+            content_width: rounded_u32(surface_bounds.size.width, "content width")?,
+            content_height: rounded_u32(surface_bounds.size.height, "content height")?,
+        };
+        if region.content_frame_height == 0
+            || region.content_width == 0
+            || region.content_height == 0
+        {
+            return Err("macOS plugin content view is empty".into());
+        }
+        Ok(region)
+    }
+
+    fn collect_capture_helper_output(child: &mut std::process::Child) -> (String, String) {
+        const MAX_OUTPUT: u64 = 16 * 1024;
+        let mut stdout = String::new();
+        if let Some(stream) = child.stdout.take() {
+            let mut limited = stream.take(MAX_OUTPUT);
+            let _ = limited.read_to_string(&mut stdout);
+        }
+        let mut stderr = String::new();
+        if let Some(stream) = child.stderr.take() {
+            let mut limited = stream.take(MAX_OUTPUT);
+            let _ = limited.read_to_string(&mut stderr);
+        }
+        (stdout, stderr)
+    }
+
+    fn parse_capture_evidence(output: &str) -> Result<PixelEvidence, String> {
+        let value = output
+            .lines()
+            .find_map(|line| line.strip_prefix(CAPTURE_EVIDENCE_PREFIX))
+            .ok_or_else(|| "macOS capture helper returned no pixel evidence".to_string())?;
+        let fields: Vec<_> = value.split(',').collect();
+        if fields.len() != 6 {
+            return Err("macOS capture helper returned malformed pixel evidence".into());
+        }
+        let parse_u32 = |index: usize, label: &str| {
+            fields[index]
+                .parse::<u32>()
+                .map_err(|_| format!("invalid macOS capture evidence {label}"))
+        };
+        let evidence = PixelEvidence {
+            width: parse_u32(0, "width")?,
+            height: parse_u32(1, "height")?,
+            sampled_pixels: fields[2]
+                .parse()
+                .map_err(|_| "invalid macOS capture sample count".to_string())?,
+            distinct_colors: fields[3]
+                .parse()
+                .map_err(|_| "invalid macOS capture color count".to_string())?,
+            intensity_range: fields[4]
+                .parse()
+                .map_err(|_| "invalid macOS capture intensity range".to_string())?,
+            intensity_std_dev: fields[5]
+                .parse()
+                .map_err(|_| "invalid macOS capture intensity deviation".to_string())?,
+        };
+        validate_pixel_evidence(evidence, "macOS capture helper evidence")
+    }
+
+    fn isolated_screenshot_non_uniform_pixels(
+        window: *mut c_void,
+        content_view: *mut c_void,
+    ) -> Result<PixelEvidence, String> {
+        let region = capture_region(window, content_view)?;
+        let executable = std::env::current_exe()
+            .map_err(|error| format!("locating macOS capture helper failed: {error}"))?;
+        let mut child = Command::new(executable)
+            .arg(CAPTURE_HELPER_COMMAND)
+            .args(region.arguments())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("starting macOS capture helper failed: {error}"))?;
+        let deadline = Instant::now() + CAPTURE_HELPER_TIMEOUT;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) if Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let (_, stderr) = collect_capture_helper_output(&mut child);
+                    let detail = stderr.trim();
+                    return Err(if detail.is_empty() {
+                        format!(
+                            "macOS capture helper timed out after {} ms",
+                            CAPTURE_HELPER_TIMEOUT.as_millis()
+                        )
+                    } else {
+                        format!(
+                            "macOS capture helper timed out after {} ms: {detail}",
+                            CAPTURE_HELPER_TIMEOUT.as_millis()
+                        )
+                    });
+                }
+                Ok(None) => {
+                    pump_events();
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("polling macOS capture helper failed: {error}"));
+                }
+            }
+        };
+        let (stdout, stderr) = collect_capture_helper_output(&mut child);
+        if !status.success() {
+            let detail = stderr.trim();
+            return Err(if detail.is_empty() {
+                format!("macOS capture helper exited with {status}")
+            } else {
+                format!("macOS capture helper exited with {status}: {detail}")
+            });
+        }
+        parse_capture_evidence(&stdout)
+    }
+
+    pub(super) fn run_capture_helper(args: &[String]) -> Result<PixelEvidence, String> {
+        screenshot_non_uniform_pixels(CaptureRegion::parse(args)?)
+    }
+
+    fn screenshot_non_uniform_pixels(region: CaptureRegion) -> Result<PixelEvidence, String> {
         let image = CGDisplay::screenshot(
             unsafe { core_graphics::display::CGRectNull },
             kCGWindowListOptionIncludingWindow,
-            window_id,
+            region.window_id,
             kCGWindowImageBoundsIgnoreFraming | kCGWindowImageNominalResolution,
         )
         .ok_or("CoreGraphics could not capture the plugin GUI window")?;
@@ -2593,29 +2842,20 @@ mod macos {
         if width == 0 || height == 0 {
             return Err("captured macOS GUI frame is empty".into());
         }
-        let (surface, frame) = unsafe { plugin_surface(content_view)? };
-        let surface_bounds = unsafe {
-            let selector = sel_registerName(b"bounds\0".as_ptr().cast());
-            msg_send_rect0(surface, selector)
-        };
-        let content_width = surface_bounds.size.width.round().max(0.0) as u32;
-        let content_height = surface_bounds.size.height.round().max(0.0) as u32;
-        if content_width == 0 || content_height == 0 {
-            return Err("macOS plugin content view is empty".into());
-        }
-        let content_x = frame.origin.x.round();
-        let content_y = f64::from(height) - (frame.origin.y + frame.size.height).round();
-        if content_x < 0.0 || content_y < 0.0 {
-            return Err("macOS plugin surface lies outside the captured window".into());
-        }
-        let content_x = content_x as u32;
-        let content_y = content_y as u32;
-        let available_width = width.saturating_sub(content_x);
+        let content_y = height
+            .checked_sub(
+                region
+                    .content_bottom
+                    .checked_add(region.content_frame_height)
+                    .ok_or("macOS plugin surface coordinates overflow")?,
+            )
+            .ok_or("macOS plugin surface lies outside the captured window")?;
+        let available_width = width.saturating_sub(region.content_x);
         let available_height = height.saturating_sub(content_y);
-        if content_width > available_width || content_height > available_height {
+        if region.content_width > available_width || region.content_height > available_height {
             return Err(format!(
                 "macOS plugin surface {}x{} overflows captured host content {}x{}",
-                content_width, content_height, available_width, available_height
+                region.content_width, region.content_height, available_width, available_height
             ));
         }
         let bytes_per_row = image.bytes_per_row();
@@ -2627,25 +2867,27 @@ mod macos {
             ));
         }
         let data = image.data();
-        let step_x = (content_width / 64).max(1) as usize;
-        let step_y = (content_height / 64).max(1) as usize;
-        let pixels = (0..content_height as usize)
+        let step_x = (region.content_width / 64).max(1) as usize;
+        let step_y = (region.content_height / 64).max(1) as usize;
+        let pixels = (0..region.content_height as usize)
             .step_by(step_y)
             .flat_map(|content_row| {
-                (0..content_width as usize).step_by(step_x).filter_map({
-                    let data = data.bytes();
-                    move |content_column| {
-                        let y = content_y as usize + content_row;
-                        let x = content_x as usize + content_column;
-                        let offset = y
-                            .checked_mul(bytes_per_row)?
-                            .checked_add(x.checked_mul(bytes_per_pixel)?)?;
-                        let bytes = data.get(offset..offset + 3)?;
-                        Some(u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], 0]))
-                    }
-                })
+                (0..region.content_width as usize)
+                    .step_by(step_x)
+                    .filter_map({
+                        let data = data.bytes();
+                        move |content_column| {
+                            let y = content_y as usize + content_row;
+                            let x = region.content_x as usize + content_column;
+                            let offset = y
+                                .checked_mul(bytes_per_row)?
+                                .checked_add(x.checked_mul(bytes_per_pixel)?)?;
+                            let bytes = data.get(offset..offset + 3)?;
+                            Some(u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], 0]))
+                        }
+                    })
             });
-        non_uniform_pixel_evidence(content_width, content_height, pixels)
+        non_uniform_pixel_evidence(region.content_width, region.content_height, pixels)
     }
 
     unsafe fn bitmap_non_uniform_pixels(
@@ -2888,11 +3130,15 @@ mod macos {
                         Err("NSEvent mouse event construction returned null".to_string())
                     } else {
                         responder_fn(event_target, method, event);
-                        pump_events();
                         Ok(())
                     }
                 };
 
+            // These responder calls are synchronous. Keep the synthetic drag
+            // atomic so a queued WindowServer mouse-move cannot replace the
+            // cached cursor position between mouseMoved: and mouseDown:, or
+            // move a pressed slider to the physical pointer during the drag.
+            // Service AppKit once the complete gesture has been delivered.
             dispatch(mouse_moved_selector, NS_MOUSE_MOVED, from_x, from_y, 0.0)?;
             dispatch(mouse_down_selector, NS_LEFT_MOUSE_DOWN, from_x, from_y, 1.0)?;
             for step in 1..=12 {
@@ -3067,6 +3313,75 @@ mod macos {
         register_close_callback(instance as usize, close_cb);
 
         instance
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn strings(values: &[&str]) -> Vec<String> {
+            values.iter().map(|value| (*value).to_owned()).collect()
+        }
+
+        #[test]
+        fn capture_region_parses_and_round_trips_helper_arguments() {
+            let args = strings(&["42", "3", "7", "220", "520", "200"]);
+            let region = CaptureRegion::parse(&args).unwrap();
+            assert_eq!(region.window_id, 42);
+            assert_eq!(region.content_x, 3);
+            assert_eq!(region.content_bottom, 7);
+            assert_eq!(region.content_frame_height, 220);
+            assert_eq!(region.content_width, 520);
+            assert_eq!(region.content_height, 200);
+            assert_eq!(region.arguments().as_slice(), args);
+        }
+
+        #[test]
+        fn capture_region_rejects_missing_invalid_and_empty_values() {
+            assert!(CaptureRegion::parse(&strings(&["42"])).is_err());
+            assert!(CaptureRegion::parse(&strings(&[
+                "not-a-window",
+                "0",
+                "0",
+                "220",
+                "520",
+                "200",
+            ]))
+            .is_err());
+            assert!(CaptureRegion::parse(&strings(&["0", "0", "0", "220", "520", "200"])).is_err());
+            assert!(CaptureRegion::parse(&strings(&["42", "0", "0", "220", "0", "200"])).is_err());
+        }
+
+        #[test]
+        fn capture_evidence_protocol_accepts_a_valid_record() {
+            let evidence = parse_capture_evidence(
+                "diagnostic line\nSUNMAO_CAPTURE_EVIDENCE=520,220,4096,4,160,42.5\n",
+            )
+            .unwrap();
+            assert_eq!(evidence.width, 520);
+            assert_eq!(evidence.height, 220);
+            assert_eq!(evidence.sampled_pixels, 4096);
+            assert_eq!(evidence.distinct_colors, 4);
+            assert_eq!(evidence.intensity_range, 160);
+            assert_eq!(evidence.intensity_std_dev, 42.5);
+        }
+
+        #[test]
+        fn capture_evidence_protocol_rejects_malformed_or_untrusted_records() {
+            for output in [
+                "",
+                "SUNMAO_CAPTURE_EVIDENCE=520,220,4096",
+                "SUNMAO_CAPTURE_EVIDENCE=520,220,4097,4,160,42.5",
+                "SUNMAO_CAPTURE_EVIDENCE=520,220,4,5,160,42.5",
+                "SUNMAO_CAPTURE_EVIDENCE=520,220,4096,4,160,NaN",
+                "SUNMAO_CAPTURE_EVIDENCE=520,220,4096,4,8,2.0",
+            ] {
+                assert!(
+                    parse_capture_evidence(output).is_err(),
+                    "accepted: {output}"
+                );
+            }
+        }
     }
 }
 

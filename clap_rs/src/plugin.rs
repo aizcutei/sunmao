@@ -11,7 +11,7 @@ use clap_sys::host::clap_host_t;
 use clap_sys::plugin::clap_plugin_descriptor_t;
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::cell::UnsafeCell;
-use std::ffi::{CString, c_char, c_void};
+use std::ffi::{CString, c_char};
 use std::sync::{Arc, Mutex};
 
 // Re-export commonly used types
@@ -396,10 +396,13 @@ macro_rules! __export_clap_plugin_impl {
                 > = OnceLock::new();
                 DESCRIPTOR
                     .get_or_init(|| {
-                        $crate::plugin::OwnedPluginDescriptor::new(
-                            &$plugin_info,
-                            $features.as_ptr(),
-                        )
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            $crate::plugin::OwnedPluginDescriptor::new(
+                                &$plugin_info,
+                                $features.as_ptr(),
+                            )
+                        }))
+                        .unwrap_or(Err("plugin metadata panicked"))
                     })
                     .as_ref()
                     .ok()

@@ -2,9 +2,7 @@
 //!
 //! A simple gain plugin demonstrating the SunMao framework.
 
-use std::sync::Arc;
-use sunmao_core::prelude::*;
-use sunmao_macros::Params;
+use sunmao::prelude::*;
 
 /// Gain plugin parameters.
 #[derive(Params)]

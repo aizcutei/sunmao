@@ -286,6 +286,10 @@ version = "0.1.0"
 [[package]]
 name = "au_packager"
 version = "0.1.0"
+dependencies = [
+ "clap",
+ "sunmao_packager",
+]
 
 [[package]]
 name = "au_rs"
@@ -760,6 +764,9 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 [[package]]
 name = "clap_packager"
 version = "0.1.0"
+dependencies = [
+ "sunmao_packager",
+]
 
 [[package]]
 name = "clap_rs"
@@ -4538,6 +4545,7 @@ dependencies = [
  "sunmao_gui",
  "sunmao_macros",
  "sunmao_runtime",
+ "sunmao_view_baseview",
 ]
 
 [[package]]
@@ -4584,13 +4592,8 @@ dependencies = [
 name = "sunmao_daw_info_gui"
 version = "0.1.0"
 dependencies = [
+ "sunmao",
  "sunmao_backend_au",
- "sunmao_backend_clap",
- "sunmao_backend_vst3",
- "sunmao_core",
- "sunmao_gui",
- "sunmao_macros",
- "sunmao_view_baseview",
 ]
 
 [[package]]
@@ -4599,10 +4602,6 @@ version = "0.1.0"
 dependencies = [
  "sunmao",
  "sunmao_backend_au",
- "sunmao_backend_clap",
- "sunmao_backend_vst3",
- "sunmao_core",
- "sunmao_macros",
 ]
 
 [[package]]
@@ -4611,51 +4610,30 @@ version = "0.1.0"
 dependencies = [
  "sunmao",
  "sunmao_backend_au",
- "sunmao_backend_clap",
- "sunmao_backend_vst3",
- "sunmao_core",
- "sunmao_gui",
- "sunmao_macros",
- "sunmao_view_baseview",
 ]
 
 [[package]]
 name = "sunmao_fx_gain_gui_webview"
 version = "0.1.0"
 dependencies = [
+ "sunmao",
  "sunmao_backend_au",
- "sunmao_backend_clap",
- "sunmao_backend_vst3",
- "sunmao_core",
- "sunmao_gui",
- "sunmao_macros",
- "sunmao_view_baseview",
 ]
 
 [[package]]
 name = "sunmao_fx_gain_gui_wgpu"
 version = "0.1.0"
 dependencies = [
+ "sunmao",
  "sunmao_backend_au",
- "sunmao_backend_clap",
- "sunmao_backend_vst3",
- "sunmao_core",
- "sunmao_gui",
- "sunmao_macros",
- "sunmao_view_baseview",
 ]
 
 [[package]]
 name = "sunmao_fx_lpf_gui_gl"
 version = "0.1.0"
 dependencies = [
+ "sunmao",
  "sunmao_backend_au",
- "sunmao_backend_clap",
- "sunmao_backend_vst3",
- "sunmao_core",
- "sunmao_gui",
- "sunmao_macros",
- "sunmao_view_baseview",
 ]
 
 [[package]]
@@ -4691,8 +4669,6 @@ dependencies = [
 name = "sunmao_gui_webview"
 version = "0.1.0"
 dependencies = [
- "serde",
- "serde_json",
  "sunmao_gui",
 ]
 
@@ -4709,6 +4685,7 @@ dependencies = [
 name = "sunmao_macros"
 version = "0.1.0"
 dependencies = [
+ "proc-macro-crate 3.5.0",
  "proc-macro2",
  "quote",
  "sunmao_core",
@@ -4743,10 +4720,6 @@ version = "0.1.0"
 dependencies = [
  "sunmao",
  "sunmao_backend_au",
- "sunmao_backend_clap",
- "sunmao_backend_vst3",
- "sunmao_core",
- "sunmao_macros",
 ]
 
 [[package]]
@@ -4754,10 +4727,6 @@ name = "sunmao_syn_sine_gui_gl"
 version = "0.1.0"
 dependencies = [
  "sunmao",
- "sunmao_core",
- "sunmao_gui",
- "sunmao_macros",
- "sunmao_view_baseview",
 ]
 
 [[package]]
@@ -4765,10 +4734,6 @@ name = "sunmao_syn_sine_gui_webview"
 version = "0.1.0"
 dependencies = [
  "sunmao",
- "sunmao_core",
- "sunmao_gui",
- "sunmao_macros",
- "sunmao_view_baseview",
 ]
 
 [[package]]
@@ -4776,10 +4741,6 @@ name = "sunmao_syn_sine_gui_wgpu"
 version = "0.1.0"
 dependencies = [
  "sunmao",
- "sunmao_core",
- "sunmao_gui",
- "sunmao_macros",
- "sunmao_view_baseview",
 ]
 
 [[package]]
@@ -5226,6 +5187,7 @@ name = "vst3_packager"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "sunmao_packager",
 ]
 
 [[package]]

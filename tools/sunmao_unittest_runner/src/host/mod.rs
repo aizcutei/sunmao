@@ -2,7 +2,7 @@ pub mod clap_host;
 pub mod scanner;
 pub mod vst3_host;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "au"))]
 pub mod au_host;
 
 use crate::gui_window::PluginGuiWindow;

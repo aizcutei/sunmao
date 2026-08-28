@@ -324,12 +324,20 @@ impl GlContext {
         })
     }
 
-    pub unsafe fn make_current(&self) {
-        wglMakeCurrent(self.hdc, self.hglrc);
+    pub unsafe fn make_current(&self) -> Result<(), GlError> {
+        if wglMakeCurrent(self.hdc, self.hglrc) == 0 {
+            Err(GlError::CreationFailed(()))
+        } else {
+            Ok(())
+        }
     }
 
-    pub unsafe fn make_not_current(&self) {
-        wglMakeCurrent(self.hdc, std::ptr::null_mut());
+    pub unsafe fn make_not_current(&self) -> Result<(), GlError> {
+        if wglMakeCurrent(self.hdc, std::ptr::null_mut()) == 0 {
+            Err(GlError::CreationFailed(()))
+        } else {
+            Ok(())
+        }
     }
 
     pub fn get_proc_address(&self, symbol: &str) -> *const c_void {
@@ -346,9 +354,11 @@ impl GlContext {
         }
     }
 
-    pub fn swap_buffers(&self) {
-        unsafe {
-            SwapBuffers(self.hdc);
+    pub fn swap_buffers(&self) -> Result<(), GlError> {
+        if unsafe { SwapBuffers(self.hdc) } == 0 {
+            Err(GlError::CreationFailed(()))
+        } else {
+            Ok(())
         }
     }
 }

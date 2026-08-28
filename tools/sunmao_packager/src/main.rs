@@ -1,4 +1,4 @@
-//! SunMao unified AU, VST3, and CLAP packager.
+//! SunMao unified AU, VST3, CLAP, and standalone packager.
 
 use anyhow::Result;
 use clap::{Parser, ValueEnum};
@@ -13,6 +13,8 @@ enum Format {
     Vst3,
     /// CLAP (cross-platform)
     Clap,
+    /// Standalone application (cross-platform)
+    Standalone,
 }
 
 impl From<Format> for PackageFormat {
@@ -21,19 +23,20 @@ impl From<Format> for PackageFormat {
             Format::Au => Self::Au,
             Format::Vst3 => Self::Vst3,
             Format::Clap => Self::Clap,
+            Format::Standalone => Self::Standalone,
         }
     }
 }
 
 #[derive(Parser, Debug)]
 #[command(name = "sunmao_packager")]
-#[command(about = "Unified packager for AudioUnit, VST3, and CLAP plugins")]
+#[command(about = "Unified packager for AudioUnit, VST3, CLAP, and standalone artifacts")]
 struct Args {
     /// Plugin format to package
     #[arg(value_enum)]
     format: Format,
 
-    /// Path to the compiled binary (.dylib, .dll, .so)
+    /// Path to the compiled module or standalone executable
     #[arg(long)]
     binary: PathBuf,
 
@@ -97,7 +100,7 @@ fn main() -> Result<()> {
             factory: args.au_factory.clone(),
             sandbox_safe: args.au_sandbox_safe,
         }),
-        Format::Vst3 | Format::Clap => None,
+        Format::Vst3 | Format::Clap | Format::Standalone => None,
     };
     let format = args.format.into();
     let request = PackageRequest {

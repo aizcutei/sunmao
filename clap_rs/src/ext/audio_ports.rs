@@ -1,10 +1,9 @@
 //! Audio Ports Extension for clap_rs
 
 use crate::plugin::Plugin;
-use crate::plugin_instance::PluginInstance;
+use crate::plugin_instance::instance_ptr;
 use clap_sys::ext::audio_ports::{
-    CLAP_AUDIO_PORT_IS_MAIN, CLAP_EXT_AUDIO_PORTS, CLAP_PORT_STEREO, clap_audio_port_info_t,
-    clap_plugin_audio_ports_t,
+    CLAP_AUDIO_PORT_IS_MAIN, CLAP_PORT_STEREO, clap_audio_port_info_t, clap_plugin_audio_ports_t,
 };
 use clap_sys::id::CLAP_INVALID_ID;
 use clap_sys::plugin::clap_plugin_t;
@@ -33,7 +32,10 @@ pub(crate) unsafe extern "C" fn audio_ports_count<P: Plugin>(
     plugin: *const clap_plugin_t,
     is_input: bool,
 ) -> u32 {
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return 0;
+    };
+    let instance = unsafe { &*instance_ptr };
     instance
         .audio_ports_cache
         .iter()
@@ -50,7 +52,10 @@ pub(crate) unsafe extern "C" fn audio_ports_get<P: Plugin>(
     if info.is_null() {
         return false;
     }
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
     let ports: Vec<_> = instance
         .audio_ports_cache
         .iter()
@@ -85,13 +90,15 @@ pub(crate) fn create_audio_ports_ext<P: Plugin>() -> clap_plugin_audio_ports_t {
 // ======= GUI Plugin Support =======
 
 use crate::ext::gui::GuiHandler;
-use crate::plugin_instance::PluginInstanceWithGui;
 
 pub(crate) unsafe extern "C" fn audio_ports_count_gui<P: Plugin + GuiHandler>(
     plugin: *const clap_plugin_t,
     is_input: bool,
 ) -> u32 {
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return 0;
+    };
+    let instance = unsafe { &*instance_ptr };
     instance
         .audio_ports_cache
         .iter()
@@ -108,7 +115,10 @@ pub(crate) unsafe extern "C" fn audio_ports_get_gui<P: Plugin + GuiHandler>(
     if info.is_null() {
         return false;
     }
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
     let ports: Vec<_> = instance
         .audio_ports_cache
         .iter()

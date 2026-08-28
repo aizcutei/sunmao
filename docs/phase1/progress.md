@@ -322,6 +322,63 @@
 - Evidence/artifact: run #21 uploaded `phase1-macOS-ARM64` (30MB), `phase1-Windows-X64` (55MB), `phase1-Linux-X64` (545MB) containing bundles, runner test/gui-test logs, and reports. Artifact download requires repository credentials; sizes and successful upload steps verified via the public API.
 - Unresolved: none for the Phase 1 gate. `docs/phase1/status.md` now records Phase 1 as complete.
 
+### 2026-08-19 — local hardening after the Phase 1 baseline
+
+- Command/platform: macOS ARM64 local workspace; current HEAD `7271be3` plus uncommitted changes.
+- Result:
+  - CLAP event normalization now bounds sample offsets to the active block, validates note port/channel/key/velocity fields, and rejects unsupported MIDI ports before conversion.
+  - VST3 processing now enforces initialized → setup → active → processing lifecycle ordering; raw parameter connection, factory query, and host frame/handler callbacks contain panics at the COM boundary.
+  - CLAP init failures and panics roll back every partially allocated extension table for both plain and GUI entries; regression tests cover retry/visibility behavior.
+  - Core, CLAP, VST3, packager, macro, and backend targeted tests pass locally; VST3 wrapper suite is 36/36 and CLAP backend plus metadata tests are 13/13.
+- Evidence/artifact: local test output only. Historical hosted evidence remains run #21 on commit `885d2a5`; no hosted run has validated this uncommitted hardening.
+- Unresolved:
+  - Re-run the three native hosted jobs on the next hardening commit before claiming current-workspace completion.
+  - VST3 factory/controller/PlugView and CLAP extension callbacks still have a few unguarded low-level pointer-contract paths; these are tracked for the next ABI-hardening pass.
+
+### 2026-08-19 — VST3 process panic recovery
+
+- Command/platform: macOS ARM64 local targeted tests on the uncommitted hardening workspace.
+- Change: `vst3_rs::wrapper::audio_process` now catches plugin panics at the VST3 COM boundary. The first panic returns `kInternalError`, clears the processing state, and disables subsequent process calls so a potentially damaged processor is not reused; the host can still stop/deactivate/terminate it normally.
+- Result: the focused panic regression passed (`1/1`); the release `vst3_rs::wrapper::tests` suite passed (`27/27`). `cargo fmt --all -- --check` and `git diff --check` also passed.
+- Evidence/artifact: local test output only. This behavior is not yet covered by a new hosted three-platform run.
+- Unresolved: commit the hardening set and rerun macOS ARM64, Windows x86_64, and Ubuntu x86_64 native jobs before updating the Phase 1 acceptance evidence.
+
+### 2026-08-19 — full local workspace verification
+
+- Command/platform: macOS ARM64 local workspace, `cargo test --locked`.
+- Result: all workspace unit tests and doc-tests passed, including raw and adapted CLAP/VST3 stacks, SunMao core/macros/backends, GUI layers, packagers, runner, reference examples, and standalone runtime. Existing upstream binding and Rust 2024 unsafe-operation warnings remain non-blocking for this gate.
+- Evidence/artifact: local command output only; no cross-platform claim is made for the uncommitted hardening.
+- Unresolved: hosted revalidation is still required after the hardening changes are committed.
+
+### 2026-08-25 — standalone scope correction and gate implementation
+
+- Command/platform: macOS ARM64 workspace; current branch `phase1/vst3-clap-cross-platform`, HEAD `7271be3` plus uncommitted changes.
+- Change:
+  - Corrected the Phase 1 definition to include VST3, CLAP, and standalone on macOS, Windows, and Linux; Audio Unit remains explicit opt-in and outside the gate.
+  - Extended `tools/package_examples.sh` to build the eight primary gain/sine standalone binaries, package platform-native outputs, run raw/packaged `--smoke`, and optionally run raw/packaged `--gui-smoke` under the existing native/Xvfb setup.
+  - Extended `.github/workflows/phase1.yml` so standalone runtime/facade/example tests are blocking, all eight standalone binaries are built, gain/sine raw and packaged smoke is recorded, and six GL/WGPU/WebView standalone editors are tested and uploaded with artifacts.
+  - Updated README, packager reference, status, and roadmap so historical run #21 is explicitly limited to the old VST3/CLAP baseline and cannot be reused as standalone evidence.
+- Result:
+  - `cargo check --locked --bins --features standalone` for all eight primary examples passed on macOS ARM64.
+  - `bash -n tools/package_examples.sh`, workflow YAML parsing, `git diff --check` for the touched scripts/docs passed.
+  - Existing local standalone runtime, packager, raw GUI smoke, and package smoke checks remain passing; expanded script/CI changes are not yet hosted.
+- Evidence/artifact: local command output only. No new commit or hosted run exists yet.
+- Unresolved:
+  - Run the full local locked/format/test gates and execute the expanded packaging helper, including GUI smoke where WindowServer permits.
+  - Commit the complete hardening set and obtain new macOS ARM64, Windows x86_64, and Ubuntu x86_64 hosted green jobs with standalone artifacts before marking Phase 1 complete.
+
+### 2026-08-28 — full local gate pass; hardening + standalone gate committed for hosted revalidation
+
+- Command/platform: macOS ARM64 (Apple Silicon host), current workspace on `phase1/vst3-clap-cross-platform`.
+  - `cargo metadata --locked --no-deps`, `cargo fmt --all -- --check`, `git diff --check`.
+  - `RUSTFLAGS=-Awarnings cargo test --locked`: full workspace, 96 test suites, all `ok`, 0 failures.
+  - `bash -n tools/package_examples.sh` and workflow YAML parse.
+  - `tools/package_examples.sh --debug --test`: 20 runner suites (10 examples × VST3/CLAP) each 16 passed / 0 failed; 8 raw + 8 packaged standalone `--smoke` passed.
+  - `tools/package_examples.sh --debug --gui-test`: embedded GL/WGPU/WebView × VST3/CLAP matrix and the six standalone editors passed raw and packaged GUI smoke (WindowServer present).
+- Result: every Phase 1 local gate is green on the current workspace; the complete hardening + standalone-gate change set is committed and pushed to trigger hosted revalidation.
+- Evidence/artifact: local logs (`/tmp/phase1_workspace_test.log`, `/tmp/phase1_package_test.log`, `/tmp/phase1_gui_test.log`) — macOS-local evidence level only.
+- Unresolved: same-commit hosted revalidation on macOS ARM64, Windows x86_64, and Ubuntu x86_64 with VST3/CLAP + standalone artifacts uploaded; Phase 1 stays incomplete until that run is green.
+
 ## 待记录
 
 后续每次执行按以下格式追加：

@@ -132,6 +132,46 @@ fn cli_packages_a_native_vst3_bundle() {
 }
 
 #[test]
+fn cli_packages_a_real_native_standalone_executable() {
+    let temp = TempDir::new();
+    let binary = std::env::current_exe().unwrap();
+    let output_base = temp.path().join("CLI Standalone");
+
+    let result = Command::new(env!("CARGO_BIN_EXE_sunmao_packager"))
+        .args(["standalone", "--binary"])
+        .arg(&binary)
+        .arg("--out")
+        .arg(&output_base)
+        .args([
+            "--name",
+            "CLI Standalone",
+            "--bundle-id",
+            "com.sunmao.cli-standalone",
+            "--version",
+            "1.0.0",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "packager failed: {}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+
+    #[cfg(target_os = "macos")]
+    {
+        let app = output_base.with_extension("app");
+        assert!(app.join("Contents/MacOS/CLI Standalone").is_file());
+        let plist = fs::read_to_string(app.join("Contents/Info.plist")).unwrap();
+        assert!(plist.contains("<string>APPL</string>"));
+    }
+    #[cfg(target_os = "linux")]
+    assert!(output_base.is_file());
+    #[cfg(target_os = "windows")]
+    assert!(output_base.with_extension("exe").is_file());
+}
+
+#[test]
 fn cli_validation_does_not_replace_an_existing_bundle() {
     let temp = TempDir::new();
     let binary_base = temp.path().join("source");

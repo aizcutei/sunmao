@@ -90,24 +90,49 @@ impl Default for AuInfo {
 
 /// CLAP plugin metadata.
 pub struct ClapInfo {
-    /// Unique plugin ID (reverse domain notation).
+    /// Unique plugin ID (reverse domain notation). Leave empty to derive a
+    /// stable plugin-specific ID from [`crate::SunmaoPlugin::VENDOR`] and
+    /// [`crate::SunmaoPlugin::NAME`].
     pub id: &'static str,
-    /// CLAP features.
+    /// CLAP features. Leave empty to derive `audio-effect` or
+    /// `instrument`/`synthesizer` from the plugin's input-channel contract.
     pub features: &'static [&'static str],
 }
 
 impl Default for ClapInfo {
     fn default() -> Self {
         Self {
-            id: "com.sunmao.plugin",
-            features: &["audio-effect"],
+            id: "",
+            features: &[],
         }
     }
 }
 
+/// Derive the stable CLAP identifier used when a plugin does not provide one.
+///
+/// Published plugins should still set an explicit reverse-domain identifier.
+/// The derived value makes the minimal API safe for multiple local plugins: it
+/// is deterministic and depends on both the vendor and plugin name instead of
+/// reusing one framework-wide placeholder.
+pub fn derive_clap_id(vendor: &str, name: &str) -> String {
+    const OFFSET_BASIS: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
+    const PRIME: u128 = 0x0000_0000_0100_0000_0000_0000_0000_013b;
+
+    let mut hash = OFFSET_BASIS;
+    for byte in vendor
+        .bytes()
+        .chain(std::iter::once(0xff))
+        .chain(name.bytes())
+    {
+        hash ^= byte as u128;
+        hash = hash.wrapping_mul(PRIME);
+    }
+    format!("com.sunmao.generated.{hash:032x}")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Vst3SpeakerLayout;
+    use super::{derive_clap_id, ClapInfo, Vst3SpeakerLayout};
 
     #[test]
     fn common_vst3_layouts_use_sdk_masks_and_channel_counts() {
@@ -120,5 +145,19 @@ mod tests {
         assert_eq!(Vst3SpeakerLayout::MUSIC_7_1.mask(), 0x0000_063f);
         assert_eq!(Vst3SpeakerLayout::SURROUND_5_1.channel_count(), 6);
         assert_eq!(Vst3SpeakerLayout::MUSIC_7_1.channel_count(), 8);
+    }
+
+    #[test]
+    fn default_clap_ids_are_stable_and_plugin_specific() {
+        let first = derive_clap_id("SunMao", "Gain");
+        assert_eq!(first, derive_clap_id("SunMao", "Gain"));
+        assert_ne!(first, derive_clap_id("SunMao", "Sine"));
+        assert_ne!(first, derive_clap_id("Another Vendor", "Gain"));
+        assert!(first.starts_with("com.sunmao.generated."));
+        assert_eq!(first.len(), "com.sunmao.generated.".len() + 32);
+
+        let defaults = ClapInfo::default();
+        assert!(defaults.id.is_empty());
+        assert!(defaults.features.is_empty());
     }
 }

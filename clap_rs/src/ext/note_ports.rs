@@ -1,7 +1,7 @@
 //! Note Ports Extension for clap_rs
 
 use crate::plugin::Plugin;
-use crate::plugin_instance::PluginInstance;
+use crate::plugin_instance::instance_ptr;
 use clap_sys::ext::note_ports::{
     CLAP_NOTE_DIALECT_MIDI, clap_note_port_info_t, clap_plugin_note_ports_t,
 };
@@ -36,7 +36,10 @@ pub(crate) unsafe extern "C" fn note_ports_count<P: Plugin>(
     plugin: *const clap_plugin_t,
     is_input: bool,
 ) -> u32 {
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return 0;
+    };
+    let instance = unsafe { &*instance_ptr };
     instance
         .note_ports_cache
         .iter()
@@ -53,7 +56,10 @@ pub(crate) unsafe extern "C" fn note_ports_get<P: Plugin>(
     if info.is_null() {
         return false;
     }
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
     let ports: Vec<_> = instance
         .note_ports_cache
         .iter()
@@ -79,13 +85,15 @@ pub(crate) fn create_note_ports_ext<P: Plugin>() -> clap_plugin_note_ports_t {
 // ======= GUI Plugin Support =======
 
 use crate::ext::gui::GuiHandler;
-use crate::plugin_instance::PluginInstanceWithGui;
 
 pub(crate) unsafe extern "C" fn note_ports_count_gui<P: Plugin + GuiHandler>(
     plugin: *const clap_plugin_t,
     is_input: bool,
 ) -> u32 {
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return 0;
+    };
+    let instance = unsafe { &*instance_ptr };
     instance
         .note_ports_cache
         .iter()
@@ -102,7 +110,10 @@ pub(crate) unsafe extern "C" fn note_ports_get_gui<P: Plugin + GuiHandler>(
     if info.is_null() {
         return false;
     }
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
     let ports: Vec<_> = instance
         .note_ports_cache
         .iter()

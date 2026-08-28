@@ -6,11 +6,16 @@ description = "Sine synth example with an OpenGL GUI using SunMao"
 license = "MIT OR Apache-2.0"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "sunmao_syn_sine_gui_gl_standalone"
+path = "src/bin/standalone.rs"
+required-features = ["standalone"]
+
+[features]
+default = []
+standalone = ["sunmao/standalone"]
 
 [dependencies]
-sunmao = { path = "../../sunmao" }
-sunmao_core = { path = "../../sunmao/core" }
-sunmao_gui = { path = "../../sunmao/gui", features = ["gl"] }
-sunmao_macros = { path = "../../sunmao/macros" }
-sunmao_view_baseview = { path = "../../sunmao/view_baseview", features = ["wgpu"] }
+sunmao = { path = "../../sunmao", features = ["gui-gl"] }

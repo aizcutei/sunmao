@@ -13,6 +13,19 @@ impl PluginEntry {
         host: *const clap_host_t,
         descriptor: *const clap_plugin_descriptor_t,
     ) -> *const clap_plugin_t {
+        // Factory callbacks are C ABI entry points. A plugin's constructor
+        // and metadata declarations are user code, so contain a panic and
+        // report creation failure instead of unwinding into the host.
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            Self::create_plugin_unchecked::<P>(host, descriptor)
+        }))
+        .unwrap_or(std::ptr::null())
+    }
+
+    unsafe fn create_plugin_unchecked<P: Plugin>(
+        host: *const clap_host_t,
+        descriptor: *const clap_plugin_descriptor_t,
+    ) -> *const clap_plugin_t {
         let instance = Box::new(PluginInstance::<P>::new(unsafe {
             crate::plugin::HostHandle::from_raw(host)
         }));
@@ -41,6 +54,16 @@ pub struct PluginEntryWithGui;
 
 impl PluginEntryWithGui {
     pub unsafe fn create_plugin<P: Plugin + GuiHandler>(
+        host: *const clap_host_t,
+        descriptor: *const clap_plugin_descriptor_t,
+    ) -> *const clap_plugin_t {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            Self::create_plugin_unchecked::<P>(host, descriptor)
+        }))
+        .unwrap_or(std::ptr::null())
+    }
+
+    unsafe fn create_plugin_unchecked<P: Plugin + GuiHandler>(
         host: *const clap_host_t,
         descriptor: *const clap_plugin_descriptor_t,
     ) -> *const clap_plugin_t {
@@ -73,21 +96,22 @@ mod tests {
     use crate::ParameterInfo;
     use crate::ext::gui::GuiHandler;
     use crate::plugin::AudioProcessor;
-    use crate::process::ProcessContext;
+    use crate::process::{MAX_PROCESS_FRAMES, ProcessContext};
     use clap_sys::events::{
         CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_VALUE, clap_event_header_t,
         clap_event_param_value_t, clap_input_events_t,
     };
     use clap_sys::ext::gui::{CLAP_EXT_GUI, clap_plugin_gui_t};
     use clap_sys::ext::params::{CLAP_EXT_PARAMS, clap_plugin_params_t};
+    use clap_sys::ext::state::CLAP_EXT_STATE;
     use clap_sys::ext::tail::{CLAP_EXT_TAIL, clap_plugin_tail_t};
-    use clap_sys::process::{CLAP_PROCESS_CONTINUE, clap_process_status};
+    use clap_sys::process::{CLAP_PROCESS_CONTINUE, CLAP_PROCESS_ERROR, clap_process_status};
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::ffi::c_void;
     use std::ptr;
     use std::sync::Arc;
-    use std::sync::Barrier;
     use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicUsize, Ordering};
+    use std::sync::{Barrier, Mutex};
 
     struct TrackingAllocator;
 
@@ -114,6 +138,10 @@ mod tests {
     static ALLOCATOR: TrackingAllocator = TrackingAllocator;
 
     static PLUGIN_DROPS: AtomicUsize = AtomicUsize::new(0);
+    // These tests intentionally inspect a process-global drop counter. Keep
+    // all TestPlugin lifecycle tests serialized so the counter cannot be
+    // changed by a concurrently running test.
+    static TEST_PLUGIN_LIFECYCLE_LOCK: Mutex<()> = Mutex::new(());
 
     struct TestPlugin;
 
@@ -161,6 +189,7 @@ mod tests {
 
     #[test]
     fn destroy_callbacks_free_plugin_instance_and_outer_allocation() {
+        let _lock = TEST_PLUGIN_LIFECYCLE_LOCK.lock().unwrap();
         PLUGIN_DROPS.store(0, Ordering::SeqCst);
 
         let plugin = unsafe { PluginEntry::create_plugin::<TestPlugin>(ptr::null(), ptr::null()) };
@@ -175,6 +204,17 @@ mod tests {
         unsafe { ((*plugin).destroy.unwrap())(plugin) };
         assert_tracked_allocation_was_freed();
         assert_eq!(PLUGIN_DROPS.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn activation_rejects_oversized_host_block() {
+        let _lock = TEST_PLUGIN_LIFECYCLE_LOCK.lock().unwrap();
+        let plugin = unsafe { PluginEntry::create_plugin::<TestPlugin>(ptr::null(), ptr::null()) };
+        assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
+        assert!(!unsafe {
+            ((*plugin).activate.unwrap())(plugin, 48_000.0, 1, MAX_PROCESS_FRAMES.saturating_add(1))
+        });
+        unsafe { ((*plugin).destroy.unwrap())(plugin) };
     }
 
     struct ConcurrentState {
@@ -545,6 +585,472 @@ mod tests {
         unsafe { ((*plugin).deactivate.unwrap())(plugin) };
 
         assert_eq!(state.activations.load(Ordering::SeqCst), 2);
+        unsafe { ((*plugin).destroy.unwrap())(plugin) };
+    }
+
+    struct PanickingConstructorPlugin;
+
+    impl Plugin for PanickingConstructorPlugin {
+        type AudioProcessor = ();
+
+        fn new(_host: crate::plugin::HostHandle) -> Self {
+            panic!("intentional constructor panic");
+        }
+
+        fn activate(
+            &mut self,
+            _sample_rate: f64,
+            _min_frames: u32,
+            _max_frames: u32,
+        ) -> Option<Self::AudioProcessor> {
+            Some(())
+        }
+
+        fn get_parameter(&self, _id: u32) -> f64 {
+            0.0
+        }
+
+        fn set_parameter(&mut self, _id: u32, _value: f64) {}
+    }
+
+    impl GuiHandler for PanickingConstructorPlugin {}
+
+    #[test]
+    fn factory_contains_constructor_panics() {
+        assert!(
+            unsafe {
+                PluginEntry::create_plugin::<PanickingConstructorPlugin>(ptr::null(), ptr::null())
+            }
+            .is_null()
+        );
+        assert!(
+            unsafe {
+                PluginEntryWithGui::create_plugin::<PanickingConstructorPlugin>(
+                    ptr::null(),
+                    ptr::null(),
+                )
+            }
+            .is_null()
+        );
+    }
+
+    struct PanickingInitPlugin;
+
+    impl Plugin for PanickingInitPlugin {
+        type AudioProcessor = ();
+
+        fn new(_host: crate::plugin::HostHandle) -> Self {
+            Self
+        }
+
+        fn init(&mut self) -> bool {
+            panic!("intentional init panic");
+        }
+
+        fn activate(
+            &mut self,
+            _sample_rate: f64,
+            _min_frames: u32,
+            _max_frames: u32,
+        ) -> Option<Self::AudioProcessor> {
+            Some(())
+        }
+
+        fn get_parameter(&self, _id: u32) -> f64 {
+            0.0
+        }
+
+        fn set_parameter(&mut self, _id: u32, _value: f64) {}
+    }
+
+    impl GuiHandler for PanickingInitPlugin {}
+
+    struct PanickingProcessor;
+
+    static PANICKING_PROCESS_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    impl AudioProcessor for PanickingProcessor {
+        fn process(&mut self, _process: ProcessContext) -> clap_process_status {
+            PANICKING_PROCESS_CALLS.fetch_add(1, Ordering::SeqCst);
+            panic!("intentional process panic");
+        }
+
+        fn set_parameter(&mut self, _id: u32, _value: f64) {}
+    }
+
+    struct PanickingProcessPlugin;
+
+    impl Plugin for PanickingProcessPlugin {
+        type AudioProcessor = PanickingProcessor;
+
+        fn new(_host: crate::plugin::HostHandle) -> Self {
+            Self
+        }
+
+        fn activate(
+            &mut self,
+            _sample_rate: f64,
+            _min_frames: u32,
+            _max_frames: u32,
+        ) -> Option<Self::AudioProcessor> {
+            Some(PanickingProcessor)
+        }
+
+        fn get_parameter(&self, _id: u32) -> f64 {
+            0.0
+        }
+
+        fn set_parameter(&mut self, _id: u32, _value: f64) {}
+    }
+
+    #[test]
+    fn raw_lifecycle_and_process_callbacks_contain_panics() {
+        let plugin =
+            unsafe { PluginEntry::create_plugin::<PanickingInitPlugin>(ptr::null(), ptr::null()) };
+        assert!(!unsafe { ((*plugin).init.unwrap())(plugin) });
+        unsafe { ((*plugin).destroy.unwrap())(plugin) };
+
+        let plugin = unsafe {
+            PluginEntry::create_plugin::<PanickingProcessPlugin>(ptr::null(), ptr::null())
+        };
+        PANICKING_PROCESS_CALLS.store(0, Ordering::SeqCst);
+        assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
+        assert!(unsafe { ((*plugin).activate.unwrap())(plugin, 48_000.0, 0, 1) });
+        let process = clap_sys::process::clap_process_t {
+            steady_time: 0,
+            frames_count: 0,
+            transport: ptr::null(),
+            audio_inputs: ptr::null(),
+            audio_outputs: ptr::null_mut(),
+            audio_inputs_count: 0,
+            audio_outputs_count: 0,
+            in_events: ptr::null(),
+            out_events: ptr::null(),
+        };
+        assert_eq!(
+            unsafe { ((*plugin).process.unwrap())(plugin, &process) },
+            CLAP_PROCESS_ERROR
+        );
+        assert_eq!(
+            unsafe { ((*plugin).process.unwrap())(plugin, &process) },
+            CLAP_PROCESS_ERROR
+        );
+        assert_eq!(PANICKING_PROCESS_CALLS.load(Ordering::SeqCst), 1);
+        unsafe { ((*plugin).deactivate.unwrap())(plugin) };
+        unsafe { ((*plugin).destroy.unwrap())(plugin) };
+    }
+
+    const PANIC_NONE: usize = 0;
+    const PANIC_START: usize = 1;
+    const PANIC_STOP: usize = 2;
+    const PANIC_RESET: usize = 3;
+    const PANIC_PROCESS: usize = 4;
+    const PANIC_DEACTIVATE: usize = 5;
+
+    static LIFECYCLE_PANIC_LOCK: Mutex<()> = Mutex::new(());
+    static LIFECYCLE_PANIC_STAGE: AtomicUsize = AtomicUsize::new(PANIC_NONE);
+    static LIFECYCLE_PANIC_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
+    static LIFECYCLE_PROCESS_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static LIFECYCLE_ACTIVATIONS: AtomicUsize = AtomicUsize::new(0);
+    static LIFECYCLE_DEACTIVATIONS: AtomicUsize = AtomicUsize::new(0);
+    static LIFECYCLE_PROCESSOR_DROPS: AtomicUsize = AtomicUsize::new(0);
+    static LIFECYCLE_PLUGIN_DROPS: AtomicUsize = AtomicUsize::new(0);
+
+    fn panic_at(stage: usize) {
+        if LIFECYCLE_PANIC_STAGE.load(Ordering::SeqCst) == stage {
+            LIFECYCLE_PANIC_CALLBACKS.fetch_add(1, Ordering::SeqCst);
+            panic!("intentional lifecycle panic at stage {stage}");
+        }
+    }
+
+    fn reset_lifecycle_counters(stage: usize) {
+        LIFECYCLE_PANIC_STAGE.store(stage, Ordering::SeqCst);
+        LIFECYCLE_PANIC_CALLBACKS.store(0, Ordering::SeqCst);
+        LIFECYCLE_PROCESS_CALLS.store(0, Ordering::SeqCst);
+        LIFECYCLE_ACTIVATIONS.store(0, Ordering::SeqCst);
+        LIFECYCLE_DEACTIVATIONS.store(0, Ordering::SeqCst);
+        LIFECYCLE_PROCESSOR_DROPS.store(0, Ordering::SeqCst);
+        LIFECYCLE_PLUGIN_DROPS.store(0, Ordering::SeqCst);
+    }
+
+    fn empty_process() -> clap_sys::process::clap_process_t {
+        clap_sys::process::clap_process_t {
+            steady_time: 0,
+            frames_count: 0,
+            transport: ptr::null(),
+            audio_inputs: ptr::null(),
+            audio_outputs: ptr::null_mut(),
+            audio_inputs_count: 0,
+            audio_outputs_count: 0,
+            in_events: ptr::null(),
+            out_events: ptr::null(),
+        }
+    }
+
+    struct LifecyclePanicProcessor;
+
+    impl Drop for LifecyclePanicProcessor {
+        fn drop(&mut self) {
+            LIFECYCLE_PROCESSOR_DROPS.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl AudioProcessor for LifecyclePanicProcessor {
+        fn start_processing(&mut self) -> bool {
+            panic_at(PANIC_START);
+            true
+        }
+
+        fn stop_processing(&mut self) {
+            panic_at(PANIC_STOP);
+        }
+
+        fn reset(&mut self) {
+            panic_at(PANIC_RESET);
+        }
+
+        fn process(&mut self, _process: ProcessContext) -> clap_process_status {
+            LIFECYCLE_PROCESS_CALLS.fetch_add(1, Ordering::SeqCst);
+            panic_at(PANIC_PROCESS);
+            CLAP_PROCESS_CONTINUE
+        }
+
+        fn set_parameter(&mut self, _id: u32, _value: f64) {}
+    }
+
+    struct LifecyclePanicPlugin;
+
+    impl Drop for LifecyclePanicPlugin {
+        fn drop(&mut self) {
+            LIFECYCLE_PLUGIN_DROPS.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl Plugin for LifecyclePanicPlugin {
+        type AudioProcessor = LifecyclePanicProcessor;
+
+        fn new(_host: crate::plugin::HostHandle) -> Self {
+            Self
+        }
+
+        fn activate(
+            &mut self,
+            _sample_rate: f64,
+            _min_frames: u32,
+            _max_frames: u32,
+        ) -> Option<Self::AudioProcessor> {
+            LIFECYCLE_ACTIVATIONS.fetch_add(1, Ordering::SeqCst);
+            Some(LifecyclePanicProcessor)
+        }
+
+        fn deactivate(&mut self, _processor: Self::AudioProcessor) {
+            LIFECYCLE_DEACTIVATIONS.fetch_add(1, Ordering::SeqCst);
+            panic_at(PANIC_DEACTIVATE);
+        }
+
+        fn get_parameter(&self, _id: u32) -> f64 {
+            0.0
+        }
+
+        fn set_parameter(&mut self, _id: u32, _value: f64) {}
+    }
+
+    #[test]
+    fn audio_callback_panics_poison_until_successful_deactivation() {
+        let _lock = LIFECYCLE_PANIC_LOCK.lock().unwrap();
+        let process = empty_process();
+
+        for stage in [PANIC_START, PANIC_STOP, PANIC_RESET, PANIC_PROCESS] {
+            reset_lifecycle_counters(stage);
+            let plugin = unsafe {
+                PluginEntry::create_plugin::<LifecyclePanicPlugin>(ptr::null(), ptr::null())
+            };
+            assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
+            assert!(unsafe { ((*plugin).activate.unwrap())(plugin, 48_000.0, 0, 1) });
+
+            match stage {
+                PANIC_START => {
+                    assert!(!unsafe { ((*plugin).start_processing.unwrap())(plugin) });
+                    assert!(!unsafe { ((*plugin).start_processing.unwrap())(plugin) });
+                }
+                PANIC_STOP => unsafe {
+                    assert!(((*plugin).start_processing.unwrap())(plugin));
+                    ((*plugin).stop_processing.unwrap())(plugin);
+                    ((*plugin).stop_processing.unwrap())(plugin);
+                },
+                PANIC_RESET => unsafe {
+                    ((*plugin).reset.unwrap())(plugin);
+                    ((*plugin).reset.unwrap())(plugin);
+                },
+                PANIC_PROCESS => {
+                    assert_eq!(
+                        unsafe { ((*plugin).process.unwrap())(plugin, &process) },
+                        CLAP_PROCESS_ERROR
+                    );
+                }
+                _ => unreachable!(),
+            }
+
+            assert_eq!(LIFECYCLE_PANIC_CALLBACKS.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                unsafe { ((*plugin).process.unwrap())(plugin, &process) },
+                CLAP_PROCESS_ERROR
+            );
+            assert_eq!(
+                LIFECYCLE_PROCESS_CALLS.load(Ordering::SeqCst),
+                usize::from(stage == PANIC_PROCESS)
+            );
+            assert!(!unsafe { ((*plugin).activate.unwrap())(plugin, 48_000.0, 0, 1) });
+
+            LIFECYCLE_PANIC_STAGE.store(PANIC_NONE, Ordering::SeqCst);
+            unsafe { ((*plugin).deactivate.unwrap())(plugin) };
+            assert_eq!(LIFECYCLE_DEACTIVATIONS.load(Ordering::SeqCst), 1);
+            assert!(unsafe { ((*plugin).activate.unwrap())(plugin, 48_000.0, 0, 1) });
+            unsafe { ((*plugin).deactivate.unwrap())(plugin) };
+            unsafe { ((*plugin).destroy.unwrap())(plugin) };
+
+            assert_eq!(LIFECYCLE_ACTIVATIONS.load(Ordering::SeqCst), 2);
+            assert_eq!(LIFECYCLE_DEACTIVATIONS.load(Ordering::SeqCst), 2);
+            assert_eq!(LIFECYCLE_PROCESSOR_DROPS.load(Ordering::SeqCst), 2);
+            assert_eq!(LIFECYCLE_PLUGIN_DROPS.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
+    fn deactivation_panic_keeps_instance_poisoned_until_destroy() {
+        let _lock = LIFECYCLE_PANIC_LOCK.lock().unwrap();
+        reset_lifecycle_counters(PANIC_DEACTIVATE);
+        let process = empty_process();
+        let plugin =
+            unsafe { PluginEntry::create_plugin::<LifecyclePanicPlugin>(ptr::null(), ptr::null()) };
+        assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
+        assert!(unsafe { ((*plugin).activate.unwrap())(plugin, 48_000.0, 0, 1) });
+
+        unsafe { ((*plugin).deactivate.unwrap())(plugin) };
+        assert_eq!(LIFECYCLE_PANIC_CALLBACKS.load(Ordering::SeqCst), 1);
+        assert_eq!(LIFECYCLE_DEACTIVATIONS.load(Ordering::SeqCst), 1);
+        assert_eq!(LIFECYCLE_PROCESSOR_DROPS.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            unsafe { ((*plugin).process.unwrap())(plugin, &process) },
+            CLAP_PROCESS_ERROR
+        );
+        assert!(!unsafe { ((*plugin).activate.unwrap())(plugin, 48_000.0, 0, 1) });
+
+        // A duplicate host callback has no processor to hand back and must not
+        // silently clear poison left by the failed deactivation.
+        LIFECYCLE_PANIC_STAGE.store(PANIC_NONE, Ordering::SeqCst);
+        unsafe { ((*plugin).deactivate.unwrap())(plugin) };
+        assert_eq!(LIFECYCLE_DEACTIVATIONS.load(Ordering::SeqCst), 1);
+        assert!(!unsafe { ((*plugin).activate.unwrap())(plugin, 48_000.0, 0, 1) });
+
+        unsafe { ((*plugin).destroy.unwrap())(plugin) };
+        assert_eq!(LIFECYCLE_ACTIVATIONS.load(Ordering::SeqCst), 1);
+        assert_eq!(LIFECYCLE_PROCESSOR_DROPS.load(Ordering::SeqCst), 1);
+        assert_eq!(LIFECYCLE_PLUGIN_DROPS.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn init_failure_rolls_back_extension_tables_for_plain_and_gui_plugins() {
+        let plugin =
+            unsafe { PluginEntry::create_plugin::<PanickingInitPlugin>(ptr::null(), ptr::null()) };
+        assert!(!unsafe { ((*plugin).init.unwrap())(plugin) });
+        assert!(
+            unsafe { ((*plugin).get_extension.unwrap())(plugin, CLAP_EXT_STATE.as_ptr().cast()) }
+                .is_null()
+        );
+        assert!(
+            unsafe { ((*plugin).get_extension.unwrap())(plugin, CLAP_EXT_TAIL.as_ptr().cast()) }
+                .is_null()
+        );
+        unsafe { ((*plugin).destroy.unwrap())(plugin) };
+
+        let plugin = unsafe {
+            PluginEntryWithGui::create_plugin::<PanickingInitPlugin>(ptr::null(), ptr::null())
+        };
+        assert!(!unsafe { ((*plugin).init.unwrap())(plugin) });
+        assert!(
+            unsafe { ((*plugin).get_extension.unwrap())(plugin, CLAP_EXT_STATE.as_ptr().cast()) }
+                .is_null()
+        );
+        assert!(
+            unsafe { ((*plugin).get_extension.unwrap())(plugin, CLAP_EXT_TAIL.as_ptr().cast()) }
+                .is_null()
+        );
+        assert!(
+            unsafe { ((*plugin).get_extension.unwrap())(plugin, CLAP_EXT_GUI.as_ptr().cast()) }
+                .is_null()
+        );
+        unsafe { ((*plugin).destroy.unwrap())(plugin) };
+    }
+
+    static POST_ACTIVATION_TAIL_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static POST_ACTIVATION_DEACTIVATIONS: AtomicUsize = AtomicUsize::new(0);
+
+    struct TailPanicProcessor;
+
+    impl AudioProcessor for TailPanicProcessor {
+        fn process(&mut self, _process: ProcessContext) -> clap_process_status {
+            CLAP_PROCESS_CONTINUE
+        }
+
+        fn set_parameter(&mut self, _id: u32, _value: f64) {}
+    }
+
+    struct PanickingPostActivationTailPlugin;
+
+    impl Plugin for PanickingPostActivationTailPlugin {
+        type AudioProcessor = TailPanicProcessor;
+
+        fn new(_host: crate::plugin::HostHandle) -> Self {
+            Self
+        }
+
+        fn activate(
+            &mut self,
+            _sample_rate: f64,
+            _min_frames: u32,
+            _max_frames: u32,
+        ) -> Option<Self::AudioProcessor> {
+            Some(TailPanicProcessor)
+        }
+
+        fn deactivate(&mut self, _processor: Self::AudioProcessor) {
+            POST_ACTIVATION_DEACTIVATIONS.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn get_parameter(&self, _id: u32) -> f64 {
+            0.0
+        }
+
+        fn set_parameter(&mut self, _id: u32, _value: f64) {}
+
+        fn tail(&self) -> u32 {
+            let call = POST_ACTIVATION_TAIL_CALLS.fetch_add(1, Ordering::SeqCst) + 1;
+            if call == 3 {
+                panic!("intentional post-activation tail panic");
+            }
+            0
+        }
+    }
+
+    #[test]
+    fn activation_tail_panic_rolls_back_processor_and_allows_retry() {
+        POST_ACTIVATION_TAIL_CALLS.store(0, Ordering::SeqCst);
+        POST_ACTIVATION_DEACTIVATIONS.store(0, Ordering::SeqCst);
+
+        let plugin = unsafe {
+            PluginEntry::create_plugin::<PanickingPostActivationTailPlugin>(
+                ptr::null(),
+                ptr::null(),
+            )
+        };
+        assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
+        assert!(!unsafe { ((*plugin).activate.unwrap())(plugin, 48_000.0, 1, 64) });
+        assert_eq!(POST_ACTIVATION_DEACTIVATIONS.load(Ordering::SeqCst), 1);
+
+        assert!(unsafe { ((*plugin).activate.unwrap())(plugin, 48_000.0, 1, 64) });
+        unsafe { ((*plugin).deactivate.unwrap())(plugin) };
+        assert_eq!(POST_ACTIVATION_DEACTIVATIONS.load(Ordering::SeqCst), 2);
         unsafe { ((*plugin).destroy.unwrap())(plugin) };
     }
 }

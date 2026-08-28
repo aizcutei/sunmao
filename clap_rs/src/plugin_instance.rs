@@ -11,7 +11,7 @@ use crate::ext::state::{create_state_ext, create_state_ext_gui};
 use crate::ext::tail::{create_tail_ext, create_tail_ext_gui};
 use crate::ext::voice_info::{create_voice_info_ext, create_voice_info_ext_gui};
 use crate::plugin::{AudioProcessor, HostHandle, Plugin};
-use crate::process::ProcessBuffers;
+use crate::process::{MAX_PROCESS_FRAMES, ProcessBuffers};
 
 use clap_sys::ext::audio_ports::{CLAP_EXT_AUDIO_PORTS, clap_plugin_audio_ports_t};
 use clap_sys::ext::gui::clap_plugin_gui_t;
@@ -29,15 +29,34 @@ use std::ffi::{CStr, c_char, c_void};
 use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+/// Execute a Rust callback behind a C ABI boundary.
+///
+/// Rust cannot unwind through an `extern "C"` frame.  A panic from user plugin
+/// code would therefore abort the host (or, on older runtimes, invoke
+/// undefined behaviour).  Every lifecycle/process entry point uses this small
+/// guard and translates a panic to the ABI's failure value.
+#[inline]
+pub(crate) fn ffi_guard<T>(fallback: T, callback: impl FnOnce() -> T) -> T {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback)).unwrap_or(fallback)
+}
+
 struct AudioThreadState<A: AudioProcessor> {
     processor: Option<A>,
     process_buffers: ProcessBuffers,
+    /// A realtime panic poisons the active processor until its matching
+    /// deactivation completes. If deactivation itself panics, only `destroy`
+    /// may reclaim the instance afterwards.
+    poisoned: bool,
 }
 
 /// Plugin instance wrapper holding plugin data and extension caches
 pub struct PluginInstance<P: Plugin> {
     controller: UnsafeCell<P>,
     pub(crate) host: HostHandle,
+    /// CLAP calls `init` once in the normal lifecycle. Keep an explicit bit so
+    /// a defensive repeated callback does not rebuild and leak extension
+    /// tables or invoke user initialization twice.
+    initialized: bool,
     // Caches
     pub params_cache: Vec<ParameterInfo>,
     pub audio_ports_cache: Vec<AudioPortInfo>,
@@ -67,6 +86,7 @@ impl<P: Plugin> PluginInstance<P> {
         Self {
             controller: UnsafeCell::new(controller),
             host,
+            initialized: false,
             params_cache,
             audio_ports_cache,
             note_ports_cache,
@@ -74,6 +94,7 @@ impl<P: Plugin> PluginInstance<P> {
             audio_thread: UnsafeCell::new(AudioThreadState {
                 processor: None,
                 process_buffers,
+                poisoned: false,
             }),
             audio_ports_ext: None,
             note_ports_ext: None,
@@ -145,6 +166,71 @@ impl<P: Plugin> PluginInstance<P> {
     }
 }
 
+/// Return the plugin-data pointer after validating the two ABI-owned pointer
+/// levels. Individual callbacks still decide whether a missing instance is a
+/// failure (`false`/`CLAP_PROCESS_ERROR`) or an empty no-op.
+pub(crate) unsafe fn instance_ptr<P: Plugin>(
+    plugin: *const clap_plugin_t,
+) -> Option<*mut PluginInstance<P>> {
+    if plugin.is_null() {
+        return None;
+    }
+    let plugin_data = unsafe { (*plugin).plugin_data };
+    (!plugin_data.is_null()).then_some(plugin_data.cast::<PluginInstance<P>>())
+}
+
+/// Disable audio callbacks after user code panics.
+///
+/// # Safety
+///
+/// The caller must be in a serialized CLAP lifecycle/process callback for
+/// `plugin`. The plugin pointer must remain alive for the callback duration.
+unsafe fn poison_audio_thread<P: Plugin>(plugin: *const clap_plugin_t) {
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return;
+    };
+    let instance = unsafe { &*instance_ptr };
+    unsafe { instance.audio_thread_mut() }.poisoned = true;
+}
+
+impl<P: Plugin> PluginInstance<P> {
+    /// Release extension tables that were allocated by `init`.
+    ///
+    /// # Safety
+    ///
+    /// Each stored pointer must have been allocated by the corresponding
+    /// `create_*_ext` function and must not be accessed after this call.
+    unsafe fn clear_extensions(&mut self) {
+        if let Some(ptr) = self.audio_ports_ext.take() {
+            unsafe { drop(Box::from_raw(ptr as *mut clap_plugin_audio_ports_t)) };
+        }
+        if let Some(ptr) = self.note_ports_ext.take() {
+            unsafe { drop(Box::from_raw(ptr as *mut clap_plugin_note_ports_t)) };
+        }
+        if let Some(ptr) = self.params_ext.take() {
+            unsafe { drop(Box::from_raw(ptr as *mut clap_plugin_params_t)) };
+        }
+        if let Some(ptr) = self.state_ext.take() {
+            unsafe { drop(Box::from_raw(ptr as *mut clap_plugin_state_t)) };
+        }
+        if let Some(ptr) = self.latency_ext.take() {
+            unsafe { drop(Box::from_raw(ptr as *mut clap_plugin_latency_t)) };
+        }
+        if let Some(ptr) = self.tail_ext.take() {
+            unsafe { drop(Box::from_raw(ptr as *mut clap_plugin_tail_t)) };
+        }
+        if let Some(ptr) = self.voice_info_ext.take() {
+            unsafe { drop(Box::from_raw(ptr as *mut clap_plugin_voice_info_t)) };
+        }
+        if let Some(ptr) = self.render_ext.take() {
+            unsafe { drop(Box::from_raw(ptr as *mut clap_plugin_render_t)) };
+        }
+        if let Some(ptr) = self.gui_ext.take() {
+            unsafe { drop(Box::from_raw(ptr as *mut clap_plugin_gui_t)) };
+        }
+    }
+}
+
 /// GUI and non-GUI plugins use the same storage layout. Only their exported
 /// callback tables and initialized extensions differ.
 pub type PluginInstanceWithGui<P> = PluginInstance<P>;
@@ -167,7 +253,38 @@ fn process_buffers_for(audio_ports: &[AudioPortInfo]) -> ProcessBuffers {
 // ======= LIFECYCLE CALLBACKS =======
 
 pub unsafe extern "C" fn plugin_init<P: Plugin>(plugin: *const clap_plugin_t) -> bool {
-    let instance = unsafe { &mut *((*plugin).plugin_data as *mut PluginInstance<P>) };
+    let initialized = ffi_guard(false, || unsafe { plugin_init_unchecked::<P>(plugin) });
+    if !initialized {
+        rollback_init::<P>(plugin);
+    }
+    initialized
+}
+
+/// Reclaim any extension tables published while an initialization attempt was
+/// in progress. `init` is a transactional ABI callback: a failed attempt must
+/// not leave `get_extension` exposing half-built tables to the host.
+fn rollback_init<P: Plugin>(plugin: *const clap_plugin_t) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let Some(instance_ptr) = instance_ptr::<P>(plugin) else {
+            return;
+        };
+        let instance = &mut *instance_ptr;
+        instance.initialized = false;
+        instance.clear_extensions();
+    }));
+}
+
+unsafe fn plugin_init_unchecked<P: Plugin>(plugin: *const clap_plugin_t) -> bool {
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &mut *instance_ptr };
+    if instance.initialized {
+        return true;
+    }
+    // A failed earlier attempt may have left partially-built tables. They are
+    // not visible to a valid host before init, so reclaim them before retrying.
+    unsafe { instance.clear_extensions() };
 
     // Initialize extension structs
     if !instance.audio_ports_cache.is_empty() {
@@ -208,65 +325,46 @@ pub unsafe extern "C" fn plugin_init<P: Plugin>(plugin: *const clap_plugin_t) ->
     instance.render_ext = Some(Box::into_raw(render_ext));
 
     let initialized = unsafe { instance.controller_mut() }.init();
-    unsafe { instance.refresh_tail_cache() };
+    if initialized {
+        unsafe { instance.refresh_tail_cache() };
+        instance.initialized = true;
+    } else {
+        unsafe { instance.clear_extensions() };
+    }
     initialized
 }
 
 pub unsafe extern "C" fn plugin_destroy<P: Plugin>(plugin: *const clap_plugin_t) {
+    ffi_guard((), || unsafe { plugin_destroy_unchecked::<P>(plugin) })
+}
+
+unsafe fn plugin_destroy_unchecked<P: Plugin>(plugin: *const clap_plugin_t) {
     if plugin.is_null() {
         return;
     }
 
     let plugin = unsafe { Box::from_raw(plugin as *mut clap_plugin_t) };
     if !plugin.plugin_data.is_null() {
-        let instance = unsafe { Box::from_raw(plugin.plugin_data as *mut PluginInstance<P>) };
-        // Clean up leaked extension structs
-        if let Some(ptr) = instance.audio_ports_ext {
-            unsafe {
-                let _ = Box::from_raw(ptr as *mut clap_plugin_audio_ports_t);
-            }
+        let mut instance = unsafe { Box::from_raw(plugin.plugin_data as *mut PluginInstance<P>) };
+        // A conforming host deactivates first, but reclaim an accidentally
+        // active processor here as well so user state is not leaked.
+        let processor = unsafe { instance.audio_thread_mut() }.processor.take();
+        unsafe { instance.audio_thread_mut() }
+            .process_buffers
+            .deactivate();
+        if let Some(processor) = processor {
+            // Destruction is best-effort: a faulty user deactivation must not
+            // skip extension reclamation or unwind through the host callback.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                instance.controller_mut().deactivate(processor);
+            }));
         }
-        if let Some(ptr) = instance.note_ports_ext {
-            unsafe {
-                let _ = Box::from_raw(ptr as *mut clap_plugin_note_ports_t);
-            }
-        }
-        if let Some(ptr) = instance.params_ext {
-            unsafe {
-                let _ = Box::from_raw(ptr as *mut clap_plugin_params_t);
-            }
-        }
-        if let Some(ptr) = instance.state_ext {
-            unsafe {
-                let _ = Box::from_raw(ptr as *mut clap_plugin_state_t);
-            }
-        }
-        if let Some(ptr) = instance.latency_ext {
-            unsafe {
-                let _ = Box::from_raw(ptr as *mut clap_plugin_latency_t);
-            }
-        }
-        if let Some(ptr) = instance.tail_ext {
-            unsafe {
-                let _ = Box::from_raw(ptr as *mut clap_plugin_tail_t);
-            }
-        }
-        if let Some(ptr) = instance.voice_info_ext {
-            unsafe {
-                let _ = Box::from_raw(ptr as *mut clap_plugin_voice_info_t);
-            }
-        }
-        if let Some(ptr) = instance.render_ext {
-            unsafe {
-                let _ = Box::from_raw(ptr as *mut clap_plugin_render_t);
-            }
-        }
-        if let Some(ptr) = instance.gui_ext {
-            unsafe {
-                let _ = Box::from_raw(ptr as *mut clap_plugin_gui_t);
-            }
-        }
-        // instance drops here, cleaning up P
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            instance.clear_extensions();
+        }));
+        // A plugin's destructor is user code too. Catch it while the Box is
+        // still owned so the raw callback remains non-unwinding.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(instance)));
     }
 }
 
@@ -276,9 +374,57 @@ pub unsafe extern "C" fn plugin_activate<P: Plugin>(
     min_frames: u32,
     max_frames: u32,
 ) -> bool {
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        plugin_activate_unchecked::<P>(plugin, sample_rate, min_frames, max_frames)
+    })) {
+        Ok(result) => result,
+        Err(_) => {
+            // `activate` allocates the scratch buffers before entering user
+            // code. A later callback (for example tail refresh) can also
+            // panic after activation returned a processor, so take it back
+            // and run the matching deactivation before reporting failure.
+            if let Some(instance_ptr) = unsafe { instance_ptr::<P>(plugin) } {
+                let instance = unsafe { &*instance_ptr };
+                let audio_thread = unsafe { instance.audio_thread_mut() };
+                let processor = audio_thread.processor.take();
+                audio_thread.process_buffers.deactivate();
+                audio_thread.poisoned = false;
+                if let Some(processor) = processor {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                        instance.controller_mut().deactivate(processor);
+                    }));
+                }
+            }
+            false
+        }
+    }
+}
+
+unsafe fn plugin_activate_unchecked<P: Plugin>(
+    plugin: *const clap_plugin_t,
+    sample_rate: f64,
+    min_frames: u32,
+    max_frames: u32,
+) -> bool {
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    if !sample_rate.is_finite()
+        || sample_rate <= 0.0
+        || min_frames > max_frames
+        || max_frames > MAX_PROCESS_FRAMES
+    {
+        return false;
+    }
+    let instance = unsafe { &*instance_ptr };
+    if !instance.initialized {
+        return false;
+    }
     let audio_thread = unsafe { instance.audio_thread_mut() };
-    if audio_thread.processor.is_some() || !audio_thread.process_buffers.activate(max_frames) {
+    if audio_thread.poisoned
+        || audio_thread.processor.is_some()
+        || !audio_thread.process_buffers.activate(max_frames)
+    {
         return false;
     }
     let Some(processor) =
@@ -287,40 +433,110 @@ pub unsafe extern "C" fn plugin_activate<P: Plugin>(
         audio_thread.process_buffers.deactivate();
         return false;
     };
-    unsafe { instance.refresh_tail_cache() };
     audio_thread.processor = Some(processor);
+    unsafe { instance.refresh_tail_cache() };
     true
 }
 
 pub unsafe extern "C" fn plugin_deactivate<P: Plugin>(plugin: *const clap_plugin_t) {
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        plugin_deactivate_unchecked::<P>(plugin)
+    }))
+    .is_err()
+    {
+        unsafe { poison_audio_thread::<P>(plugin) };
+    }
+}
+
+unsafe fn plugin_deactivate_unchecked<P: Plugin>(plugin: *const clap_plugin_t) {
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return;
+    };
+    let instance = unsafe { &*instance_ptr };
     let audio_thread = unsafe { instance.audio_thread_mut() };
     let processor = audio_thread.processor.take();
     audio_thread.process_buffers.deactivate();
     if let Some(processor) = processor {
         unsafe { instance.controller_mut() }.deactivate(processor);
         unsafe { instance.refresh_tail_cache() };
+        // Clear poison only after the matching processor was handed back and
+        // every serialized controller transition completed. A deactivation
+        // panic leaves no processor for a later callback to recover with.
+        audio_thread.poisoned = false;
     }
 }
 
 pub unsafe extern "C" fn plugin_start_processing<P: Plugin>(plugin: *const clap_plugin_t) -> bool {
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
-    unsafe { instance.audio_thread_mut() }
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        plugin_start_processing_unchecked::<P>(plugin)
+    })) {
+        Ok(started) => started,
+        Err(_) => {
+            unsafe { poison_audio_thread::<P>(plugin) };
+            false
+        }
+    }
+}
+
+unsafe fn plugin_start_processing_unchecked<P: Plugin>(plugin: *const clap_plugin_t) -> bool {
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
+    let audio_thread = unsafe { instance.audio_thread_mut() };
+    if audio_thread.poisoned {
+        return false;
+    }
+    audio_thread
         .processor
         .as_mut()
         .is_some_and(AudioProcessor::start_processing)
 }
 
 pub unsafe extern "C" fn plugin_stop_processing<P: Plugin>(plugin: *const clap_plugin_t) {
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
-    if let Some(processor) = unsafe { instance.audio_thread_mut() }.processor.as_mut() {
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        plugin_stop_processing_unchecked::<P>(plugin)
+    }))
+    .is_err()
+    {
+        unsafe { poison_audio_thread::<P>(plugin) };
+    }
+}
+
+unsafe fn plugin_stop_processing_unchecked<P: Plugin>(plugin: *const clap_plugin_t) {
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return;
+    };
+    let instance = unsafe { &*instance_ptr };
+    let audio_thread = unsafe { instance.audio_thread_mut() };
+    if audio_thread.poisoned {
+        return;
+    }
+    if let Some(processor) = audio_thread.processor.as_mut() {
         processor.stop_processing();
     }
 }
 
 pub unsafe extern "C" fn plugin_reset<P: Plugin>(plugin: *const clap_plugin_t) {
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
-    if let Some(processor) = unsafe { instance.audio_thread_mut() }.processor.as_mut() {
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        plugin_reset_unchecked::<P>(plugin)
+    }))
+    .is_err()
+    {
+        unsafe { poison_audio_thread::<P>(plugin) };
+    }
+}
+
+unsafe fn plugin_reset_unchecked<P: Plugin>(plugin: *const clap_plugin_t) {
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return;
+    };
+    let instance = unsafe { &*instance_ptr };
+    let audio_thread = unsafe { instance.audio_thread_mut() };
+    if audio_thread.poisoned {
+        return;
+    }
+    if let Some(processor) = audio_thread.processor.as_mut() {
         processor.reset();
     }
 }
@@ -329,11 +545,34 @@ pub unsafe extern "C" fn plugin_process<P: Plugin>(
     plugin: *const clap_plugin_t,
     process: *const clap_process_t,
 ) -> clap_process_status {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        plugin_process_unchecked::<P>(plugin, process)
+    })) {
+        Ok(status) => status,
+        Err(_) => {
+            // Keep the processor available for the required deactivate call,
+            // but do not invoke a potentially poisoned state again.
+            unsafe { poison_audio_thread::<P>(plugin) };
+            CLAP_PROCESS_ERROR
+        }
+    }
+}
+
+unsafe fn plugin_process_unchecked<P: Plugin>(
+    plugin: *const clap_plugin_t,
+    process: *const clap_process_t,
+) -> clap_process_status {
     if plugin.is_null() || process.is_null() {
         return CLAP_PROCESS_ERROR;
     }
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return CLAP_PROCESS_ERROR;
+    };
+    let instance = unsafe { &*instance_ptr };
     let audio_thread = unsafe { instance.audio_thread_mut() };
+    if audio_thread.poisoned {
+        return CLAP_PROCESS_ERROR;
+    }
     let Some(processor) = audio_thread.processor.as_mut() else {
         return CLAP_PROCESS_ERROR;
     };
@@ -355,7 +594,10 @@ pub unsafe extern "C" fn plugin_get_extension<P: Plugin>(
         return ptr::null();
     }
     let id_cstr = unsafe { CStr::from_ptr(id) };
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return ptr::null();
+    };
+    let instance = unsafe { &*instance_ptr };
 
     if id_cstr.to_bytes_with_nul() == CLAP_EXT_AUDIO_PORTS.as_bytes() {
         if let Some(ptr) = instance.audio_ports_ext {
@@ -418,7 +660,26 @@ use clap_sys::ext::gui::CLAP_EXT_GUI;
 pub unsafe extern "C" fn plugin_init_with_gui<P: Plugin + GuiHandler>(
     plugin: *const clap_plugin_t,
 ) -> bool {
-    let instance = unsafe { &mut *((*plugin).plugin_data as *mut PluginInstanceWithGui<P>) };
+    let initialized = ffi_guard(false, || unsafe {
+        plugin_init_with_gui_unchecked::<P>(plugin)
+    });
+    if !initialized {
+        rollback_init::<P>(plugin);
+    }
+    initialized
+}
+
+unsafe fn plugin_init_with_gui_unchecked<P: Plugin + GuiHandler>(
+    plugin: *const clap_plugin_t,
+) -> bool {
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &mut *instance_ptr };
+    if instance.initialized {
+        return true;
+    }
+    unsafe { instance.clear_extensions() };
 
     // Initialize extension structs (use _gui versions for proper type casts)
     if !instance.audio_ports_cache.is_empty() {
@@ -463,7 +724,12 @@ pub unsafe extern "C" fn plugin_init_with_gui<P: Plugin + GuiHandler>(
     instance.gui_ext = Some(Box::into_raw(gui_ext));
 
     let initialized = unsafe { instance.controller_mut() }.init();
-    unsafe { instance.refresh_tail_cache() };
+    if initialized {
+        unsafe { instance.refresh_tail_cache() };
+        instance.initialized = true;
+    } else {
+        unsafe { instance.clear_extensions() };
+    }
     initialized
 }
 
@@ -521,7 +787,10 @@ pub unsafe extern "C" fn plugin_get_extension_with_gui<P: Plugin + GuiHandler>(
         return ptr::null();
     }
     let id_cstr = unsafe { CStr::from_ptr(id) };
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return ptr::null();
+    };
+    let instance = unsafe { &*instance_ptr };
 
     // GUI extension first!
     if id_cstr.to_bytes_with_nul() == CLAP_EXT_GUI.as_bytes() {

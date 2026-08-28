@@ -11,6 +11,30 @@ use std::marker::PhantomData;
 use std::ops::{Index, IndexMut};
 use std::slice;
 
+/// Largest host-negotiated processing block accepted by the CLAP adapter.
+///
+/// CLAP exposes the block bound as a `u32`, but accepting an arbitrary host
+/// value would let a malformed host request an unbounded activation-time
+/// allocation. One million frames is substantially above normal DAW block
+/// sizes while keeping the adapter's memory contract explicit and portable.
+pub const MAX_PROCESS_FRAMES: u32 = 1 << 20;
+
+/// Largest channel topology accepted by the format adapter.
+///
+/// The value is deliberately shared by the activation scratch allocator and
+/// the raw-buffer validator.  A host must not be able to turn a valid frame
+/// count into an unbounded number of per-channel allocations.
+pub const MAX_PROCESS_CHANNELS: usize = 256;
+
+/// Maximum number of f32 samples reserved for one input or output direction.
+///
+/// This is a count of samples, rather than bytes, so the contract is stable
+/// across the f32/f64 host buffer representations supported by CLAP.
+pub const MAX_PROCESS_AUDIO_SAMPLES: usize = 16 << 20;
+
+/// Maximum number of events traversed or retained for one processing block.
+pub const MAX_PROCESS_EVENTS: usize = 1 << 16;
+
 pub struct ProcessContext<'a> {
     pub frames_count: u32,
     pub audio_inputs: AudioInputs<'a>,
@@ -197,7 +221,10 @@ impl<'a> ProcessContext<'a> {
             unsafe {
                 let events = &*self.input_events;
                 match (events.size, events.get) {
-                    (Some(size), Some(_)) => Some(size(self.input_events)),
+                    (Some(size), Some(_)) => {
+                        let count = size(self.input_events);
+                        (count as usize <= MAX_PROCESS_EVENTS).then_some(count)
+                    }
                     _ => None,
                 }
             }
@@ -240,6 +267,9 @@ impl ProcessBuffers {
     }
 
     pub(crate) fn activate(&mut self, max_frames: u32) -> bool {
+        if max_frames > MAX_PROCESS_FRAMES {
+            return false;
+        }
         let max_frames = max_frames as usize;
         let Some(input_channels) = allocate_channels(&self.input_bus_channels, max_frames) else {
             return false;
@@ -286,6 +316,7 @@ impl ProcessBuffers {
                 process.audio_inputs,
                 process.audio_inputs_count,
                 &self.input_bus_channels,
+                frames_count,
             )?
         };
         let output_buses = unsafe {
@@ -293,6 +324,7 @@ impl ProcessBuffers {
                 process.audio_outputs.cast_const(),
                 process.audio_outputs_count,
                 &self.output_bus_channels,
+                frames_count,
             )?
         };
 
@@ -320,6 +352,13 @@ fn allocate_channels(bus_channels: &[u32], max_frames: usize) -> Option<Vec<Vec<
     let channel_count = bus_channels
         .iter()
         .try_fold(0usize, |total, &count| total.checked_add(count as usize))?;
+    if channel_count > MAX_PROCESS_CHANNELS
+        || channel_count
+            .checked_mul(max_frames)
+            .is_none_or(|samples| samples > MAX_PROCESS_AUDIO_SAMPLES)
+    {
+        return None;
+    }
     let mut channels = Vec::new();
     channels.try_reserve_exact(channel_count).ok()?;
     for _ in 0..channel_count {
@@ -333,11 +372,22 @@ fn allocate_channels(bus_channels: &[u32], max_frames: usize) -> Option<Vec<Vec<
 
 #[derive(Clone, Copy)]
 enum SampleData {
+    /// A bus with no channels has no channel-pointer array. CLAP permits both
+    /// data pointers to be null in this case.
+    Empty,
     F32(*mut *mut f32),
     F64(*mut *mut f64),
 }
 
 fn sample_data(buffer: &clap_audio_buffer_t) -> Result<SampleData, ()> {
+    if buffer.channel_count == 0 {
+        return match (buffer.data32.is_null(), buffer.data64.is_null()) {
+            // Hosts commonly omit storage for empty buses, while the CLAP
+            // audio-buffer contract also permits advertising one sample type.
+            (true, true) | (false, true) | (true, false) => Ok(SampleData::Empty),
+            (false, false) => Err(()),
+        };
+    }
     match (buffer.data32.is_null(), buffer.data64.is_null()) {
         (false, true) => Ok(SampleData::F32(buffer.data32)),
         (true, false) => Ok(SampleData::F64(buffer.data64)),
@@ -349,6 +399,7 @@ unsafe fn validate_buses<'a>(
     buses: *const clap_audio_buffer_t,
     bus_count: u32,
     expected_channels: &[u32],
+    frames_count: usize,
 ) -> Result<&'a [clap_audio_buffer_t], ()> {
     if bus_count as usize != expected_channels.len() {
         return Err(());
@@ -366,17 +417,22 @@ unsafe fn validate_buses<'a>(
             return Err(());
         }
         match sample_data(bus)? {
+            SampleData::Empty => {}
             SampleData::F32(channels) => {
-                for index in 0..channel_count as usize {
-                    if unsafe { (*channels.add(index)).is_null() } {
-                        return Err(());
+                if frames_count > 0 {
+                    for index in 0..channel_count as usize {
+                        if unsafe { (*channels.add(index)).is_null() } {
+                            return Err(());
+                        }
                     }
                 }
             }
             SampleData::F64(channels) => {
-                for index in 0..channel_count as usize {
-                    if unsafe { (*channels.add(index)).is_null() } {
-                        return Err(());
+                if frames_count > 0 {
+                    for index in 0..channel_count as usize {
+                        if unsafe { (*channels.add(index)).is_null() } {
+                            return Err(());
+                        }
                     }
                 }
             }
@@ -390,9 +446,13 @@ unsafe fn copy_inputs(
     scratch: &mut [Vec<f32>],
     frames_count: usize,
 ) {
+    if frames_count == 0 {
+        return;
+    }
     let mut scratch = scratch.iter_mut();
     for bus in buses {
         match sample_data(bus).expect("validated input buffer") {
+            SampleData::Empty => {}
             SampleData::F32(channels) => {
                 for index in 0..bus.channel_count as usize {
                     let source =
@@ -417,9 +477,13 @@ unsafe fn copy_inputs(
 }
 
 unsafe fn copy_outputs(buses: &[clap_audio_buffer_t], scratch: &[Vec<f32>], frames_count: usize) {
+    if frames_count == 0 {
+        return;
+    }
     let mut scratch = scratch.iter();
     for bus in buses {
         match sample_data(bus).expect("validated output buffer") {
+            SampleData::Empty => {}
             SampleData::F32(channels) => {
                 for index in 0..bus.channel_count as usize {
                     let destination =
@@ -451,7 +515,11 @@ pub struct Transport {
 impl Transport {
     pub fn tempo(&self) -> Option<f64> {
         if (self.raw.flags & CLAP_TRANSPORT_HAS_TEMPO) != 0 {
-            Some(self.raw.tempo)
+            self.raw
+                .tempo
+                .is_finite()
+                .then_some(self.raw.tempo)
+                .filter(|tempo| *tempo >= 0.0)
         } else {
             None
         }
@@ -463,7 +531,8 @@ impl Transport {
 
     pub fn song_pos_seconds(&self) -> Option<f64> {
         if (self.raw.flags & CLAP_TRANSPORT_HAS_SECONDS_TIMELINE) != 0 {
-            Some(fixed_to_f64(self.raw.song_pos_seconds, CLAP_SECTIME_FACTOR))
+            let value = fixed_to_f64(self.raw.song_pos_seconds, CLAP_SECTIME_FACTOR);
+            value.is_finite().then_some(value)
         } else {
             None
         }
@@ -471,7 +540,8 @@ impl Transport {
 
     pub fn song_pos_beats(&self) -> Option<f64> {
         if (self.raw.flags & CLAP_TRANSPORT_HAS_BEATS_TIMELINE) != 0 {
-            Some(fixed_to_f64(self.raw.song_pos_beats, CLAP_BEATTIME_FACTOR))
+            let value = fixed_to_f64(self.raw.song_pos_beats, CLAP_BEATTIME_FACTOR);
+            value.is_finite().then_some(value)
         } else {
             None
         }
@@ -706,5 +776,87 @@ mod tests {
         assert_eq!(status, CLAP_PROCESS_ERROR);
         assert!(!called);
         assert_eq!(output, [7.0, 7.0]);
+    }
+
+    #[test]
+    fn zero_channel_buses_may_omit_channel_storage() {
+        let inputs = [clap_audio_buffer_t {
+            data32: ptr::null_mut(),
+            data64: ptr::null_mut(),
+            channel_count: 0,
+            latency: 0,
+            constant_mask: 0,
+        }];
+        let mut outputs = inputs;
+        let process = process(4, &inputs, &mut outputs);
+        let mut buffers = ProcessBuffers::new(vec![0], vec![0]);
+        assert!(buffers.activate(4));
+
+        let status = unsafe {
+            buffers.process(&process, |context| {
+                assert!(context.audio_inputs.is_empty());
+                assert!(context.audio_outputs.is_empty());
+                CLAP_PROCESS_CONTINUE
+            })
+        };
+        assert_eq!(status, Ok(CLAP_PROCESS_CONTINUE));
+    }
+
+    #[test]
+    fn zero_frame_blocks_do_not_dereference_channel_pointers() {
+        let mut input_channels = [ptr::null_mut()];
+        let inputs = [audio_buffer_f32(&mut input_channels)];
+        let mut output_channels = [ptr::null_mut()];
+        let mut outputs = [audio_buffer_f32(&mut output_channels)];
+        let process = process(0, &inputs, &mut outputs);
+        let mut buffers = ProcessBuffers::new(vec![1], vec![1]);
+        assert!(buffers.activate(8));
+
+        let status = unsafe {
+            buffers.process(&process, |context| {
+                assert!(context.audio_inputs[0].is_empty());
+                assert!(context.audio_outputs[0].is_empty());
+                CLAP_PROCESS_CONTINUE
+            })
+        };
+        assert_eq!(status, Ok(CLAP_PROCESS_CONTINUE));
+    }
+
+    #[test]
+    fn zero_channel_buses_may_advertise_a_sample_format() {
+        let mut no_input_channels: [*mut f32; 0] = [];
+        let inputs = [audio_buffer_f32(&mut no_input_channels)];
+        let mut no_output_channels: [*mut f32; 0] = [];
+        let mut outputs = [audio_buffer_f32(&mut no_output_channels)];
+        let process = process(1, &inputs, &mut outputs);
+        let mut buffers = ProcessBuffers::new(vec![0], vec![0]);
+        assert!(buffers.activate(1));
+
+        let status = unsafe { buffers.process(&process, |_| CLAP_PROCESS_CONTINUE) };
+        assert_eq!(status, Ok(CLAP_PROCESS_CONTINUE));
+    }
+
+    #[test]
+    fn activation_rejects_oversized_host_block_before_allocation() {
+        let mut buffers = ProcessBuffers::new(Vec::new(), Vec::new());
+        assert!(buffers.activate(MAX_PROCESS_FRAMES));
+        buffers.deactivate();
+        assert!(!buffers.activate(MAX_PROCESS_FRAMES + 1));
+        assert!(!buffers.active);
+    }
+
+    #[test]
+    fn activation_rejects_oversized_channel_and_sample_budgets_before_allocation() {
+        let mut too_many_channels =
+            ProcessBuffers::new(vec![MAX_PROCESS_CHANNELS as u32 + 1], Vec::new());
+        assert!(!too_many_channels.activate(1));
+        assert!(!too_many_channels.active);
+
+        let channels_over_sample_budget =
+            (MAX_PROCESS_AUDIO_SAMPLES / MAX_PROCESS_FRAMES as usize + 1) as u32;
+        let mut too_many_samples =
+            ProcessBuffers::new(Vec::new(), vec![channels_over_sample_budget]);
+        assert!(!too_many_samples.activate(MAX_PROCESS_FRAMES));
+        assert!(!too_many_samples.active);
     }
 }

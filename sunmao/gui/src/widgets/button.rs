@@ -23,6 +23,7 @@ pub struct Button {
     label: String,
     is_on: bool,
     button_type: ButtonType,
+    clicked: Option<Box<dyn Fn(bool) + Send>>,
     // Visual settings
     pub off_color: Color,
     pub on_color: Color,
@@ -40,6 +41,7 @@ impl Button {
             label: label.to_string(),
             is_on: false,
             button_type: ButtonType::Momentary,
+            clicked: None,
             off_color: Color::rgb(0.25, 0.25, 0.28),
             on_color: Color::ACCENT,
             text_color: Color::FOREGROUND,
@@ -67,6 +69,29 @@ impl Button {
     pub fn set_on(&mut self, on: bool) {
         self.is_on = on;
     }
+
+    pub fn set_disabled(&mut self, disabled: bool) {
+        self.state.disabled = disabled;
+        if disabled {
+            self.state.pressed = false;
+        }
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        self.state.disabled
+    }
+
+    /// Register a callback invoked after the button's logical state changes.
+    /// The callback receives the new `is_on` value.
+    pub fn on_click(&mut self, callback: Box<dyn Fn(bool) + Send>) {
+        self.clicked = Some(callback);
+    }
+
+    fn notify_click(&self) {
+        if let Some(callback) = self.clicked.as_ref() {
+            callback(self.is_on);
+        }
+    }
 }
 
 impl Widget for Button {
@@ -79,15 +104,24 @@ impl Widget for Button {
     fn set_bounds(&mut self, bounds: Rect) {
         self.bounds = bounds;
     }
+    fn set_focused(&mut self, focused: bool) {
+        self.state.focused = focused;
+    }
     fn state(&self) -> WidgetState {
         self.state
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
+        if self.state.disabled {
+            self.state.hovered = false;
+            self.state.pressed = false;
+            return false;
+        }
         match event {
             Event::MouseMove { x, y, .. } => {
+                let was_hovered = self.state.hovered;
                 self.state.hovered = self.bounds.contains(*x, *y);
-                false
+                was_hovered != self.state.hovered
             }
 
             Event::MouseDown {
@@ -107,6 +141,7 @@ impl Widget for Button {
                             self.is_on = true;
                         }
                     }
+                    self.notify_click();
 
                     return true;
                 }
@@ -122,6 +157,7 @@ impl Widget for Button {
 
                     if self.button_type == ButtonType::Momentary {
                         self.is_on = false;
+                        self.notify_click();
                     }
 
                     return true;
@@ -171,5 +207,36 @@ impl Widget for Button {
             self.text_color,
             TextAlign::Center,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Modifiers, NullContext};
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn toggle_button_notifies_and_disabled_button_ignores_input() {
+        let mut button = Button::toggle("Bypass");
+        let states = Arc::new(Mutex::new(Vec::new()));
+        let observed = Arc::clone(&states);
+        button.on_click(Box::new(move |state| observed.lock().unwrap().push(state)));
+        let down = Event::MouseDown {
+            x: 10.0,
+            y: 10.0,
+            button: MouseButton::Left,
+            modifiers: Modifiers::none(),
+        };
+        assert!(button.handle_event(&down));
+        assert!(button.is_on());
+        assert_eq!(*states.lock().unwrap(), vec![true]);
+
+        button.state.disabled = true;
+        assert!(!button.handle_event(&down));
+        assert!(button.is_on());
+
+        let mut ctx = NullContext::new(100.0, 100.0);
+        button.draw(&mut ctx);
     }
 }

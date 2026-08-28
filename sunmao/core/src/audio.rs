@@ -70,11 +70,15 @@ impl<'a> AudioBuffer<'a> {
 
     /// Get input channel data.
     pub fn input(&self, channel: usize) -> &[f32] {
+        let num_samples = self.num_samples;
         match &self.inputs {
-            InputStorage::Slices(inputs) => inputs.get(channel).copied().unwrap_or(&[]),
+            InputStorage::Slices(inputs) => inputs
+                .get(channel)
+                .map(|input| &input[..num_samples.min(input.len())])
+                .unwrap_or(&[]),
             InputStorage::Planar(inputs) => inputs
                 .get(channel)
-                .map(|input| &input[..self.num_samples.min(input.len())])
+                .map(|input| &input[..num_samples.min(input.len())])
                 .unwrap_or(&[]),
         }
     }
@@ -83,13 +87,13 @@ impl<'a> AudioBuffer<'a> {
     pub fn output(&mut self, channel: usize) -> &mut [f32] {
         let num_samples = self.num_samples;
         match &mut self.outputs {
-            OutputStorage::Slices(outputs) => {
-                if channel < outputs.len() {
-                    outputs[channel]
-                } else {
-                    &mut []
-                }
-            }
+            OutputStorage::Slices(outputs) => outputs
+                .get_mut(channel)
+                .map(|output| {
+                    let len = num_samples.min(output.len());
+                    &mut output[..len]
+                })
+                .unwrap_or(&mut []),
             OutputStorage::Planar(outputs) => outputs
                 .get_mut(channel)
                 .map(|output| {
@@ -205,5 +209,21 @@ mod tests {
 
         assert_eq!(first_output, [1.0, 2.0, 0.0, 0.0]);
         assert_eq!(second_output, [0.0; 4]);
+    }
+
+    #[test]
+    fn slice_storage_is_limited_to_the_active_block() {
+        let inputs = [&[1.0_f32, 2.0, 3.0, 4.0][..]];
+        let mut output = [0.0_f32; 4];
+        let mut outputs: [&mut [f32]; 1] = [&mut output];
+
+        let mut buffer = AudioBuffer::new(&inputs, &mut outputs, 2);
+        assert_eq!(buffer.input(0), &[1.0, 2.0]);
+        assert_eq!(buffer.output(0).len(), 2);
+        buffer.output(0).fill(3.0);
+
+        // Samples outside the active block are owned by the caller and must
+        // remain untouched by the framework's channel accessors.
+        assert_eq!(output, [3.0, 3.0, 0.0, 0.0]);
     }
 }

@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 #
-# package_examples.sh — Build & package the unified SunMao example plugins into
-# Phase-1 VST3/CLAP bundles, then (optionally) run the unit-test host against them.
+# package_examples.sh — Build and package the unified SunMao reference examples
+# as Phase-1 VST3, CLAP, and standalone artifacts, then optionally exercise them.
 # AU is an explicit, separate opt-in build because AU's Cocoa runtime is not part
-# of the Phase-1 CLAP/VST3 artifact graph.
+# of the Phase-1 artifact graph.
 #
 # This is the Phase-1 packaging pipeline. It replaces the ad-hoc /tmp/package_all.sh.
 #
 # Usage:
-#   tools/package_examples.sh              # build + package all GUI examples (VST3/CLAP)
+#   tools/package_examples.sh              # build + package VST3/CLAP/standalone artifacts
 #   tools/package_examples.sh --au         # macOS-only AU experiment (not Phase-1)
 #   tools/package_examples.sh --install    # macOS: also install the generated bundles
-#   tools/package_examples.sh --test       # test each generated VST3/CLAP plugin
-#   tools/package_examples.sh --gui-test   # exercise each VST3/CLAP GUI lifecycle
+#   tools/package_examples.sh --test       # test plugins and standalone DSP/MIDI smoke
+#   tools/package_examples.sh --gui-test   # exercise embedded and standalone GUIs
 #   tools/package_examples.sh --codesign   # ad-hoc codesign the --au bundles
 #   tools/package_examples.sh --release    release build (default); --debug for debug
 #
@@ -41,7 +41,7 @@ for arg in "$@"; do
     --codesign) CODESIGN=1 ;;
     --au)       AU=1 ;;
     -h|--help)
-      sed -n '2,24p' "$0"; exit 0 ;;
+      sed -n '2,26p' "$0"; exit 0 ;;
     *) echo "unknown flag: $arg" >&2; exit 1 ;;
   esac
 done
@@ -60,7 +60,7 @@ if [ "$INSTALL" -eq 1 ] && [ "$HOST_OS" != "Darwin" ]; then
   exit 1
 fi
 if [ "$AU" -eq 1 ] && { [ "$TEST" -eq 1 ] || [ "$GUI_TEST" -eq 1 ]; }; then
-  echo "--test and --gui-test require the default Phase-1 VST3/CLAP build" >&2
+  echo "--test and --gui-test require the default Phase-1 build" >&2
   echo "AU host tests require an installed and registered component" >&2
   exit 1
 fi
@@ -68,6 +68,8 @@ fi
 # Map: example-crate -> "display name|bundle-id|au-type|au-subtype|au-manufacturer"
 # au-* fields are macOS-only and ignored elsewhere.
 EXAMPLES=(
+  "sunmao_fx_gain|SunMao Gain|com.sunmao.fx.gain|||"
+  "sunmao_syn_sine|SunMao Sine Synth|com.sunmao.synth.sine|||"
   "sunmao_fx_gain_gui_gl|SunMao Gain GL|com.sunmao.fx.gain.gl|aufx|smgg|SunM"
   "sunmao_fx_gain_gui_wgpu|SunMao Gain WGPU|com.sunmao.fx.gain.wgpu|aufx|smgw|SunM"
   "sunmao_fx_gain_gui_webview|SunMao Gain WebView|com.sunmao.fx.gain.webview|aufx|smgv|SunM"
@@ -90,6 +92,39 @@ supports_au() {
   esac
 }
 
+supports_standalone() {
+  case "$1" in
+    sunmao_fx_gain|sunmao_syn_sine|\
+    sunmao_fx_gain_gui_gl|sunmao_fx_gain_gui_wgpu|sunmao_fx_gain_gui_webview|\
+    sunmao_syn_sine_gui_gl|sunmao_syn_sine_gui_wgpu|sunmao_syn_sine_gui_webview)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+standalone_binary_path() {
+  local crate="$1" suffix=""
+  case "$HOST_OS" in
+    Darwin|Linux) ;;
+    MINGW*|MSYS*|CYGWIN*) suffix=".exe" ;;
+    *) echo "unsupported host OS: $HOST_OS" >&2; return 1 ;;
+  esac
+  printf '%s/%s_standalone%s\n' "$TARGET_DIR" "$crate" "$suffix"
+}
+
+packaged_standalone_path() {
+  local name="$1"
+  case "$HOST_OS" in
+    Darwin) printf '%s/%s.app/Contents/MacOS/%s\n' "$OUT_DIR" "$name" "$name" ;;
+    Linux) printf '%s/%s\n' "$OUT_DIR" "$name" ;;
+    MINGW*|MSYS*|CYGWIN*) printf '%s/%s.exe\n' "$OUT_DIR" "$name" ;;
+    *) echo "unsupported host OS: $HOST_OS" >&2; return 1 ;;
+  esac
+}
+
 if [ "$MODE" = "release" ]; then
   CARGO_FLAGS=(--release)
   PROFILE_DIR="release"
@@ -108,9 +143,9 @@ fi
 TARGET_DIR="$TARGET_ROOT/$PROFILE_DIR"
 mkdir -p "$OUT_DIR"
 
-# The Phase-1 synth GUI examples intentionally remain CLAP/VST3-only. Keep
-# them in the default matrix while leaving the unresolved AU GUI path opt-in
-# and limited to the five already-supported AU examples.
+# Keep the unresolved AU GUI path opt-in and limited to the five examples that
+# already support it. The corrected Phase-1 default includes standalone for the
+# eight primary gain/sine reference examples.
 SELECTED_EXAMPLES=()
 for row in "${EXAMPLES[@]}"; do
   crate="${row%%|*}"
@@ -131,6 +166,17 @@ if [ "$AU" -eq 1 ]; then
 else
   cargo build --locked --target-dir "$TARGET_ROOT" "${CARGO_FLAGS[@]}" \
     "${EXAMPLE_CARGO_ARGS[@]}"
+
+  echo "==> Building standalone examples..."
+  STANDALONE_CARGO_ARGS=()
+  for row in "${SELECTED_EXAMPLES[@]}"; do
+    crate="${row%%|*}"
+    if supports_standalone "$crate"; then
+      STANDALONE_CARGO_ARGS+=(-p "$crate")
+    fi
+  done
+  cargo build --locked --target-dir "$TARGET_ROOT" "${CARGO_FLAGS[@]}" \
+    --bins --features standalone "${STANDALONE_CARGO_ARGS[@]}"
 fi
 
 # Keep the default-build tools in a separate Cargo invocation so the host binary
@@ -152,7 +198,7 @@ CODESIGN_ARG=""
 
 build_one() {
   local crate="$1" name="$2" bid="$3" au_type="$4" au_sub="$5" au_mfr="$6"
-  local bin=""
+  local bin="" standalone_bin=""
   case "$HOST_OS" in
     Darwin) bin="$TARGET_DIR/lib${crate}.dylib" ;;
     Linux) bin="$TARGET_DIR/lib${crate}.so" ;;
@@ -165,6 +211,15 @@ build_one() {
   if [ "$AU" -eq 0 ]; then
     "$PACKAGER" clap --binary "$bin" --out "$OUT_DIR/${name}" --name "$name" --bundle-id "$bid" --version 1.0.0
     "$PACKAGER" vst3 --binary "$bin" --out "$OUT_DIR/${name}" --name "$name" --bundle-id "$bid" --version 1.0.0
+    if supports_standalone "$crate"; then
+      standalone_bin="$(standalone_binary_path "$crate")"
+      if [ ! -f "$standalone_bin" ]; then
+        echo "  !! standalone binary for $crate not found: $standalone_bin" >&2
+        return 1
+      fi
+      "$PACKAGER" standalone --binary "$standalone_bin" --out "$OUT_DIR/${name}" \
+        --name "$name" --bundle-id "$bid" --version 1.0.0
+    fi
   elif [ "$HOST_OS" = "Darwin" ]; then
     "$PACKAGER" au      --binary "$bin" --out "$OUT_DIR/${name}" --name "$name" --bundle-id "$bid" --version 1.0.0 \
       --au-type "$au_type" --au-subtype "$au_sub" --au-manufacturer "$au_mfr" --au-factory RustAUFactory \
@@ -197,7 +252,7 @@ for row in "${EXAMPLES[@]}"; do
   fi
 done
 
-echo "==> Done. Bundles in $OUT_DIR/"
+echo "==> Done. Artifacts in $OUT_DIR/"
 
 if [ "$TEST" -eq 1 ]; then
   echo "==> Running unit tests..."
@@ -212,6 +267,22 @@ if [ "$TEST" -eq 1 ]; then
       echo "  test $local_bundle"
       "$RUNNER" test "$local_bundle"
     done
+    if supports_standalone "$crate"; then
+      raw_standalone="$(standalone_binary_path "$crate")"
+      packaged_standalone="$(packaged_standalone_path "$name")"
+      if [ ! -f "$raw_standalone" ]; then
+        echo "  missing expected raw standalone executable: $raw_standalone" >&2
+        exit 1
+      fi
+      if [ ! -f "$packaged_standalone" ]; then
+        echo "  missing expected packaged standalone executable: $packaged_standalone" >&2
+        exit 1
+      fi
+      echo "  smoke raw $raw_standalone"
+      "$raw_standalone" --smoke
+      echo "  smoke packaged $packaged_standalone"
+      "$packaged_standalone" --smoke
+    fi
   done
 fi
 
@@ -232,6 +303,14 @@ if [ "$GUI_TEST" -eq 1 ]; then
     echo "--gui-test on Linux requires xvfb-run" >&2
     exit 1
   fi
+  STANDALONE_GUI_PREFIX=()
+  if [ "$(uname -s)" = "Linux" ]; then
+    STANDALONE_GUI_PREFIX=(xvfb-run -a env \
+      GDK_BACKEND=x11 \
+      WGPU_BACKEND=gl \
+      LIBGL_ALWAYS_SOFTWARE=1 \
+      XDG_RUNTIME_DIR="$GUI_RUNTIME_DIR")
+  fi
   run_gui_test() {
     if "${GUI_RUNNER[@]}" "$@"; then
       if [ "$(uname -s)" = "Darwin" ]; then sleep 1; fi
@@ -248,8 +327,39 @@ if [ "$GUI_TEST" -eq 1 ]; then
     fi
     return 1
   }
+  run_standalone_gui_test() {
+    local executable="$1"
+    local status=0
+    set +e
+    if [ "$(uname -s)" = "Linux" ]; then
+      "${STANDALONE_GUI_PREFIX[@]}" "$executable" --gui-smoke
+      status=$?
+    else
+      "$executable" --gui-smoke
+      status=$?
+    fi
+    set -e
+    if [ "$status" -eq 0 ]; then
+      if [ "$(uname -s)" = "Darwin" ]; then sleep 1; fi
+      return 0
+    fi
+    if [ "$(uname -s)" != "Darwin" ]; then
+      return 1
+    fi
+    echo "  macOS standalone GUI failed; retrying once after WindowServer cooldown" >&2
+    sleep 5
+    set +e
+    "$executable" --gui-smoke
+    status=$?
+    set -e
+    return "$status"
+  }
   for row in "${SELECTED_EXAMPLES[@]}"; do
     IFS='|' read -r crate name _ _ _ _ <<< "$row"
+    case "$crate" in
+      *_gui_gl|*_gui_wgpu|*_gui_webview|sunmao_fx_lpf_gui_gl|sunmao_daw_info_gui) ;;
+      *) continue ;;
+    esac
     GUI_COMMAND=(gui-test --auto-close --verify-pixels)
     case "$crate" in
       sunmao_fx_gain_gui_gl|sunmao_fx_gain_gui_wgpu|\
@@ -274,6 +384,22 @@ if [ "$GUI_TEST" -eq 1 ]; then
       echo "  gui-test $local_bundle"
       run_gui_test "${GUI_COMMAND[@]}" "$local_bundle"
     done
+    if supports_standalone "$crate"; then
+      raw_standalone="$(standalone_binary_path "$crate")"
+      packaged_standalone="$(packaged_standalone_path "$name")"
+      if [ ! -f "$raw_standalone" ]; then
+        echo "  missing expected raw standalone executable: $raw_standalone" >&2
+        exit 1
+      fi
+      if [ ! -f "$packaged_standalone" ]; then
+        echo "  missing expected packaged standalone executable: $packaged_standalone" >&2
+        exit 1
+      fi
+      echo "  gui-smoke raw $raw_standalone"
+      run_standalone_gui_test "$raw_standalone"
+      echo "  gui-smoke packaged $packaged_standalone"
+      run_standalone_gui_test "$packaged_standalone"
+    fi
   done
 fi
 

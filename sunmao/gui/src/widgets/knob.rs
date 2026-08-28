@@ -22,6 +22,7 @@ pub struct Knob {
     drag_start_value: f32,
     drag_start_y: f32,
     is_dragging: bool,
+    value_changed: Option<Box<dyn Fn(f32) + Send>>,
     // Visual settings
     pub track_color: Color,
     pub value_color: Color,
@@ -43,6 +44,7 @@ impl Knob {
             drag_start_value: 0.0,
             drag_start_y: 0.0,
             is_dragging: false,
+            value_changed: None,
             track_color: Color::rgb(0.3, 0.3, 0.35),
             value_color: Color::ACCENT,
             pointer_color: Color::FOREGROUND,
@@ -57,9 +59,43 @@ impl Knob {
     }
 
     pub fn with_default(mut self, default: f32) -> Self {
+        let default = if default.is_finite() {
+            default.clamp(0.0, 1.0)
+        } else {
+            0.5
+        };
         self.default_value = default;
         self.value = default;
         self
+    }
+
+    pub fn set_disabled(&mut self, disabled: bool) {
+        self.state.disabled = disabled;
+        if disabled {
+            self.state.pressed = false;
+            self.is_dragging = false;
+        }
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        self.state.disabled
+    }
+
+    fn set_value_internal(&mut self, value: f32, notify: bool) {
+        let value = if value.is_finite() {
+            value.clamp(0.0, 1.0)
+        } else {
+            self.value
+        };
+        if (value - self.value).abs() <= f32::EPSILON {
+            return;
+        }
+        self.value = value;
+        if notify {
+            if let Some(callback) = self.value_changed.as_ref() {
+                callback(value);
+            }
+        }
     }
 
     fn angle_for_value(&self, value: f32) -> f32 {
@@ -80,19 +116,33 @@ impl Widget for Knob {
     fn set_bounds(&mut self, bounds: Rect) {
         self.bounds = bounds;
     }
+    fn set_focused(&mut self, focused: bool) {
+        self.state.focused = focused;
+    }
     fn state(&self) -> WidgetState {
         self.state
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
+        if self.state.disabled {
+            self.state.hovered = false;
+            self.state.pressed = false;
+            self.is_dragging = false;
+            return false;
+        }
         match event {
             Event::MouseMove { x, y, .. } => {
                 let was_hovered = self.state.hovered;
                 self.state.hovered = self.bounds.contains(*x, *y);
 
                 if self.is_dragging {
-                    let delta = (self.drag_start_y - *y) / self.sensitivity;
-                    self.value = (self.drag_start_value + delta).clamp(0.0, 1.0);
+                    let sensitivity = if self.sensitivity.is_finite() && self.sensitivity > 0.0 {
+                        self.sensitivity
+                    } else {
+                        200.0
+                    };
+                    let delta = (self.drag_start_y - *y) / sensitivity;
+                    self.set_value_internal(self.drag_start_value + delta, true);
                     return true;
                 }
 
@@ -114,7 +164,8 @@ impl Widget for Knob {
 
                     // Double-click or Cmd/Ctrl+click to reset
                     if modifiers.ctrl || modifiers.meta {
-                        self.value = self.default_value;
+                        self.set_value_internal(self.default_value, true);
+                        self.drag_start_value = self.value;
                     }
 
                     return true;
@@ -136,8 +187,11 @@ impl Widget for Knob {
 
             Event::Scroll { x, y, delta_y, .. } => {
                 if self.bounds.contains(*x, *y) {
+                    if !delta_y.is_finite() {
+                        return false;
+                    }
                     let delta = *delta_y * 0.01;
-                    self.value = (self.value + delta).clamp(0.0, 1.0);
+                    self.set_value_internal(self.value + delta, true);
                     return true;
                 }
                 false
@@ -215,6 +269,46 @@ impl ParameterWidget for Knob {
         self.value
     }
     fn set_value(&mut self, value: f32) {
-        self.value = value.clamp(0.0, 1.0);
+        self.set_value_internal(value, false);
+    }
+
+    fn on_value_changed(&mut self, callback: Box<dyn Fn(f32) + Send>) {
+        self.value_changed = Some(callback);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Event, Modifiers};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn knob_drag_invokes_callback_and_handles_invalid_sensitivity() {
+        let mut knob = Knob::new("gain");
+        knob.sensitivity = 0.0;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&calls);
+        knob.on_value_changed(Box::new(move |_value| {
+            observed.fetch_add(1, Ordering::Relaxed);
+        }));
+
+        knob.handle_event(&Event::MouseDown {
+            x: 20.0,
+            y: 20.0,
+            button: MouseButton::Left,
+            modifiers: Modifiers::none(),
+        });
+        knob.handle_event(&Event::MouseMove {
+            x: 20.0,
+            y: -20.0,
+            modifiers: Modifiers::none(),
+        });
+        assert!(knob.value().is_finite());
+        assert!(calls.load(Ordering::Relaxed) >= 1);
+        let calls_before_sync = calls.load(Ordering::Relaxed);
+        knob.set_value(0.25);
+        assert_eq!(calls.load(Ordering::Relaxed), calls_before_sync);
     }
 }

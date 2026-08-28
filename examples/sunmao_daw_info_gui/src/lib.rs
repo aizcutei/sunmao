@@ -7,10 +7,7 @@
 //! GUI code needed.
 
 use std::sync::{Arc, Mutex, OnceLock};
-use sunmao_core::prelude::*;
-use sunmao_gui::{Color, Fill, GuiContext, Stroke};
-use sunmao_macros::Params;
-use sunmao_view_baseview::{BaseviewConfig, BaseviewView, ViewState, WindowScalePolicy};
+use sunmao::prelude::*;
 
 // ============ Shared Transport State ============
 
@@ -88,6 +85,13 @@ impl SunmaoPlugin for DawInfoPlugin {
         false
     }
 
+    fn clap_info() -> ClapInfo {
+        ClapInfo {
+            id: "com.sunmao.daw.info.gui",
+            features: &["analyzer", "utility"],
+        }
+    }
+
     fn process(
         &mut self,
         buffer: &mut AudioBuffer,
@@ -147,7 +151,7 @@ impl ViewState for DawInfoViewState {
         draw_daw_info(ctx, self.width, self.height, snapshot);
     }
 
-    fn on_mouse_event(&mut self, _event: &sunmao_gui::Event) -> bool {
+    fn on_mouse_event(&mut self, _event: &GuiEvent) -> bool {
         false
     }
 
@@ -337,9 +341,8 @@ fn draw_seg(
     ctx.fill_rect(x, y, w, h, Fill::Solid(color));
 }
 
-// ============ VST3 Export ============
-use sunmao_backend_vst3::SunmaoVst3Wrapper;
-sunmao_backend_vst3::export_vst3_plugin_with_gui!(SunmaoVst3Wrapper<DawInfoPlugin>);
+// ============ Unified VST3 + CLAP Export ============
+sunmao::sunmao_export!(DawInfoPlugin, gui);
 
 // ============ AU Export (macOS only) ============
 #[cfg(all(target_os = "macos", feature = "au"))]
@@ -366,32 +369,4 @@ mod au_export {
         AU_INFO,
         au_params::<DawInfoParams>()
     );
-}
-
-// ============ CLAP Export ============
-mod clap_export {
-    use super::*;
-    use std::ffi::c_char;
-    use sunmao_backend_clap::SunmaoClapWrapper;
-    use sunmao_backend_clap::{export_clap_plugin_with_gui, ClapFeature, ClapFeatures, PluginInfo};
-
-    static PLUGIN_INFO: PluginInfo = PluginInfo {
-        id: "com.sunmao.daw.info.gui\0",
-        name: "SunMao DAW Info GUI\0",
-        vendor: "aizcutei\0",
-        url: "https://aizcutei.github.io/sunmao\0",
-        manual_url: "\0",
-        support_url: "\0",
-        version: "1.0.0\0",
-        description: "DAW transport info viewer (OpenGL GUI)\0",
-    };
-
-    const FEATURES_LIST: [*const c_char; 3] = [
-        ClapFeature::Analyzer.as_ptr(),
-        ClapFeature::Utility.as_ptr(),
-        std::ptr::null(),
-    ];
-    static FEATURES: ClapFeatures = ClapFeatures::new(&FEATURES_LIST);
-
-    export_clap_plugin_with_gui!(SunmaoClapWrapper<DawInfoPlugin>, PLUGIN_INFO, FEATURES);
 }

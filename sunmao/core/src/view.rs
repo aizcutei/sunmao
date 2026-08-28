@@ -37,7 +37,7 @@ impl ParentWindow {
             #[cfg(target_os = "windows")]
             "HWND" => Some(ParentWindow::Win32(parent)),
             #[cfg(target_os = "linux")]
-            "X11EmbedWindowID" => Some(ParentWindow::X11(parent as u32)),
+            "X11EmbedWindowID" => u32::try_from(parent as usize).ok().map(ParentWindow::X11),
             _ => None,
         }
     }
@@ -59,7 +59,7 @@ impl ParentWindow {
             #[cfg(target_os = "windows")]
             "win32" => Some(ParentWindow::Win32(parent)),
             #[cfg(target_os = "linux")]
-            "x11" => Some(ParentWindow::X11(parent as u32)),
+            "x11" => u32::try_from(parent as usize).ok().map(ParentWindow::X11),
             _ => None,
         }
     }
@@ -122,6 +122,50 @@ impl<T: 'static> ErasedViewHandle for StoredViewHandle<T> {
 /// knowing which GUI implementation owns the handle.
 pub struct ViewHandle {
     inner: Box<dyn ErasedViewHandle>,
+}
+
+/// Options used when a view owns a top-level standalone window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StandaloneViewOptions {
+    close_after_frames: Option<u32>,
+}
+
+impl StandaloneViewOptions {
+    /// Keep the top-level editor open until the user closes it.
+    pub const fn interactive() -> Self {
+        Self {
+            close_after_frames: None,
+        }
+    }
+
+    /// Close after a small number of rendered frames for deterministic GUI smoke tests.
+    pub const fn smoke() -> Self {
+        Self {
+            close_after_frames: Some(3),
+        }
+    }
+
+    /// Number of frames after which the standalone window should close.
+    pub const fn close_after_frames(self) -> Option<u32> {
+        self.close_after_frames
+    }
+}
+
+impl Default for StandaloneViewOptions {
+    fn default() -> Self {
+        Self::interactive()
+    }
+}
+
+/// Result of running a top-level standalone editor window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StandaloneViewResult {
+    /// This view implementation only supports embedding in a plugin host.
+    Unsupported,
+    /// The top-level window initialized and then closed normally.
+    Closed,
+    /// The native window or renderer could not initialize.
+    Failed,
 }
 
 impl ViewHandle {
@@ -190,6 +234,18 @@ pub trait SunmaoView: Send + Sync {
     /// Returns a handle that keeps the editor alive. The editor
     /// will be closed when this handle is dropped.
     fn open(&self, parent: ParentWindow, context: Arc<dyn ViewContext>) -> Option<ViewHandle>;
+
+    /// Open the editor as an application-owned top-level window.
+    ///
+    /// Implementations block until the window closes. The default preserves
+    /// compatibility with view adapters that only support hosted embedding.
+    fn open_standalone(
+        &self,
+        _context: Arc<dyn ViewContext>,
+        _options: StandaloneViewOptions,
+    ) -> StandaloneViewResult {
+        StandaloneViewResult::Unsupported
+    }
 
     /// Called when the DPI scale factor changes.
     ///
@@ -316,6 +372,12 @@ mod tests {
                 Some(ParentWindow::X11(_))
             ));
             assert!(ParentWindow::from_vst3(non_null, "NSView").is_none());
+            #[cfg(target_pointer_width = "64")]
+            {
+                let truncated = usize::MAX as *mut c_void;
+                assert!(ParentWindow::from_vst3(truncated, "X11EmbedWindowID").is_none());
+                assert!(ParentWindow::from_clap(truncated, "x11").is_none());
+            }
         }
     }
 }

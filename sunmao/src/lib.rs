@@ -30,12 +30,46 @@ pub use sunmao_core::*;
 // Re-export macros
 pub use sunmao_macros::*;
 
+/// Implementation crates used by proc-macro expansions. This module is
+/// intentionally hidden from normal API documentation; it lets a plugin
+/// depend only on the `sunmao` facade while `#[derive(Params)]` still refers
+/// to the canonical core types.
+#[doc(hidden)]
+pub mod __private {
+    pub use sunmao_core;
+}
+
 /// Format adapters used by the unified export macro.
 pub use sunmao_backend_clap as backend_clap;
 pub use sunmao_backend_vst3 as backend_vst3;
 
 #[cfg(feature = "standalone")]
 pub use sunmao_runtime;
+#[cfg(feature = "standalone")]
+pub use sunmao_runtime as runtime;
+
+/// Generate the complete `main` function for a standalone executable target.
+#[macro_export]
+macro_rules! sunmao_standalone {
+    ($plugin_type:ty) => {
+        fn main() {
+            if let Err(error) = $crate::runtime::run_standalone_entry::<$plugin_type>() {
+                eprintln!("SunMao standalone failed: {error:#}");
+                std::process::exit(1);
+            }
+        }
+    };
+}
+
+/// Renderer-agnostic GUI primitives, enabled with the `gui` feature.
+#[cfg(feature = "gui")]
+pub use sunmao_gui as gui;
+
+/// Baseview-backed editor views. Enable one of `gui-gl`, `gui-wgpu`, or
+/// `gui-webview` to expose the corresponding renderer types through the
+/// facade.
+#[cfg(any(feature = "gui-gl", feature = "gui-wgpu", feature = "gui-webview"))]
+pub use sunmao_view_baseview as view_baseview;
 
 /// Common imports for SunMao plugins.
 pub mod prelude {
@@ -44,8 +78,37 @@ pub mod prelude {
     pub use sunmao_core::events::{Event, EventQueue, MidiMessage, ParamChange};
     pub use sunmao_core::metadata::{AuInfo, ClapInfo, Vst3Info, Vst3SpeakerLayout};
     pub use sunmao_core::params::{
-        stable_param_id, BoolParam, FloatParam, IntParam, ParamDescriptor, ParamKind, Params,
+        stable_param_id, validate_param_layout, BoolParam, FloatParam, IntParam, ParamDescriptor,
+        ParamKind, ParamLayoutError, Params,
     };
     pub use sunmao_core::plugin::{ProcessContext, ProcessStatus, SunmaoPlugin};
+    pub use sunmao_core::view::{
+        ParamsViewContext, ParentWindow, StandaloneViewOptions, StandaloneViewResult, SunmaoView,
+        ViewContext, ViewHandle,
+    };
     pub use sunmao_macros::{sunmao_export, Params};
+
+    #[cfg(feature = "standalone")]
+    pub use sunmao_runtime::{
+        InputMode, RuntimeConfig, StandaloneProcessor, StandaloneSmokeReport,
+    };
+
+    #[cfg(feature = "gui")]
+    pub use sunmao_gui::{
+        Alignment, Button, ButtonType, Color, Direction, Event as GuiEvent, Fill, FontStyle,
+        GuiContext, KeyCode, Knob, Label, Layout, Modifiers, MouseButton,
+        MouseButton as GuiMouseButton, NullContext, Orientation, ParameterWidget, Point, Rect,
+        Size, Slider, Stroke, TextAlign, TextVAlign, Widget, WidgetContainer,
+    };
+
+    #[cfg(feature = "gui-wgpu")]
+    pub use sunmao_gui::wgpu::WgpuContext;
+    #[cfg(any(feature = "gui-gl", feature = "gui-wgpu", feature = "gui-webview"))]
+    pub use sunmao_view_baseview::{BaseviewConfig, WindowScalePolicy};
+    #[cfg(feature = "gui-gl")]
+    pub use sunmao_view_baseview::{BaseviewView, ViewState};
+    #[cfg(feature = "gui-webview")]
+    pub use sunmao_view_baseview::{BaseviewWebView, WebViewState};
+    #[cfg(feature = "gui-wgpu")]
+    pub use sunmao_view_baseview::{BaseviewWgpuView, WgpuViewState};
 }

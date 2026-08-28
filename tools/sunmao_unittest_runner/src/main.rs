@@ -22,6 +22,27 @@ fn main() -> ExitCode {
     }
 
     match args[1].as_str() {
+        #[cfg(target_os = "macos")]
+        "__macos-capture-window" => {
+            return match gui_window::run_macos_capture_helper(&args[2..]) {
+                Ok(evidence) => {
+                    println!(
+                        "SUNMAO_CAPTURE_EVIDENCE={},{},{},{},{},{}",
+                        evidence.width,
+                        evidence.height,
+                        evidence.sampled_pixels,
+                        evidence.distinct_colors,
+                        evidence.intensity_range,
+                        evidence.intensity_std_dev
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(error) => {
+                    eprintln!("macOS capture helper failed: {error}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         #[cfg(target_os = "windows")]
         "__windows-uia-range-drag" => {
             return match gui_window::run_windows_ui_automation_helper(&args[2..]) {
@@ -104,13 +125,17 @@ fn print_usage() {
     );
     eprintln!();
     eprintln!("EXAMPLES:");
+    #[cfg(all(target_os = "macos", feature = "au"))]
     eprintln!("  sunmao_unittest_runner scan ~/Library/Audio/Plug-Ins/Components");
     eprintln!("  sunmao_unittest_runner scan build/");
+    #[cfg(all(target_os = "macos", feature = "au"))]
     eprintln!("  sunmao_unittest_runner scan --system");
     eprintln!("  sunmao_unittest_runner test build/SunMaoGain.clap");
     eprintln!("  sunmao_unittest_runner test build/SunMaoGain.vst3");
+    #[cfg(all(target_os = "macos", feature = "au"))]
     eprintln!("  sunmao_unittest_runner test build/SunMaoGain.component");
     eprintln!("  sunmao_unittest_runner process build/SunMaoGain.clap");
+    #[cfg(all(target_os = "macos", feature = "au"))]
     eprintln!("  sunmao_unittest_runner gui-test build/SunMaoGain.component");
 }
 
@@ -118,7 +143,7 @@ fn print_usage() {
 
 fn cmd_scan(args: &[String]) -> bool {
     // Check for --system flag
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", feature = "au"))]
     if args.iter().any(|a| a == "--system") {
         println!("Scanning system AudioUnit plugins...");
         let plugins = scanner::scan_au_system();
@@ -150,11 +175,11 @@ fn cmd_scan(args: &[String]) -> bool {
             "clap" => scanner::scan_clap(path),
             "vst3" => scanner::scan_vst3(path),
             "component" => {
-                #[cfg(target_os = "macos")]
+                #[cfg(all(target_os = "macos", feature = "au"))]
                 {
                     scanner::scan_au(path)
                 }
-                #[cfg(not(target_os = "macos"))]
+                #[cfg(not(all(target_os = "macos", feature = "au")))]
                 {
                     Vec::new()
                 }
@@ -202,11 +227,11 @@ fn cmd_info(args: &[String]) -> bool {
         "clap" => scanner::scan_clap(Path::new(path)),
         "vst3" => scanner::scan_vst3(Path::new(path)),
         "component" => {
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "au"))]
             {
                 scanner::scan_au(Path::new(path))
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(all(target_os = "macos", feature = "au")))]
             {
                 Vec::new()
             }
@@ -260,11 +285,11 @@ fn cmd_test(args: &[String]) -> bool {
         "clap" => scanner::scan_clap(Path::new(path)),
         "vst3" => scanner::scan_vst3(Path::new(path)),
         "component" => {
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "au"))]
             {
                 scanner::scan_au(Path::new(path))
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(all(target_os = "macos", feature = "au")))]
             {
                 Vec::new()
             }
@@ -1254,11 +1279,11 @@ fn cmd_process(args: &[String]) -> bool {
         "clap" => scanner::scan_clap(Path::new(path)),
         "vst3" => scanner::scan_vst3(Path::new(path)),
         "component" => {
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "au"))]
             {
                 scanner::scan_au(Path::new(path))
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(all(target_os = "macos", feature = "au")))]
             {
                 Vec::new()
             }
@@ -1398,32 +1423,39 @@ fn gui_test_verify_pixels(
     window: &gui_window::PluginGuiWindow,
 ) -> Result<gui_window::PixelEvidence, String> {
     let deadline = std::time::Instant::now() + env_duration_ms("SUNMAO_GUI_PIXEL_TIMEOUT_MS", 3000);
+    let mut last_error = String::from("GUI pixel evidence is not available yet");
     loop {
-        if std::env::var_os("SUNMAO_GUI_PIXEL_PROBE").is_some() {
-            if let Some(library) = plugin.plugin_library() {
-                if let Ok(evidence) = gui_window::read_plugin_pixel_probe(library) {
-                    println!("GUI pixels verified via in-process renderer probe");
-                    return Ok(evidence);
+        let probe_status = plugin
+            .plugin_library()
+            .map(gui_window::plugin_pixel_probe_status)
+            .transpose()?
+            .unwrap_or(gui_window::PixelProbeStatus::Unsupported);
+        match probe_status {
+            gui_window::PixelProbeStatus::Ready => {
+                let library = plugin
+                    .plugin_library()
+                    .ok_or_else(|| "plugin module disappeared during pixel probe".to_string())?;
+                match gui_window::read_plugin_pixel_probe(library) {
+                    Ok(evidence) => {
+                        println!("GUI pixels verified via in-process renderer probe");
+                        return Ok(evidence);
+                    }
+                    Err(error) => last_error = error,
                 }
             }
-        }
-        let os_error = match window.verify_non_uniform_pixels() {
-            Ok(evidence) => return Ok(evidence),
-            Err(error) => error,
-        };
-        let probe_error = match plugin
-            .plugin_library()
-            .ok_or_else(|| "plugin module is unavailable for in-process pixel probe".to_string())
-            .and_then(gui_window::read_plugin_pixel_probe)
-        {
-            Ok(evidence) => {
-                println!("GUI pixels verified via in-process renderer probe");
-                return Ok(evidence);
+            gui_window::PixelProbeStatus::Waiting => {
+                last_error = "renderer-owned GUI pixel probe has no captured frame".into();
             }
-            Err(error) => error,
-        };
+            gui_window::PixelProbeStatus::Unsupported => match window.verify_non_uniform_pixels() {
+                Ok(evidence) => {
+                    println!("GUI pixels verified via platform-native capture");
+                    return Ok(evidence);
+                }
+                Err(error) => last_error = error,
+            },
+        }
         if std::time::Instant::now() >= deadline {
-            return Err(format!("{os_error}; {probe_error}"));
+            return Err(last_error);
         }
         gui_test_render_delay(plugin)?;
     }
@@ -1616,11 +1648,11 @@ fn cmd_gui_test(args: &[String]) -> bool {
         "clap" => scanner::scan_clap(Path::new(path)),
         "vst3" => scanner::scan_vst3(Path::new(path)),
         "component" => {
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "au"))]
             {
                 scanner::scan_au(Path::new(path))
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(all(target_os = "macos", feature = "au")))]
             {
                 Vec::new()
             }
@@ -1878,7 +1910,7 @@ fn load_plugin(info: &PluginInfo) -> Result<Box<dyn HostPlugin>, String> {
             Ok(Box::new(p))
         }
         PluginFormat::AU => {
-            #[cfg(target_os = "macos")]
+            #[cfg(all(target_os = "macos", feature = "au"))]
             {
                 // First try matching by type-subtype-manufacturer ID
                 let components = au_host::scan_au_components();
@@ -1925,7 +1957,7 @@ fn load_plugin(info: &PluginInfo) -> Result<Box<dyn HostPlugin>, String> {
                 }
                 Err(format!("AU component not found: {}", info.id))
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(not(all(target_os = "macos", feature = "au")))]
             {
                 Err("AU is only supported on macOS".into())
             }
@@ -1973,7 +2005,7 @@ fn samples_are_finite(samples: &[f32]) -> bool {
     samples.iter().all(|sample| sample.is_finite())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "au"))]
 fn fourcc_str(fourcc: u32) -> String {
     let bytes = [
         (fourcc >> 24) as u8,

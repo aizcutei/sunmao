@@ -97,7 +97,12 @@ impl GlContext {
         self.width = width as f32 / self.scale;
         self.height = height as f32 / self.scale;
         unsafe {
-            self.gl.viewport(0, 0, width as i32, height as i32);
+            self.gl.viewport(
+                0,
+                0,
+                width.min(i32::MAX as u32) as i32,
+                height.min(i32::MAX as u32) as i32,
+            );
         }
     }
 
@@ -166,7 +171,7 @@ void main() {
         ];
 
         let mut last_error = None;
-        for (label, vertex_shader_source, fragment_shader_source) in sources {
+        for (_label, vertex_shader_source, fragment_shader_source) in sources {
             let vs = gl
                 .create_shader(glow::VERTEX_SHADER)
                 .map_err(|e| e.to_string())?;
@@ -216,13 +221,17 @@ void main() {
 
     /// Resize the context
     pub fn resize(&mut self, width: f32, height: f32) {
-        self.width = width;
-        self.height = height;
+        if width.is_finite() && height.is_finite() && width >= 0.0 && height >= 0.0 {
+            self.width = width;
+            self.height = height;
+        }
     }
 
     /// Set the scale factor (for HiDPI)
     pub fn set_scale(&mut self, scale: f32) {
-        self.scale = scale;
+        if scale.is_finite() && scale > 0.0 {
+            self.scale = scale;
+        }
     }
 
     /// Begin a frame
@@ -289,8 +298,16 @@ void main() {
     fn set_ortho_transform(&self) {
         // Create orthographic projection matrix
         let left = 0.0;
-        let right = self.width;
-        let bottom = self.height;
+        let right = if self.width.is_finite() && self.width > 0.0 {
+            self.width
+        } else {
+            1.0
+        };
+        let bottom = if self.height.is_finite() && self.height > 0.0 {
+            self.height
+        } else {
+            1.0
+        };
         let top = 0.0;
         let near = -1.0;
         let far = 1.0;
@@ -336,6 +353,10 @@ void main() {
 impl GuiContext for GlContext {
     fn size(&self) -> (f32, f32) {
         (self.width, self.height)
+    }
+
+    fn scale_factor(&self) -> f32 {
+        self.scale
     }
 
     fn fill_rect(&mut self, x: f32, y: f32, w: f32, h: f32, fill: Fill) {

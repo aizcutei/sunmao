@@ -26,11 +26,11 @@ impl WindowVisualConfig {
             return Self::find_best_visual_config(connection);
         };
 
-        // SAFETY: TODO
+        // SAFETY: `connection` owns a live Xlib display for the duration of
+        // negotiation, and the returned framebuffer config is display-bound.
         let (fb_config, window_config) = unsafe {
             crate::gl::platform::GlContext::get_fb_config_and_visual(connection.dpy, gl_config)
-        }
-        .expect("Could not fetch framebuffer config");
+        }?;
 
         Ok(Self {
             fb_config: Some(fb_config),
@@ -71,12 +71,15 @@ fn create_color_map(
     visual_id: Visualid,
 ) -> Result<Colormap, Box<dyn Error>> {
     let colormap = connection.conn.generate_id()?;
-    connection.conn.create_colormap(
-        ColormapAlloc::NONE,
-        colormap,
-        connection.screen().root,
-        visual_id,
-    )?;
+    connection
+        .conn
+        .create_colormap(
+            ColormapAlloc::NONE,
+            colormap,
+            connection.screen().root,
+            visual_id,
+        )?
+        .check()?;
 
     Ok(colormap)
 }

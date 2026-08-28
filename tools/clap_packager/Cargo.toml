@@ -5,3 +5,4 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+sunmao_packager = { path = "../sunmao_packager" }

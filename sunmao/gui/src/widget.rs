@@ -34,6 +34,10 @@ pub trait Widget {
     /// Get the widget's current state
     fn state(&self) -> WidgetState;
 
+    /// Update keyboard focus state. Custom widgets that expose focus styling
+    /// should override this method.
+    fn set_focused(&mut self, _focused: bool) {}
+
     /// Handle an input event
     /// Returns true if the event was consumed
     fn handle_event(&mut self, event: &Event) -> bool;
@@ -58,7 +62,10 @@ pub trait ParameterWidget: Widget {
     /// Get the current normalized value (0.0 - 1.0)
     fn value(&self) -> f32;
 
-    /// Set the normalized value (0.0 - 1.0)
+    /// Set the normalized value (0.0 - 1.0) from plugin or host state.
+    ///
+    /// Programmatic synchronization must not invoke the value-changed callback,
+    /// otherwise a host automation update can be echoed back to the host.
     fn set_value(&mut self, value: f32);
 
     /// Get the display value (formatted string)
@@ -66,7 +73,7 @@ pub trait ParameterWidget: Widget {
         format!("{:.2}", self.value())
     }
 
-    /// Called when the value changes (for parameter automation)
+    /// Register a callback for value changes caused by user interaction.
     fn on_value_changed(&mut self, _callback: Box<dyn Fn(f32) + Send>) {}
 }
 
@@ -102,6 +109,13 @@ impl WidgetContainer {
 
         // Then try all widgets in reverse order (top to bottom)
         for widget in self.widgets.iter_mut().rev() {
+            // The focused widget already received the event above. Do not
+            // dispatch it a second time when it declines the event; controls
+            // are allowed to have side effects even for events they do not
+            // ultimately consume.
+            if self.focused_id == Some(widget.id()) {
+                continue;
+            }
             if widget.handle_event(event) {
                 return true;
             }
@@ -123,7 +137,26 @@ impl WidgetContainer {
     }
 
     pub fn set_focus(&mut self, id: Option<WidgetId>) {
+        // Never retain a focus target that is not part of the container. This
+        // keeps keyboard dispatch deterministic when callers use a stale ID.
+        let id = id.filter(|requested| self.widgets.iter().any(|widget| widget.id() == *requested));
+        if self.focused_id == id {
+            return;
+        }
+        for widget in &mut self.widgets {
+            if Some(widget.id()) == self.focused_id {
+                widget.set_focused(false);
+            }
+            if Some(widget.id()) == id {
+                widget.set_focused(true);
+            }
+        }
         self.focused_id = id;
+    }
+
+    /// Iterate over all widgets in paint order.
+    pub fn iter(&self) -> impl Iterator<Item = &dyn Widget> + '_ {
+        self.widgets.iter().map(|widget| widget.as_ref())
     }
 
     pub fn widget_at(&self, x: f32, y: f32) -> Option<&dyn Widget> {
@@ -139,5 +172,71 @@ impl WidgetContainer {
 impl Default for WidgetContainer {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Event, GuiContext, MouseButton, NullContext};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    struct CountingWidget {
+        calls: Arc<AtomicUsize>,
+        id: WidgetId,
+    }
+
+    impl Widget for CountingWidget {
+        fn id(&self) -> WidgetId {
+            self.id
+        }
+        fn bounds(&self) -> Rect {
+            Rect::new(0.0, 0.0, 100.0, 100.0)
+        }
+        fn set_bounds(&mut self, _bounds: Rect) {}
+        fn state(&self) -> WidgetState {
+            WidgetState::default()
+        }
+        fn handle_event(&mut self, _event: &Event) -> bool {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            false
+        }
+        fn draw(&self, _ctx: &mut dyn GuiContext) {}
+    }
+
+    #[test]
+    fn focused_widget_is_not_dispatched_twice() {
+        let mut container = WidgetContainer::new();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let widget = CountingWidget {
+            calls: Arc::clone(&calls),
+            id: 7,
+        };
+        container.add(widget);
+        container.set_focus(Some(7));
+        let event = Event::MouseUp {
+            x: 1.0,
+            y: 1.0,
+            button: MouseButton::Left,
+            modifiers: Default::default(),
+        };
+        assert!(!container.handle_event(&event));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        let mut ctx = NullContext::new(100.0, 100.0);
+        container.draw(&mut ctx);
+    }
+
+    #[test]
+    fn focus_rejects_unknown_widget_ids() {
+        let mut container = WidgetContainer::new();
+        container.set_focus(Some(99));
+        let event = Event::MouseUp {
+            x: 1.0,
+            y: 1.0,
+            button: MouseButton::Left,
+            modifiers: Default::default(),
+        };
+        assert!(!container.handle_event(&event));
     }
 }

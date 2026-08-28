@@ -14,9 +14,27 @@ sunmao_macros = { path = "macros" }
 sunmao_backend_clap = { path = "backend_clap" }
 sunmao_backend_vst3 = { path = "backend_vst3" }
 sunmao_runtime = { path = "runtime", optional = true }
-sunmao_gui = { path = "gui", optional = true }
+sunmao_gui = { path = "gui", default-features = false, optional = true }
+sunmao_view_baseview = { path = "view_baseview", default-features = false, optional = true }
 
 [features]
 default = []
 standalone = ["dep:sunmao_runtime"]
 gui = ["dep:sunmao_gui"]
+gui-gl = [
+    "gui",
+    "dep:sunmao_view_baseview",
+    "sunmao_view_baseview/gl",
+    "sunmao_view_baseview/wgpu",
+]
+gui-wgpu = [
+    "gui",
+    "dep:sunmao_view_baseview",
+    "sunmao_view_baseview/wgpu",
+]
+gui-webview = [
+    "gui",
+    "sunmao_gui/webview",
+    "dep:sunmao_view_baseview",
+    "sunmao_view_baseview/webview",
+]

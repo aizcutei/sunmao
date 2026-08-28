@@ -3,8 +3,7 @@
 //! A simple sine wave synthesizer demonstrating the SunMao framework with MIDI.
 
 use std::sync::Arc;
-use sunmao_core::prelude::*;
-use sunmao_macros::Params;
+use sunmao::prelude::*;
 
 /// Voice state for polyphony.
 struct Voice {

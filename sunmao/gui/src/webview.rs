@@ -5,7 +5,6 @@
 
 use crate::{Color, Fill, GuiContext, Stroke, TextAlign};
 use serde::Serialize;
-use std::f32::consts::PI;
 
 /// A drawing command to be sent to the WebView
 #[derive(Debug, Clone, Serialize)]
@@ -104,13 +103,17 @@ impl WebViewContext {
 
     /// Resize the context
     pub fn resize(&mut self, width: f32, height: f32) {
-        self.width = width;
-        self.height = height;
+        if width.is_finite() && height.is_finite() && width >= 0.0 && height >= 0.0 {
+            self.width = width;
+            self.height = height;
+        }
     }
 
     /// Set the scale factor
     pub fn set_scale(&mut self, scale: f32) {
-        self.scale = scale;
+        if scale.is_finite() && scale > 0.0 {
+            self.scale = scale;
+        }
     }
 
     /// Begin a new frame
@@ -149,8 +152,9 @@ impl WebViewContext {
                     height,
                     color,
                 } => {
+                    let color = js_string_literal(color);
                     js.push_str(&format!(
-                        "ctx.fillStyle = '{}';\nctx.fillRect({}, {}, {}, {});\n",
+                        "ctx.fillStyle = {};\nctx.fillRect({}, {}, {}, {});\n",
                         color, x, y, width, height
                     ));
                 }
@@ -162,8 +166,9 @@ impl WebViewContext {
                     color,
                     width_: stroke_width,
                 } => {
+                    let color = js_string_literal(color);
                     js.push_str(&format!(
-                        "ctx.strokeStyle = '{}';\nctx.lineWidth = {};\nctx.strokeRect({}, {}, {}, {});\n",
+                        "ctx.strokeStyle = {};\nctx.lineWidth = {};\nctx.strokeRect({}, {}, {}, {});\n",
                         color, stroke_width, x, y, width, height
                     ));
                 }
@@ -173,8 +178,9 @@ impl WebViewContext {
                     radius,
                     color,
                 } => {
+                    let color = js_string_literal(color);
                     js.push_str(&format!(
-                        "ctx.fillStyle = '{}';\nctx.beginPath();\nctx.arc({}, {}, {}, 0, Math.PI * 2);\nctx.fill();\n",
+                        "ctx.fillStyle = {};\nctx.beginPath();\nctx.arc({}, {}, {}, 0, Math.PI * 2);\nctx.fill();\n",
                         color, cx, cy, radius
                     ));
                 }
@@ -185,8 +191,9 @@ impl WebViewContext {
                     color,
                     width,
                 } => {
+                    let color = js_string_literal(color);
                     js.push_str(&format!(
-                        "ctx.strokeStyle = '{}';\nctx.lineWidth = {};\nctx.beginPath();\nctx.arc({}, {}, {}, 0, Math.PI * 2);\nctx.stroke();\n",
+                        "ctx.strokeStyle = {};\nctx.lineWidth = {};\nctx.beginPath();\nctx.arc({}, {}, {}, 0, Math.PI * 2);\nctx.stroke();\n",
                         color, width, cx, cy, radius
                     ));
                 }
@@ -198,8 +205,9 @@ impl WebViewContext {
                     color,
                     width,
                 } => {
+                    let color = js_string_literal(color);
                     js.push_str(&format!(
-                        "ctx.strokeStyle = '{}';\nctx.lineWidth = {};\nctx.beginPath();\nctx.moveTo({}, {});\nctx.lineTo({}, {});\nctx.stroke();\n",
+                        "ctx.strokeStyle = {};\nctx.lineWidth = {};\nctx.beginPath();\nctx.moveTo({}, {});\nctx.lineTo({}, {});\nctx.stroke();\n",
                         color, width, x1, y1, x2, y2
                     ));
                 }
@@ -212,8 +220,9 @@ impl WebViewContext {
                     color,
                     width,
                 } => {
+                    let color = js_string_literal(color);
                     js.push_str(&format!(
-                        "ctx.strokeStyle = '{}';\nctx.lineWidth = {};\nctx.beginPath();\nctx.arc({}, {}, {}, {}, {});\nctx.stroke();\n",
+                        "ctx.strokeStyle = {};\nctx.lineWidth = {};\nctx.beginPath();\nctx.arc({}, {}, {}, {}, {});\nctx.stroke();\n",
                         color, width, cx, cy, radius, start, end
                     ));
                 }
@@ -225,8 +234,9 @@ impl WebViewContext {
                     end,
                     color,
                 } => {
+                    let color = js_string_literal(color);
                     js.push_str(&format!(
-                        "ctx.fillStyle = '{}';\nctx.beginPath();\nctx.moveTo({}, {});\nctx.arc({}, {}, {}, {}, {});\nctx.closePath();\nctx.fill();\n",
+                        "ctx.fillStyle = {};\nctx.beginPath();\nctx.moveTo({}, {});\nctx.arc({}, {}, {}, {}, {});\nctx.closePath();\nctx.fill();\n",
                         color, cx, cy, cx, cy, radius, start, end
                     ));
                 }
@@ -238,8 +248,15 @@ impl WebViewContext {
                     color,
                     align,
                 } => {
+                    // JSON string encoding is also valid JavaScript string
+                    // syntax and handles quotes, backslashes, newlines and
+                    // U+2028/U+2029. Direct interpolation here allowed plugin
+                    // labels to break or inject the generated script.
+                    let text = js_string_literal(text);
+                    let color = js_string_literal(color);
+                    let align = js_string_literal(align);
                     js.push_str(&format!(
-                        "ctx.fillStyle = '{}';\nctx.font = '{}px sans-serif';\nctx.textAlign = '{}';\nctx.fillText('{}', {}, {});\n",
+                        "ctx.fillStyle = {};\nctx.font = '{}px sans-serif';\nctx.textAlign = {};\nctx.fillText({}, {}, {});\n",
                         color, size, align, text, x, y
                     ));
                 }
@@ -252,9 +269,29 @@ impl WebViewContext {
     }
 }
 
+fn js_string_literal(value: &str) -> String {
+    // JSON string syntax is valid JavaScript, but JSON does not escape HTML
+    // delimiters. Escape them as well so a label containing `</script>` stays
+    // inside the string when generated drawing code is embedded in a page.
+    serde_json::to_string(value)
+        .map(|literal| {
+            literal
+                .replace('&', "\\u0026")
+                .replace('<', "\\u003c")
+                .replace('>', "\\u003e")
+                .replace('\u{2028}', "\\u2028")
+                .replace('\u{2029}', "\\u2029")
+        })
+        .unwrap_or_else(|_| "\"\"".to_string())
+}
+
 impl GuiContext for WebViewContext {
     fn size(&self) -> (f32, f32) {
         (self.width, self.height)
+    }
+
+    fn scale_factor(&self) -> f32 {
+        self.scale
     }
 
     fn fill_rect(&mut self, x: f32, y: f32, width: f32, height: f32, fill: Fill) {
@@ -371,8 +408,14 @@ impl GuiContext for WebViewContext {
         });
     }
 
-    fn measure_text(&self, _text: &str, _size: f32) -> f32 {
-        0.0
+    fn measure_text(&self, text: &str, size: f32) -> f32 {
+        if !size.is_finite() || size <= 0.0 {
+            return 0.0;
+        }
+        // Canvas measurement is only available in the WebView process. This
+        // conservative estimate keeps renderer-independent layout useful
+        // until a round-trip metrics API is added.
+        text.chars().count() as f32 * size * 0.55
     }
 
     fn save(&mut self) {}
@@ -380,4 +423,39 @@ impl GuiContext for WebViewContext {
     fn translate(&mut self, _x: f32, _y: f32) {}
     fn clip(&mut self, _x: f32, _y: f32, _width: f32, _height: f32) {}
     fn reset_clip(&mut self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_javascript_escapes_plugin_text_as_a_string_literal() {
+        let mut context = WebViewContext::new(100.0, 50.0);
+        context.draw_text(
+            "quote':\\line\n</script>",
+            4.0,
+            8.0,
+            12.0,
+            Color::WHITE,
+            TextAlign::Left,
+        );
+
+        let javascript = context.generate_js();
+        assert!(
+            javascript.contains("ctx.fillText(\"quote':\\\\line\\n\\u003c/script\\u003e\", 4, 8);")
+        );
+        assert!(!javascript.contains("</script>"));
+        assert!(!javascript.contains("ctx.fillText('quote'"));
+    }
+
+    #[test]
+    fn scale_and_text_metrics_reject_invalid_values() {
+        let mut context = WebViewContext::new(100.0, 50.0);
+        context.set_scale(2.0);
+        context.set_scale(f32::NAN);
+        assert_eq!(context.scale_factor(), 2.0);
+        assert!(context.measure_text("gain", 12.0) > 0.0);
+        assert_eq!(context.measure_text("gain", f32::NAN), 0.0);
+    }
 }

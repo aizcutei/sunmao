@@ -5,8 +5,11 @@ use crate::{
     WindowHandler, WindowInfo,
 };
 use std::error::Error;
+use std::io::{Error as IoError, ErrorKind};
 use std::os::fd::AsRawFd;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
 use x11rb::protocol::Event as XEvent;
@@ -16,6 +19,7 @@ pub(super) struct EventLoop {
     window: WindowInner,
     parent_handle: Option<ParentHandle>,
     resize_receiver: Option<Receiver<Size>>,
+    blocking_stop_requested: Option<Arc<AtomicBool>>,
 
     new_physical_size: Option<PhySize>,
     frame_interval: Duration,
@@ -28,12 +32,14 @@ impl EventLoop {
         handler: impl WindowHandler + 'static,
         parent_handle: Option<ParentHandle>,
         resize_receiver: Option<Receiver<Size>>,
+        blocking_stop_requested: Option<Arc<AtomicBool>>,
     ) -> Self {
         Self {
             window,
             handler: Box::new(handler),
             parent_handle,
             resize_receiver,
+            blocking_stop_requested,
             frame_interval: Duration::from_millis(15),
             event_loop_running: false,
             new_physical_size: None,
@@ -81,6 +87,15 @@ impl EventLoop {
         self.event_loop_running = true;
 
         while self.event_loop_running {
+            if self
+                .blocking_stop_requested
+                .as_ref()
+                .is_some_and(|requested| requested.load(Ordering::Acquire))
+            {
+                self.handle_must_close();
+                break;
+            }
+
             if let Some(size) = self
                 .resize_receiver
                 .as_ref()
@@ -112,16 +127,21 @@ impl EventLoop {
             // before going to sleep:
             self.drain_xcb_events()?;
 
-            // FIXME: handle errors
-            poll(
-                &mut fds,
-                next_frame.duration_since(Instant::now()).subsec_millis() as i32,
-            )
-            .unwrap();
+            let timeout = (last_frame + self.frame_interval)
+                .saturating_duration_since(Instant::now())
+                .as_millis()
+                .min(i32::MAX as u128) as i32;
+            poll(&mut fds, timeout)?;
 
             if let Some(revents) = fds[0].revents() {
-                if revents.contains(PollFlags::POLLERR) {
-                    panic!("xcb connection poll error");
+                let fatal =
+                    revents & (PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL);
+                if !fatal.is_empty() {
+                    return Err(IoError::new(
+                        ErrorKind::ConnectionAborted,
+                        format!("XCB connection poll failed with {fatal:?}"),
+                    )
+                    .into());
                 }
 
                 if revents.contains(PollFlags::POLLIN) {

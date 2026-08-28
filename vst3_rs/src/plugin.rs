@@ -424,8 +424,14 @@ impl HostHandle {
 unsafe impl Send for HostHandle {}
 unsafe impl Sync for HostHandle {}
 
-/// Main plugin trait - implement this to create a VST3 plugin
-pub trait Plugin: Sized + Send + Sync + 'static {
+/// Main plugin trait - implement this to create a VST3 plugin.
+///
+/// VST3 hands processor and controller instances between host-managed threads
+/// through raw COM pointers. The wrapper relies on VST3's serialized instance
+/// callback contract instead of claiming that shared Rust references may be
+/// used concurrently. Higher-level adapters can impose `Send` where their DSP
+/// ownership model requires it.
+pub trait Plugin: Sized + 'static {
     /// Maximum number of host events accepted in one processing block.
     const MAX_EVENTS_PER_BLOCK: usize = 4096;
 

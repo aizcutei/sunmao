@@ -3,6 +3,7 @@
 //! This module contains the unsafe FFI glue that converts Plugin trait
 //! implementations into VST3 COM interfaces.
 
+use crate::process::{MAX_PROCESS_EVENTS, MAX_PROCESS_FRAMES};
 use crate::state::{load_parameter_state, save_parameter_state};
 use crate::{HostHandle, ParamInfo, ParameterBridge, Plugin, ProcessContext, ProcessError};
 use std::ffi::c_void;
@@ -11,6 +12,26 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 use vst3_sys::*;
 
+/// Bound host-controlled parameter queue traversal on the realtime callback.
+///
+/// VST3 reports the number of changed parameter queues as an `int32`. A host
+/// can therefore otherwise make a malformed callback spend a very long time
+/// repeatedly calling `getParameterData`, even when the plugin has only a
+/// handful of parameters. The limit is deliberately independent from a
+/// plugin's event capacity because zero-point/unknown queues do not consume
+/// that capacity but still cost callback time.
+const MAX_PARAMETER_QUEUES: usize = 4096;
+
+/// Keep Rust panics on the Rust side of a VST3 COM ABI callback.
+///
+/// VST3 hosts call these functions through raw vtables.  Letting a panic
+/// unwind through that boundary is never valid, so callbacks translate a
+/// panic into the error value appropriate for their return type.
+#[inline]
+fn ffi_guard<T>(fallback: T, callback: impl FnOnce() -> T) -> T {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(callback)).unwrap_or(fallback)
+}
+
 const PARAMETER_CONNECTION_IID: TUID =
     vst3_sys::uid!(0x53554E4D, 0x414F5042, 0x52494447, 0x45000001);
 const CONNECTION_ROLE_PROCESSOR: u32 = 1;
@@ -18,6 +39,16 @@ const CONNECTION_ROLE_CONTROLLER: u32 = 2;
 
 #[doc(hidden)]
 pub unsafe fn factory_query_interface(
+    instance: *mut c_void,
+    requested_iid: *const TUID,
+    object: *mut *mut c_void,
+) -> tresult {
+    ffi_guard(kInternalError, || unsafe {
+        factory_query_interface_unchecked(instance, requested_iid, object)
+    })
+}
+
+unsafe fn factory_query_interface_unchecked(
     instance: *mut c_void,
     requested_iid: *const TUID,
     object: *mut *mut c_void,
@@ -62,11 +93,14 @@ struct ConnectionPointVtbl {
 }
 
 unsafe fn connect_parameter_bridges(this: *mut c_void, other: *mut c_void) -> tresult {
-    if other.is_null() {
+    if this.is_null() || other.is_null() {
         return kInvalidArgument;
     }
 
     let other_unknown = *(other as *const *const IUnknownVtbl);
+    if other_unknown.is_null() {
+        return kNoInterface;
+    }
     let mut peer = std::ptr::null_mut();
     let result = ((*other_unknown).query_interface)(other, &PARAMETER_CONNECTION_IID, &mut peer);
     if result != kResultOk || peer.is_null() {
@@ -75,6 +109,12 @@ unsafe fn connect_parameter_bridges(this: *mut c_void, other: *mut c_void) -> tr
 
     let this_vtbl = *(this as *const *const ConnectionPointVtbl);
     let peer_vtbl = *(peer as *const *const ConnectionPointVtbl);
+    if this_vtbl.is_null() || peer_vtbl.is_null() {
+        if !peer_vtbl.is_null() {
+            ((*peer_vtbl).release)(peer);
+        }
+        return kNoInterface;
+    }
     let this_role = ((*this_vtbl).get_role)(this);
     let peer_role = ((*peer_vtbl).get_role)(peer);
 
@@ -95,11 +135,14 @@ unsafe fn connect_parameter_bridges(this: *mut c_void, other: *mut c_void) -> tr
 }
 
 unsafe fn disconnect_parameter_bridges(this: *mut c_void, other: *mut c_void) -> tresult {
-    if other.is_null() {
+    if this.is_null() || other.is_null() {
         return kInvalidArgument;
     }
 
     let other_unknown = *(other as *const *const IUnknownVtbl);
+    if other_unknown.is_null() {
+        return kNoInterface;
+    }
     let mut peer = std::ptr::null_mut();
     let result = ((*other_unknown).query_interface)(other, &PARAMETER_CONNECTION_IID, &mut peer);
     if result != kResultOk || peer.is_null() {
@@ -108,6 +151,12 @@ unsafe fn disconnect_parameter_bridges(this: *mut c_void, other: *mut c_void) ->
 
     let this_vtbl = *(this as *const *const ConnectionPointVtbl);
     let peer_vtbl = *(peer as *const *const ConnectionPointVtbl);
+    if this_vtbl.is_null() || peer_vtbl.is_null() {
+        if !peer_vtbl.is_null() {
+            ((*peer_vtbl).release)(peer);
+        }
+        return kNoInterface;
+    }
     let this_role = ((*this_vtbl).get_role)(this);
     let peer_role = ((*peer_vtbl).get_role)(peer);
 
@@ -159,6 +208,56 @@ fn event_sample_offset(offset: int32, num_samples: int32) -> u32 {
     }
 }
 
+#[inline]
+fn sanitize_normalized(value: ParamValue, fallback: ParamValue) -> ParamValue {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        fallback
+    }
+}
+
+#[inline]
+fn sanitize_plain(value: ParamValue, fallback: ParamValue) -> ParamValue {
+    if value.is_finite() { value } else { fallback }
+}
+
+#[inline]
+fn safe_plain_value(param: &ParamInfo, normalized: ParamValue) -> ParamValue {
+    let plain = param.to_plain(normalized);
+    if plain.is_finite() {
+        plain
+    } else if param.min.is_finite() {
+        param.min
+    } else {
+        0.0
+    }
+}
+
+fn valid_note_event(event: &Event, accepts_midi: bool) -> bool {
+    if !accepts_midi || event.bus_index != 0 {
+        return false;
+    }
+
+    match event.type_ {
+        EventTypes::kNoteOnEvent => {
+            let note = unsafe { event.event.note_on };
+            (0..=15).contains(&note.channel)
+                && (0..=127).contains(&note.pitch)
+                && note.velocity.is_finite()
+                && (0.0..=1.0).contains(&note.velocity)
+        }
+        EventTypes::kNoteOffEvent => {
+            let note = unsafe { event.event.note_off };
+            (0..=15).contains(&note.channel)
+                && (0..=127).contains(&note.pitch)
+                && note.velocity.is_finite()
+                && (0.0..=1.0).contains(&note.velocity)
+        }
+        _ => true,
+    }
+}
+
 /// Internal processor wrapper
 #[repr(C)]
 pub struct ProcessorWrapper<P: Plugin> {
@@ -168,6 +267,10 @@ pub struct ProcessorWrapper<P: Plugin> {
     ref_count: AtomicI32,
     controller_cid: TUID,
     plugin: Option<P>,
+    initialized: bool,
+    active: bool,
+    processing: bool,
+    accepts_midi: bool,
     sample_rate: f64,
     max_frames: u32,
     process_ctx: Option<ProcessContext>,
@@ -179,6 +282,9 @@ pub struct ProcessorWrapper<P: Plugin> {
     // bus data without rebuilding AudioConfig on the realtime thread.
     input_bus_channels: Box<[u32]>,
     output_bus_channels: Box<[u32]>,
+    _component_vtbl_storage: Box<ComponentVtbl>,
+    _audio_vtbl_storage: Box<AudioProcessorVtbl>,
+    _connection_vtbl_storage: Box<ConnectionPointVtbl>,
 }
 
 #[repr(C)]
@@ -237,9 +343,16 @@ struct AudioProcessorVtbl {
 
 impl<P: Plugin> ProcessorWrapper<P> {
     pub fn new(controller_cid: TUID) -> *mut Self {
-        let vtbl_component = Box::leak(Box::new(Self::make_component_vtbl(controller_cid)));
-        let vtbl_audio = Box::leak(Box::new(Self::make_audio_vtbl()));
-        let vtbl_connection = Box::leak(Box::new(Self::make_connection_vtbl()));
+        ffi_guard(std::ptr::null_mut(), || Self::new_unchecked(controller_cid))
+    }
+
+    fn new_unchecked(controller_cid: TUID) -> *mut Self {
+        let component_vtbl_storage = Box::new(Self::make_component_vtbl());
+        let audio_vtbl_storage = Box::new(Self::make_audio_vtbl());
+        let connection_vtbl_storage = Box::new(Self::make_connection_vtbl());
+        let vtbl_component = &*component_vtbl_storage;
+        let vtbl_audio = &*audio_vtbl_storage;
+        let vtbl_connection = &*connection_vtbl_storage;
 
         let params = P::params();
         let audio_config = P::audio_config();
@@ -266,6 +379,10 @@ impl<P: Plugin> ProcessorWrapper<P> {
             ref_count: AtomicI32::new(1),
             controller_cid,
             plugin: Some(plugin),
+            initialized: false,
+            active: false,
+            processing: false,
+            accepts_midi: audio_config.accepts_midi,
             sample_rate: 44100.0,
             max_frames: 1024,
             process_ctx: None,
@@ -275,11 +392,14 @@ impl<P: Plugin> ProcessorWrapper<P> {
             parameter_generation: 0,
             input_bus_channels,
             output_bus_channels,
+            _component_vtbl_storage: component_vtbl_storage,
+            _audio_vtbl_storage: audio_vtbl_storage,
+            _connection_vtbl_storage: connection_vtbl_storage,
         });
         Box::into_raw(wrapper)
     }
 
-    fn make_component_vtbl(controller_cid: TUID) -> ComponentVtbl {
+    fn make_component_vtbl() -> ComponentVtbl {
         ComponentVtbl {
             query_interface: Self::component_query_interface,
             add_ref: Self::component_add_ref,
@@ -344,6 +464,10 @@ impl<P: Plugin> ProcessorWrapper<P> {
         iid: *const TUID,
         obj: *mut *mut c_void,
     ) -> tresult {
+        if this.is_null() || iid.is_null() || obj.is_null() {
+            return kInvalidArgument;
+        }
+        *obj = std::ptr::null_mut();
         let iid = &*iid;
         let base = Self::from_component(this);
         if iid_equal(iid, &iid::IUnknown)
@@ -369,11 +493,21 @@ impl<P: Plugin> ProcessorWrapper<P> {
     }
 
     unsafe extern "system" fn component_add_ref(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
         let obj = Self::from_component(this);
         (*obj).ref_count.fetch_add(1, Ordering::SeqCst) as uint32 + 1
     }
 
     unsafe extern "system" fn component_release(this: *mut c_void) -> uint32 {
+        ffi_guard(0, || unsafe { Self::component_release_unchecked(this) })
+    }
+
+    unsafe fn component_release_unchecked(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
         let obj = Self::from_component(this);
         let count = (*obj).ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
         if count == 0 {
@@ -388,6 +522,10 @@ impl<P: Plugin> ProcessorWrapper<P> {
         iid: *const TUID,
         obj: *mut *mut c_void,
     ) -> tresult {
+        if this.is_null() || iid.is_null() || obj.is_null() {
+            return kInvalidArgument;
+        }
+        *obj = std::ptr::null_mut();
         let iid = &*iid;
         let base = Self::from_audio(this);
         if iid_equal(iid, &vst_iid::IAudioProcessor) {
@@ -413,11 +551,21 @@ impl<P: Plugin> ProcessorWrapper<P> {
     }
 
     unsafe extern "system" fn audio_add_ref(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
         let obj = Self::from_audio(this);
         (*obj).ref_count.fetch_add(1, Ordering::SeqCst) as uint32 + 1
     }
 
     unsafe extern "system" fn audio_release(this: *mut c_void) -> uint32 {
+        ffi_guard(0, || unsafe { Self::audio_release_unchecked(this) })
+    }
+
+    unsafe fn audio_release_unchecked(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
         let obj = Self::from_audio(this);
         let count = (*obj).ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
         if count == 0 {
@@ -431,6 +579,10 @@ impl<P: Plugin> ProcessorWrapper<P> {
         requested_iid: *const TUID,
         obj: *mut *mut c_void,
     ) -> tresult {
+        if this.is_null() || requested_iid.is_null() || obj.is_null() {
+            return kInvalidArgument;
+        }
+        *obj = std::ptr::null_mut();
         let base = Self::from_connection(this);
         if iid_equal(&*requested_iid, &PARAMETER_CONNECTION_IID)
             || iid_equal(&*requested_iid, &vst_iid::IConnectionPoint)
@@ -443,24 +595,34 @@ impl<P: Plugin> ProcessorWrapper<P> {
     }
 
     unsafe extern "system" fn connection_add_ref(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
         let base = Self::from_connection(this);
         Self::component_add_ref(base as *mut c_void)
     }
 
     unsafe extern "system" fn connection_release(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
         let base = Self::from_connection(this);
         Self::component_release(base as *mut c_void)
     }
 
     unsafe extern "system" fn connection_connect(this: *mut c_void, other: *mut c_void) -> tresult {
-        connect_parameter_bridges(this, other)
+        ffi_guard(kInternalError, || unsafe {
+            connect_parameter_bridges(this, other)
+        })
     }
 
     unsafe extern "system" fn connection_disconnect(
         this: *mut c_void,
         other: *mut c_void,
     ) -> tresult {
-        disconnect_parameter_bridges(this, other)
+        ffi_guard(kInternalError, || unsafe {
+            disconnect_parameter_bridges(this, other)
+        })
     }
 
     unsafe extern "system" fn connection_notify(
@@ -477,6 +639,9 @@ impl<P: Plugin> ProcessorWrapper<P> {
     unsafe extern "system" fn connection_get_parameter_bridge(
         this: *mut c_void,
     ) -> *const ParameterBridge {
+        if this.is_null() {
+            return std::ptr::null();
+        }
         let base = Self::from_connection(this);
         Arc::as_ptr(&(*base).parameter_bridge)
     }
@@ -491,11 +656,24 @@ impl<P: Plugin> ProcessorWrapper<P> {
     // IComponent methods
     unsafe extern "system" fn processor_initialize(
         this: *mut c_void,
-        _context: *mut c_void,
+        context: *mut c_void,
     ) -> tresult {
+        ffi_guard(kInternalError, || unsafe {
+            Self::processor_initialize_unchecked(this, context)
+        })
+    }
+
+    unsafe fn processor_initialize_unchecked(this: *mut c_void, _context: *mut c_void) -> tresult {
+        if this.is_null() {
+            return kInvalidArgument;
+        }
         let obj = Self::from_component(this);
+        if (*obj).initialized {
+            return kResultOk;
+        }
         if let Some(plugin) = (*obj).plugin.as_mut() {
             if plugin.init() {
+                (*obj).initialized = true;
                 kResultOk
             } else {
                 kResultFalse
@@ -505,7 +683,29 @@ impl<P: Plugin> ProcessorWrapper<P> {
         }
     }
 
-    unsafe extern "system" fn processor_terminate(_this: *mut c_void) -> tresult {
+    unsafe extern "system" fn processor_terminate(this: *mut c_void) -> tresult {
+        ffi_guard(kInternalError, || unsafe {
+            Self::processor_terminate_unchecked(this)
+        })
+    }
+
+    unsafe fn processor_terminate_unchecked(this: *mut c_void) -> tresult {
+        if this.is_null() {
+            return kInvalidArgument;
+        }
+        let obj = Self::from_component(this);
+        (*obj).initialized = false;
+        (*obj).processing = false;
+        (*obj).process_ctx = None;
+        if (*obj).active {
+            // Publish the inactive state before entering user code. If the
+            // plugin panics, the guarded ABI callback still leaves the
+            // wrapper in a state that can be safely terminated again.
+            (*obj).active = false;
+            if let Some(plugin) = (*obj).plugin.as_mut() {
+                plugin.deactivate();
+            }
+        }
         kResultOk
     }
 
@@ -513,6 +713,9 @@ impl<P: Plugin> ProcessorWrapper<P> {
         this: *mut c_void,
         class_id: *mut TUID,
     ) -> tresult {
+        if this.is_null() || class_id.is_null() {
+            return kInvalidArgument;
+        }
         let obj = Self::from_component(this);
         *class_id = (*obj).controller_cid;
         kResultOk
@@ -523,10 +726,23 @@ impl<P: Plugin> ProcessorWrapper<P> {
     }
 
     unsafe extern "system" fn processor_get_bus_count(
-        _this: *mut c_void,
+        this: *mut c_void,
         media_type: MediaType,
         dir: BusDirection,
     ) -> int32 {
+        ffi_guard(0, || unsafe {
+            Self::processor_get_bus_count_unchecked(this, media_type, dir)
+        })
+    }
+
+    unsafe fn processor_get_bus_count_unchecked(
+        this: *mut c_void,
+        media_type: MediaType,
+        dir: BusDirection,
+    ) -> int32 {
+        if this.is_null() {
+            return 0;
+        }
         let config = P::audio_config();
         if media_type == MediaTypes::kAudio {
             if dir == BusDirections::kInput {
@@ -547,13 +763,25 @@ impl<P: Plugin> ProcessorWrapper<P> {
     }
 
     unsafe extern "system" fn processor_get_bus_info(
-        _this: *mut c_void,
+        this: *mut c_void,
         media_type: MediaType,
         dir: BusDirection,
         index: int32,
         bus: *mut BusInfo,
     ) -> tresult {
-        if bus.is_null() || index < 0 {
+        ffi_guard(kInternalError, || unsafe {
+            Self::processor_get_bus_info_unchecked(this, media_type, dir, index, bus)
+        })
+    }
+
+    unsafe fn processor_get_bus_info_unchecked(
+        this: *mut c_void,
+        media_type: MediaType,
+        dir: BusDirection,
+        index: int32,
+        bus: *mut BusInfo,
+    ) -> tresult {
+        if this.is_null() || bus.is_null() || index < 0 {
             return kInvalidArgument;
         }
         let config = P::audio_config();
@@ -570,8 +798,14 @@ impl<P: Plugin> ProcessorWrapper<P> {
             if let Some(port) = ports.get(index as usize) {
                 bus.media_type = MediaTypes::kAudio;
                 bus.direction = dir;
-                bus.channel_count = port.channels as int32;
-                bus.bus_type = BusTypes::kMain;
+                let Ok(channel_count) = int32::try_from(port.channels) else {
+                    return kInvalidArgument;
+                };
+                bus.channel_count = channel_count;
+                bus.bus_type = match port.port_type {
+                    crate::PortType::Main => BusTypes::kMain,
+                    crate::PortType::Aux => BusTypes::kAux,
+                };
                 bus.flags = BusFlags::kDefaultActive;
                 str16cpy_safe(&mut bus.name, port.name);
                 return kResultOk;
@@ -610,15 +844,39 @@ impl<P: Plugin> ProcessorWrapper<P> {
     }
 
     unsafe extern "system" fn processor_set_active(this: *mut c_void, state: TBool) -> tresult {
+        ffi_guard(kInternalError, || unsafe {
+            Self::processor_set_active_unchecked(this, state)
+        })
+    }
+
+    unsafe fn processor_set_active_unchecked(this: *mut c_void, state: TBool) -> tresult {
+        if this.is_null() {
+            return kInvalidArgument;
+        }
         let obj = Self::from_component(this);
+        if !(*obj).initialized {
+            return kNotInitialized;
+        }
         if let Some(plugin) = (*obj).plugin.as_mut() {
             if state != 0 {
+                if (*obj).active {
+                    return kResultOk;
+                }
+                if (*obj).process_ctx.is_none() {
+                    return kNotInitialized;
+                }
                 if plugin.activate((*obj).sample_rate, (*obj).max_frames) {
+                    (*obj).active = true;
                     kResultOk
                 } else {
                     kResultFalse
                 }
             } else {
+                if !(*obj).active {
+                    return kResultOk;
+                }
+                (*obj).active = false;
+                (*obj).processing = false;
                 plugin.deactivate();
                 kResultOk
             }
@@ -631,6 +889,15 @@ impl<P: Plugin> ProcessorWrapper<P> {
         this: *mut c_void,
         state: *mut c_void,
     ) -> tresult {
+        ffi_guard(kInternalError, || unsafe {
+            Self::processor_set_state_unchecked(this, state)
+        })
+    }
+
+    unsafe fn processor_set_state_unchecked(this: *mut c_void, state: *mut c_void) -> tresult {
+        if this.is_null() {
+            return kInvalidArgument;
+        }
         let obj = Self::from_component(this);
         load_parameter_state(state, &(*obj).params, |id, value| {
             (*obj).parameter_bridge.set(id, value);
@@ -640,18 +907,42 @@ impl<P: Plugin> ProcessorWrapper<P> {
         this: *mut c_void,
         state: *mut c_void,
     ) -> tresult {
+        ffi_guard(kInternalError, || unsafe {
+            Self::processor_get_state_unchecked(this, state)
+        })
+    }
+
+    unsafe fn processor_get_state_unchecked(this: *mut c_void, state: *mut c_void) -> tresult {
+        if this.is_null() {
+            return kInvalidArgument;
+        }
         let obj = Self::from_component(this);
         save_parameter_state(state, &(*obj).params, |id| (*obj).parameter_bridge.get(id))
     }
 
     // IAudioProcessor methods
     unsafe extern "system" fn audio_set_bus_arrangements(
-        _this: *mut c_void,
+        this: *mut c_void,
         inputs: *mut SpeakerArrangement,
         num_ins: int32,
         outputs: *mut SpeakerArrangement,
         num_outs: int32,
     ) -> tresult {
+        ffi_guard(kInternalError, || unsafe {
+            Self::audio_set_bus_arrangements_unchecked(this, inputs, num_ins, outputs, num_outs)
+        })
+    }
+
+    unsafe fn audio_set_bus_arrangements_unchecked(
+        this: *mut c_void,
+        inputs: *mut SpeakerArrangement,
+        num_ins: int32,
+        outputs: *mut SpeakerArrangement,
+        num_outs: int32,
+    ) -> tresult {
+        if this.is_null() {
+            return kInvalidArgument;
+        }
         let config = P::audio_config();
         if num_ins < 0
             || num_outs < 0
@@ -696,12 +987,23 @@ impl<P: Plugin> ProcessorWrapper<P> {
     }
 
     unsafe extern "system" fn audio_get_bus_arrangement(
-        _this: *mut c_void,
+        this: *mut c_void,
         dir: BusDirection,
         index: int32,
         arr: *mut SpeakerArrangement,
     ) -> tresult {
-        if arr.is_null() || index < 0 {
+        ffi_guard(kInternalError, || unsafe {
+            Self::audio_get_bus_arrangement_unchecked(this, dir, index, arr)
+        })
+    }
+
+    unsafe fn audio_get_bus_arrangement_unchecked(
+        this: *mut c_void,
+        dir: BusDirection,
+        index: int32,
+        arr: *mut SpeakerArrangement,
+    ) -> tresult {
+        if this.is_null() || arr.is_null() || index < 0 {
             return kInvalidArgument;
         }
         let config = P::audio_config();
@@ -723,9 +1025,12 @@ impl<P: Plugin> ProcessorWrapper<P> {
     }
 
     unsafe extern "system" fn audio_can_process_sample_size(
-        _this: *mut c_void,
+        this: *mut c_void,
         symbolic_sample_size: int32,
     ) -> tresult {
+        if this.is_null() {
+            return kInvalidArgument;
+        }
         if symbolic_sample_size == SymbolicSampleSizes::kSample32 {
             kResultOk
         } else {
@@ -734,6 +1039,15 @@ impl<P: Plugin> ProcessorWrapper<P> {
     }
 
     unsafe extern "system" fn audio_get_latency_samples(this: *mut c_void) -> uint32 {
+        ffi_guard(0, || unsafe {
+            Self::audio_get_latency_samples_unchecked(this)
+        })
+    }
+
+    unsafe fn audio_get_latency_samples_unchecked(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
         let obj = Self::from_audio(this);
         (*obj).plugin.as_ref().map(|p| p.latency()).unwrap_or(0)
     }
@@ -742,40 +1056,90 @@ impl<P: Plugin> ProcessorWrapper<P> {
         this: *mut c_void,
         setup: *mut ProcessSetup,
     ) -> tresult {
-        if setup.is_null() {
+        ffi_guard(kInternalError, || unsafe {
+            Self::audio_setup_processing_unchecked(this, setup)
+        })
+    }
+
+    unsafe fn audio_setup_processing_unchecked(
+        this: *mut c_void,
+        setup: *mut ProcessSetup,
+    ) -> tresult {
+        if this.is_null() || setup.is_null() {
             return kInvalidArgument;
         }
         let setup = &*setup;
+        if setup.symbolic_sample_size != SymbolicSampleSizes::kSample32 {
+            return kResultFalse;
+        }
         if setup.max_samples_per_block < 0
             || !setup.sample_rate.is_finite()
             || setup.sample_rate <= 0.0
         {
             return kInvalidArgument;
         }
+        if setup.max_samples_per_block as u32 > MAX_PROCESS_FRAMES {
+            return kOutOfMemory;
+        }
+        if P::MAX_EVENTS_PER_BLOCK > MAX_PROCESS_EVENTS {
+            return kOutOfMemory;
+        }
 
         let obj = Self::from_audio(this);
-        (*obj).sample_rate = setup.sample_rate;
-        (*obj).max_frames = setup.max_samples_per_block as u32;
+        if (*obj).active {
+            // VST3 does not permit changing the processing setup while the
+            // component is active. The host must deactivate before renegotiating.
+            return kResultFalse;
+        }
+        let sample_rate = setup.sample_rate;
+        let max_frames = setup.max_samples_per_block as u32;
 
         // Create process context
         let config = P::audio_config();
-        let num_in = config.inputs.iter().map(|p| p.channels as usize).sum();
-        let num_out = config.outputs.iter().map(|p| p.channels as usize).sum();
-        let process_ctx = ProcessContext::new(
-            (*obj).max_frames as usize,
-            (*obj).sample_rate,
+        let Some(num_in) = config.inputs.iter().try_fold(0usize, |total, port| {
+            total.checked_add(port.channels as usize)
+        }) else {
+            return kInvalidArgument;
+        };
+        let Some(num_out) = config.outputs.iter().try_fold(0usize, |total, port| {
+            total.checked_add(port.channels as usize)
+        }) else {
+            return kInvalidArgument;
+        };
+        let Some(process_ctx) = ProcessContext::try_new(
+            max_frames as usize,
+            sample_rate,
             num_in,
             num_out,
             P::MAX_EVENTS_PER_BLOCK,
-        );
+        ) else {
+            return kOutOfMemory;
+        };
+        (*obj).sample_rate = sample_rate;
+        (*obj).max_frames = max_frames;
         (*obj).process_ctx = Some(process_ctx);
 
         kResultOk
     }
 
     unsafe extern "system" fn audio_set_processing(this: *mut c_void, state: TBool) -> tresult {
+        ffi_guard(kInternalError, || unsafe {
+            Self::audio_set_processing_unchecked(this, state)
+        })
+    }
+
+    unsafe fn audio_set_processing_unchecked(this: *mut c_void, state: TBool) -> tresult {
+        if this.is_null() {
+            return kInvalidArgument;
+        }
         let obj = Self::from_audio(this);
-        if state == 0 {
+        if state != 0 {
+            if !(*obj).initialized || !(*obj).active || (*obj).process_ctx.is_none() {
+                return kNotInitialized;
+            }
+            (*obj).processing = true;
+        } else if (*obj).processing {
+            (*obj).processing = false;
             if let Some(plugin) = (*obj).plugin.as_mut() {
                 plugin.reset();
             }
@@ -784,10 +1148,38 @@ impl<P: Plugin> ProcessorWrapper<P> {
     }
 
     unsafe extern "system" fn audio_process(this: *mut c_void, data: *mut ProcessData) -> tresult {
-        if data.is_null() {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            Self::audio_process_unchecked(this, data)
+        })) {
+            Ok(result) => result,
+            Err(_) => {
+                // A process panic leaves the user processor in an unknown
+                // state. Stop accepting further realtime blocks until the
+                // host performs the normal stop/deactivate transition. This
+                // also makes the callback's failure recoverable instead of
+                // repeatedly invoking a poisoned processor.
+                if !this.is_null() {
+                    let obj = unsafe { Self::from_audio(this) };
+                    unsafe {
+                        (*obj).processing = false;
+                    }
+                }
+                kInternalError
+            }
+        }
+    }
+
+    unsafe fn audio_process_unchecked(this: *mut c_void, data: *mut ProcessData) -> tresult {
+        if this.is_null() || data.is_null() {
             return kInvalidArgument;
         }
         let obj = Self::from_audio(this);
+        if !(*obj).initialized || (*obj).process_ctx.is_none() {
+            return kNotInitialized;
+        }
+        if !(*obj).active || !(*obj).processing {
+            return kResultFalse;
+        }
         let data_ref = &*data;
         if data_ref.num_samples < 0 || data_ref.num_inputs < 0 || data_ref.num_outputs < 0 {
             return kInvalidArgument;
@@ -844,7 +1236,7 @@ impl<P: Plugin> ProcessorWrapper<P> {
         let shared_generation = (*obj).parameter_bridge.generation();
         let plugin = match (*obj).plugin.as_mut() {
             Some(p) => p,
-            None => return kResultOk,
+            None => return kNotInitialized,
         };
 
         if shared_generation != (*obj).parameter_generation {
@@ -872,7 +1264,12 @@ impl<P: Plugin> ProcessorWrapper<P> {
             if num_params < 0 {
                 return kInvalidArgument;
             }
+            let num_params = num_params as usize;
+            if num_params > MAX_PARAMETER_QUEUES {
+                return kOutOfMemory;
+            }
             for queue_index in 0..num_params {
+                let queue_index = queue_index as int32;
                 let queue = ((*vtbl).get_parameter_data)(param_changes, queue_index);
                 if queue.is_null() {
                     continue;
@@ -893,7 +1290,16 @@ impl<P: Plugin> ProcessorWrapper<P> {
                 if num_points < 0 {
                     return kInvalidArgument;
                 }
+                let num_points = num_points as usize;
+                // Check the whole known queue before entering the point loop.
+                // This keeps a malicious point count from turning into an
+                // unbounded series of ABI calls when the plugin event budget
+                // is large (or intentionally unlimited).
+                if num_points > P::MAX_EVENTS_PER_BLOCK.saturating_sub(accepted_event_count) {
+                    return kOutOfMemory;
+                }
                 for point_index in 0..num_points {
+                    let point_index = point_index as int32;
                     let mut offset: int32 = 0;
                     let mut value: ParamValue = 0.0;
                     if ((*queue_vtbl).get_point)(queue, point_index, &mut offset, &mut value)
@@ -964,6 +1370,9 @@ impl<P: Plugin> ProcessorWrapper<P> {
             for i in 0..num_events {
                 let mut event = Event::default();
                 if ((*vtbl).get_event)(events, i, &mut event) == kResultOk {
+                    if !valid_note_event(&event, (*obj).accepts_midi) {
+                        return kInvalidArgument;
+                    }
                     let sample_offset =
                         event_sample_offset(event.sample_offset, data_ref.num_samples);
                     match event.type_ {
@@ -1044,8 +1453,33 @@ impl<P: Plugin> ProcessorWrapper<P> {
     }
 
     unsafe extern "system" fn audio_get_tail_samples(this: *mut c_void) -> uint32 {
+        ffi_guard(kNoTail, || unsafe {
+            Self::audio_get_tail_samples_unchecked(this)
+        })
+    }
+
+    unsafe fn audio_get_tail_samples_unchecked(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return kNoTail;
+        }
         let obj = Self::from_audio(this);
         (*obj).plugin.as_ref().map(|p| p.tail()).unwrap_or(kNoTail)
+    }
+}
+
+impl<P: Plugin> Drop for ProcessorWrapper<P> {
+    fn drop(&mut self) {
+        if self.active {
+            self.active = false;
+            self.processing = false;
+            if let Some(plugin) = self.plugin.as_mut() {
+                // Dropping a COM object is itself reached through a raw ABI
+                // callback. Do not let a user panic escape from `Drop`.
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    plugin.deactivate();
+                }));
+            }
+        }
     }
 }
 
@@ -1059,6 +1493,8 @@ pub struct ControllerWrapper<P: Plugin> {
     parameter_bridge: Arc<ParameterBridge>,
     host: HostHandle,
     _marker: PhantomData<P>,
+    _vtbl_storage: Box<ControllerVtbl>,
+    _connection_vtbl_storage: Box<ConnectionPointVtbl>,
 }
 
 #[repr(C)]
@@ -1091,12 +1527,18 @@ struct ControllerVtbl {
 
 impl<P: Plugin> ControllerWrapper<P> {
     pub fn new() -> *mut Self {
+        ffi_guard(std::ptr::null_mut(), || Self::new_unchecked())
+    }
+
+    fn new_unchecked() -> *mut Self {
         let params = P::params();
         let parameter_bridge = Arc::new(ParameterBridge::new(&params));
         let host = HostHandle::new(parameter_bridge.clone());
 
-        let vtbl = Box::leak(Box::new(Self::make_vtbl()));
-        let vtbl_connection = Box::leak(Box::new(Self::make_connection_vtbl()));
+        let vtbl_storage = Box::new(Self::make_vtbl());
+        let connection_vtbl_storage = Box::new(Self::make_connection_vtbl());
+        let vtbl = &*vtbl_storage;
+        let vtbl_connection = &*connection_vtbl_storage;
 
         let wrapper = Box::new(Self {
             vtbl,
@@ -1106,6 +1548,8 @@ impl<P: Plugin> ControllerWrapper<P> {
             parameter_bridge,
             host,
             _marker: PhantomData,
+            _vtbl_storage: vtbl_storage,
+            _connection_vtbl_storage: connection_vtbl_storage,
         });
         Box::into_raw(wrapper)
     }
@@ -1156,6 +1600,10 @@ impl<P: Plugin> ControllerWrapper<P> {
         iid: *const TUID,
         obj: *mut *mut c_void,
     ) -> tresult {
+        if this.is_null() || iid.is_null() || obj.is_null() {
+            return kInvalidArgument;
+        }
+        *obj = std::ptr::null_mut();
         let iid = &*iid;
         if iid_equal(iid, &iid::IUnknown)
             || iid_equal(iid, &base_iid::IPluginBase)
@@ -1175,6 +1623,9 @@ impl<P: Plugin> ControllerWrapper<P> {
     }
 
     unsafe extern "system" fn add_ref(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
         (*(this as *mut Self))
             .ref_count
             .fetch_add(1, Ordering::SeqCst) as uint32
@@ -1182,6 +1633,13 @@ impl<P: Plugin> ControllerWrapper<P> {
     }
 
     unsafe extern "system" fn release(this: *mut c_void) -> uint32 {
+        ffi_guard(0, || unsafe { Self::release_unchecked(this) })
+    }
+
+    unsafe fn release_unchecked(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
         let obj = this as *mut Self;
         let count = (*obj).ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
         if count == 0 {
@@ -1195,6 +1653,10 @@ impl<P: Plugin> ControllerWrapper<P> {
         requested_iid: *const TUID,
         obj: *mut *mut c_void,
     ) -> tresult {
+        if this.is_null() || requested_iid.is_null() || obj.is_null() {
+            return kInvalidArgument;
+        }
+        *obj = std::ptr::null_mut();
         let base = Self::from_connection(this);
         if iid_equal(&*requested_iid, &PARAMETER_CONNECTION_IID)
             || iid_equal(&*requested_iid, &vst_iid::IConnectionPoint)
@@ -1207,22 +1669,32 @@ impl<P: Plugin> ControllerWrapper<P> {
     }
 
     unsafe extern "system" fn connection_add_ref(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
         Self::add_ref(Self::from_connection(this) as *mut c_void)
     }
 
     unsafe extern "system" fn connection_release(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
         Self::release(Self::from_connection(this) as *mut c_void)
     }
 
     unsafe extern "system" fn connection_connect(this: *mut c_void, other: *mut c_void) -> tresult {
-        connect_parameter_bridges(this, other)
+        ffi_guard(kInternalError, || unsafe {
+            connect_parameter_bridges(this, other)
+        })
     }
 
     unsafe extern "system" fn connection_disconnect(
         this: *mut c_void,
         other: *mut c_void,
     ) -> tresult {
-        disconnect_parameter_bridges(this, other)
+        ffi_guard(kInternalError, || unsafe {
+            disconnect_parameter_bridges(this, other)
+        })
     }
 
     unsafe extern "system" fn connection_notify(
@@ -1239,6 +1711,9 @@ impl<P: Plugin> ControllerWrapper<P> {
     unsafe extern "system" fn connection_get_parameter_bridge(
         this: *mut c_void,
     ) -> *const ParameterBridge {
+        if this.is_null() {
+            return std::ptr::null();
+        }
         let base = Self::from_connection(this);
         Arc::as_ptr(&(*base).parameter_bridge)
     }
@@ -1247,7 +1722,7 @@ impl<P: Plugin> ControllerWrapper<P> {
         this: *mut c_void,
         bridge: *const ParameterBridge,
     ) -> tresult {
-        if bridge.is_null() {
+        if this.is_null() || bridge.is_null() {
             return kInvalidArgument;
         }
         let base = Self::from_connection(this);
@@ -1258,30 +1733,51 @@ impl<P: Plugin> ControllerWrapper<P> {
         }
     }
 
-    unsafe extern "system" fn initialize(_this: *mut c_void, _context: *mut c_void) -> tresult {
-        kResultOk
+    unsafe extern "system" fn initialize(this: *mut c_void, _context: *mut c_void) -> tresult {
+        if this.is_null() {
+            kInvalidArgument
+        } else {
+            kResultOk
+        }
     }
-    unsafe extern "system" fn terminate(_this: *mut c_void) -> tresult {
-        kResultOk
+    unsafe extern "system" fn terminate(this: *mut c_void) -> tresult {
+        if this.is_null() {
+            kInvalidArgument
+        } else {
+            kResultOk
+        }
     }
     unsafe extern "system" fn set_component_state(
         this: *mut c_void,
         state: *mut c_void,
     ) -> tresult {
-        let obj = this as *mut Self;
-        load_parameter_state(state, &(*obj).params, |id, value| {
-            (*obj).parameter_bridge.set(id, value);
+        ffi_guard(kInternalError, || unsafe {
+            if this.is_null() {
+                return kInvalidArgument;
+            }
+            let obj = this as *mut Self;
+            load_parameter_state(state, &(*obj).params, |id, value| {
+                (*obj).parameter_bridge.set(id, value);
+            })
         })
     }
     unsafe extern "system" fn set_state(this: *mut c_void, state: *mut c_void) -> tresult {
         Self::set_component_state(this, state)
     }
     unsafe extern "system" fn get_state(this: *mut c_void, state: *mut c_void) -> tresult {
-        let obj = this as *mut Self;
-        save_parameter_state(state, &(*obj).params, |id| (*obj).parameter_bridge.get(id))
+        ffi_guard(kInternalError, || unsafe {
+            if this.is_null() {
+                return kInvalidArgument;
+            }
+            let obj = this as *mut Self;
+            save_parameter_state(state, &(*obj).params, |id| (*obj).parameter_bridge.get(id))
+        })
     }
 
     unsafe extern "system" fn get_parameter_count(this: *mut c_void) -> int32 {
+        if this.is_null() {
+            return 0;
+        }
         (*(this as *mut Self)).params.len() as int32
     }
 
@@ -1290,6 +1786,9 @@ impl<P: Plugin> ControllerWrapper<P> {
         param_index: int32,
         info: *mut ParameterInfo,
     ) -> tresult {
+        if this.is_null() || info.is_null() || param_index < 0 {
+            return kInvalidArgument;
+        }
         let obj = this as *mut Self;
         if let Some(param) = (&(*obj).params).get(param_index as usize) {
             let info = &mut *info;
@@ -1300,7 +1799,12 @@ impl<P: Plugin> ControllerWrapper<P> {
             info.step_count = param.step_count;
             info.default_normalized_value = param.default;
             info.unit_id = 0;
-            info.flags = ParameterFlags::kCanAutomate;
+            info.flags = param.flags.0 as int32
+                | if param.step_count > 0 {
+                    ParameterFlags::kIsList
+                } else {
+                    0
+                };
             return kResultOk;
         }
         kInvalidArgument
@@ -1312,9 +1816,13 @@ impl<P: Plugin> ControllerWrapper<P> {
         value: ParamValue,
         string: *mut String128,
     ) -> tresult {
+        if this.is_null() || string.is_null() {
+            return kInvalidArgument;
+        }
         let obj = this as *mut Self;
         if let Some(param) = (&(*obj).params).iter().find(|p| p.id == id) {
-            let plain = param.to_plain(value);
+            let normalized = sanitize_normalized(value, (*obj).parameter_bridge.get(id));
+            let plain = safe_plain_value(param, normalized);
             let s = format!("{:.2}{}", plain, param.units);
             str16cpy_safe(&mut *string, &s);
             return kResultOk;
@@ -1336,11 +1844,15 @@ impl<P: Plugin> ControllerWrapper<P> {
         id: ParamID,
         value: ParamValue,
     ) -> ParamValue {
+        if this.is_null() {
+            return value;
+        }
         let obj = this as *mut Self;
         if let Some(param) = (&(*obj).params).iter().find(|p| p.id == id) {
-            param.to_plain(value)
+            let normalized = sanitize_normalized(value, (*obj).parameter_bridge.get(id));
+            safe_plain_value(param, normalized)
         } else {
-            value
+            sanitize_normalized(value, 0.0)
         }
     }
 
@@ -1349,15 +1861,25 @@ impl<P: Plugin> ControllerWrapper<P> {
         id: ParamID,
         value: ParamValue,
     ) -> ParamValue {
+        if this.is_null() {
+            return value;
+        }
         let obj = this as *mut Self;
         if let Some(param) = (&(*obj).params).iter().find(|p| p.id == id) {
-            param.to_normalized(value)
+            let current_normalized = (*obj).parameter_bridge.get(id);
+            let current_plain = safe_plain_value(param, current_normalized);
+            let plain = sanitize_plain(value, current_plain);
+            let normalized = param.to_normalized(plain);
+            sanitize_normalized(normalized, current_normalized)
         } else {
-            value
+            sanitize_normalized(value, 0.0)
         }
     }
 
     unsafe extern "system" fn get_param_normalized(this: *mut c_void, id: ParamID) -> ParamValue {
+        if this.is_null() {
+            return 0.0;
+        }
         let obj = this as *mut Self;
         (*obj).parameter_bridge.get(id)
     }
@@ -1367,24 +1889,35 @@ impl<P: Plugin> ControllerWrapper<P> {
         id: ParamID,
         value: ParamValue,
     ) -> tresult {
-        let obj = this as *mut Self;
-        if (&(*obj).params).iter().any(|param| param.id == id) {
-            (*obj).parameter_bridge.set(id, value);
-            return kResultOk;
-        }
-        kInvalidArgument
+        ffi_guard(kInternalError, || unsafe {
+            if this.is_null() {
+                return kInvalidArgument;
+            }
+            let obj = this as *mut Self;
+            if (&(*obj).params).iter().any(|param| param.id == id) {
+                let value = sanitize_normalized(value, (*obj).parameter_bridge.get(id));
+                (*obj).parameter_bridge.set(id, value);
+                return kResultOk;
+            }
+            kInvalidArgument
+        })
     }
 
     unsafe extern "system" fn set_component_handler(
         this: *mut c_void,
         handler: *mut c_void,
     ) -> tresult {
-        let obj = this as *mut Self;
-        if (*obj).host.set_component_handler(handler) {
-            kResultOk
-        } else {
-            kInvalidArgument
-        }
+        ffi_guard(kInternalError, || unsafe {
+            if this.is_null() {
+                return kInvalidArgument;
+            }
+            let obj = this as *mut Self;
+            if (*obj).host.set_component_handler(handler) {
+                kResultOk
+            } else {
+                kInvalidArgument
+            }
+        })
     }
     unsafe extern "system" fn create_view(_this: *mut c_void, _name: FIDString) -> *mut c_void {
         std::ptr::null_mut()
@@ -1426,11 +1959,24 @@ pub struct PlugViewWrapper<P: GuiPlugin> {
     plugin: *mut P,
     size: GuiSize,
     host: HostHandle,
+    owner: *mut GuiControllerWrapper<P>,
+    _vtbl_storage: Box<PlugViewVtblLocal>,
 }
 
 impl<P: GuiPlugin> PlugViewWrapper<P> {
-    pub fn new(plugin: *mut P, host: HostHandle) -> *mut Self {
-        let vtbl = Box::leak(Box::new(Self::make_vtbl()));
+    pub fn new(owner: *mut GuiControllerWrapper<P>, plugin: *mut P, host: HostHandle) -> *mut Self {
+        ffi_guard(std::ptr::null_mut(), || {
+            Self::new_unchecked(owner, plugin, host)
+        })
+    }
+
+    fn new_unchecked(
+        owner: *mut GuiControllerWrapper<P>,
+        plugin: *mut P,
+        host: HostHandle,
+    ) -> *mut Self {
+        let vtbl_storage = Box::new(Self::make_vtbl());
+        let vtbl = &*vtbl_storage;
         let size = P::gui_size();
 
         let wrapper = Box::new(Self {
@@ -1439,7 +1985,12 @@ impl<P: GuiPlugin> PlugViewWrapper<P> {
             plugin,
             size,
             host,
+            owner,
+            _vtbl_storage: vtbl_storage,
         });
+        if !owner.is_null() {
+            unsafe { GuiControllerWrapper::<P>::add_ref(owner.cast::<c_void>()) };
+        }
         Box::into_raw(wrapper)
     }
 
@@ -1468,6 +2019,10 @@ impl<P: GuiPlugin> PlugViewWrapper<P> {
         iid: *const TUID,
         obj: *mut *mut c_void,
     ) -> tresult {
+        if this.is_null() || iid.is_null() || obj.is_null() {
+            return kInvalidArgument;
+        }
+        *obj = std::ptr::null_mut();
         let iid = &*iid;
         if iid_equal(iid, &iid::IUnknown) || iid_equal(iid, &gui_iid::IPlugView) {
             Self::add_ref(this);
@@ -1479,6 +2034,9 @@ impl<P: GuiPlugin> PlugViewWrapper<P> {
     }
 
     unsafe extern "system" fn add_ref(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
         (*(this as *mut Self))
             .ref_count
             .fetch_add(1, Ordering::SeqCst) as uint32
@@ -1486,6 +2044,13 @@ impl<P: GuiPlugin> PlugViewWrapper<P> {
     }
 
     unsafe extern "system" fn release(this: *mut c_void) -> uint32 {
+        ffi_guard(0, || unsafe { Self::release_unchecked(this) })
+    }
+
+    unsafe fn release_unchecked(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
         let obj = this as *mut Self;
         let count = (*obj).ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
         if count == 0 {
@@ -1495,15 +2060,15 @@ impl<P: GuiPlugin> PlugViewWrapper<P> {
     }
 
     unsafe extern "system" fn is_platform_type_supported(
-        _this: *mut c_void,
+        this: *mut c_void,
         type_: FIDString,
     ) -> tresult {
-        if type_.is_null() {
+        if this.is_null() || type_.is_null() {
             return kResultFalse;
         }
         let type_str = std::ffi::CStr::from_ptr(type_);
         if let Ok(s) = type_str.to_str() {
-            if P::is_platform_supported(s) {
+            if ffi_guard(false, || P::is_platform_supported(s)) {
                 kResultOk
             } else {
                 kResultFalse
@@ -1518,8 +2083,11 @@ impl<P: GuiPlugin> PlugViewWrapper<P> {
         parent: *mut c_void,
         type_: FIDString,
     ) -> tresult {
+        if this.is_null() {
+            return kInvalidArgument;
+        }
         let obj = this as *mut Self;
-        if parent.is_null() {
+        if parent.is_null() || (*obj).plugin.is_null() {
             return kInvalidArgument;
         }
 
@@ -1535,7 +2103,9 @@ impl<P: GuiPlugin> PlugViewWrapper<P> {
                 #[cfg(target_os = "macos")]
                 {
                     use raw_window_handle::AppKitWindowHandle;
-                    let ns_view = std::ptr::NonNull::new(parent).expect("parent is null");
+                    let Some(ns_view) = std::ptr::NonNull::new(parent) else {
+                        return kInvalidArgument;
+                    };
                     let h = AppKitWindowHandle::new(ns_view);
                     RawWindowHandle::AppKit(h)
                 }
@@ -1549,7 +2119,9 @@ impl<P: GuiPlugin> PlugViewWrapper<P> {
                 {
                     use raw_window_handle::Win32WindowHandle;
                     use std::num::NonZeroIsize;
-                    let hwnd = NonZeroIsize::new(parent as isize).expect("parent HWND is null");
+                    let Some(hwnd) = NonZeroIsize::new(parent as isize) else {
+                        return kInvalidArgument;
+                    };
                     let h = Win32WindowHandle::new(hwnd);
                     RawWindowHandle::Win32(h)
                 }
@@ -1573,7 +2145,7 @@ impl<P: GuiPlugin> PlugViewWrapper<P> {
             _ => return kNotImplemented,
         };
 
-        if (*(*obj).plugin).gui_create(handle) {
+        if ffi_guard(false, || (*(*obj).plugin).gui_create(handle)) {
             kResultOk
         } else {
             kResultFalse
@@ -1581,9 +2153,17 @@ impl<P: GuiPlugin> PlugViewWrapper<P> {
     }
 
     unsafe extern "system" fn removed(this: *mut c_void) -> tresult {
+        if this.is_null() {
+            return kInvalidArgument;
+        }
         let obj = this as *mut Self;
-        (*(*obj).plugin).gui_destroy();
-        kResultOk
+        if (*obj).plugin.is_null() {
+            return kInvalidArgument;
+        }
+        ffi_guard(kInternalError, || {
+            (*(*obj).plugin).gui_destroy();
+            kResultOk
+        })
     }
 
     unsafe extern "system" fn on_wheel(_this: *mut c_void, _distance: f32) -> tresult {
@@ -1620,29 +2200,42 @@ impl<P: GuiPlugin> PlugViewWrapper<P> {
             return kInvalidArgument;
         }
         let obj = this as *mut Self;
+        if (*obj).plugin.is_null() {
+            return kInvalidArgument;
+        }
         let rect = &*new_size;
         if rect.width() <= 0 || rect.height() <= 0 {
             return kInvalidArgument;
         }
         (*obj).size = GuiSize::new(rect.width() as u32, rect.height() as u32);
-        (*(*obj).plugin).gui_resize((*obj).size);
-        kResultOk
+        ffi_guard(kInternalError, || {
+            (*(*obj).plugin).gui_resize((*obj).size);
+            kResultOk
+        })
     }
 
     unsafe extern "system" fn on_focus(_this: *mut c_void, _state: TBool) -> tresult {
         kResultOk
     }
     unsafe extern "system" fn set_frame(this: *mut c_void, frame: *mut c_void) -> tresult {
-        let obj = this as *mut Self;
-        if (*obj).host.set_plug_frame(frame, this) {
-            kResultOk
-        } else {
-            kInvalidArgument
-        }
+        ffi_guard(kInternalError, || unsafe {
+            if this.is_null() {
+                return kInvalidArgument;
+            }
+            let obj = this as *mut Self;
+            if (*obj).host.set_plug_frame(frame, this) {
+                kResultOk
+            } else {
+                kInvalidArgument
+            }
+        })
     }
     unsafe extern "system" fn can_resize(this: *mut c_void) -> tresult {
+        if this.is_null() {
+            return kInvalidArgument;
+        }
         let obj = this as *mut Self;
-        if (*(*obj).plugin).gui_can_resize() {
+        if !(*obj).plugin.is_null() && ffi_guard(false, || (*(*obj).plugin).gui_can_resize()) {
             kResultTrue
         } else {
             kResultFalse
@@ -1656,7 +2249,11 @@ impl<P: GuiPlugin> PlugViewWrapper<P> {
             return kInvalidArgument;
         }
         let obj = this as *mut Self;
-        if (*(*obj).plugin).gui_can_resize() && (*rect).width() > 0 && (*rect).height() > 0 {
+        if !(*obj).plugin.is_null()
+            && ffi_guard(false, || (*(*obj).plugin).gui_can_resize())
+            && (*rect).width() > 0
+            && (*rect).height() > 0
+        {
             kResultOk
         } else {
             kResultFalse
@@ -1667,7 +2264,16 @@ impl<P: GuiPlugin> PlugViewWrapper<P> {
 impl<P: GuiPlugin> Drop for PlugViewWrapper<P> {
     fn drop(&mut self) {
         let view = self as *mut Self as *mut c_void;
-        self.host.clear_plug_frame(view);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.host.clear_plug_frame(view);
+        }));
+        if !self.owner.is_null() {
+            let owner = self.owner;
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+                GuiControllerWrapper::<P>::release(owner.cast::<c_void>())
+            }));
+            self.owner = std::ptr::null_mut();
+        }
     }
 }
 
@@ -1685,15 +2291,23 @@ pub struct GuiControllerWrapper<P: GuiPlugin> {
     parameter_bridge: Arc<ParameterBridge>,
     host: HostHandle,
     plugin: Option<P>,
+    _vtbl_storage: Box<ControllerVtbl>,
+    _connection_vtbl_storage: Box<ConnectionPointVtbl>,
 }
 
 impl<P: GuiPlugin> GuiControllerWrapper<P> {
     pub fn new() -> *mut Self {
+        ffi_guard(std::ptr::null_mut(), || Self::new_unchecked())
+    }
+
+    fn new_unchecked() -> *mut Self {
         let params = P::params();
         let parameter_bridge = Arc::new(ParameterBridge::new(&params));
 
-        let vtbl = Box::leak(Box::new(Self::make_vtbl()));
-        let vtbl_connection = Box::leak(Box::new(Self::make_connection_vtbl()));
+        let vtbl_storage = Box::new(Self::make_vtbl());
+        let connection_vtbl_storage = Box::new(Self::make_connection_vtbl());
+        let vtbl = &*vtbl_storage;
+        let vtbl_connection = &*connection_vtbl_storage;
         let host = HostHandle::new(parameter_bridge.clone());
         let plugin = P::new(host.clone());
 
@@ -1705,6 +2319,8 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
             parameter_bridge,
             host,
             plugin: Some(plugin),
+            _vtbl_storage: vtbl_storage,
+            _connection_vtbl_storage: connection_vtbl_storage,
         });
         Box::into_raw(wrapper)
     }
@@ -1755,6 +2371,10 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
         iid: *const TUID,
         obj: *mut *mut c_void,
     ) -> tresult {
+        if this.is_null() || iid.is_null() || obj.is_null() {
+            return kInvalidArgument;
+        }
+        *obj = std::ptr::null_mut();
         let iid = &*iid;
         if iid_equal(iid, &iid::IUnknown)
             || iid_equal(iid, &base_iid::IPluginBase)
@@ -1774,6 +2394,9 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
     }
 
     unsafe extern "system" fn add_ref(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
         (*(this as *mut Self))
             .ref_count
             .fetch_add(1, Ordering::SeqCst) as uint32
@@ -1781,6 +2404,13 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
     }
 
     unsafe extern "system" fn release(this: *mut c_void) -> uint32 {
+        ffi_guard(0, || unsafe { Self::release_unchecked(this) })
+    }
+
+    unsafe fn release_unchecked(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
         let obj = this as *mut Self;
         let count = (*obj).ref_count.fetch_sub(1, Ordering::SeqCst) - 1;
         if count == 0 {
@@ -1794,6 +2424,10 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
         requested_iid: *const TUID,
         obj: *mut *mut c_void,
     ) -> tresult {
+        if this.is_null() || requested_iid.is_null() || obj.is_null() {
+            return kInvalidArgument;
+        }
+        *obj = std::ptr::null_mut();
         let base = Self::from_connection(this);
         if iid_equal(&*requested_iid, &PARAMETER_CONNECTION_IID)
             || iid_equal(&*requested_iid, &vst_iid::IConnectionPoint)
@@ -1806,22 +2440,32 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
     }
 
     unsafe extern "system" fn connection_add_ref(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
         Self::add_ref(Self::from_connection(this) as *mut c_void)
     }
 
     unsafe extern "system" fn connection_release(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
         Self::release(Self::from_connection(this) as *mut c_void)
     }
 
     unsafe extern "system" fn connection_connect(this: *mut c_void, other: *mut c_void) -> tresult {
-        connect_parameter_bridges(this, other)
+        ffi_guard(kInternalError, || unsafe {
+            connect_parameter_bridges(this, other)
+        })
     }
 
     unsafe extern "system" fn connection_disconnect(
         this: *mut c_void,
         other: *mut c_void,
     ) -> tresult {
-        disconnect_parameter_bridges(this, other)
+        ffi_guard(kInternalError, || unsafe {
+            disconnect_parameter_bridges(this, other)
+        })
     }
 
     unsafe extern "system" fn connection_notify(
@@ -1838,6 +2482,9 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
     unsafe extern "system" fn connection_get_parameter_bridge(
         this: *mut c_void,
     ) -> *const ParameterBridge {
+        if this.is_null() {
+            return std::ptr::null();
+        }
         let base = Self::from_connection(this);
         Arc::as_ptr(&(*base).parameter_bridge)
     }
@@ -1846,7 +2493,7 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
         this: *mut c_void,
         bridge: *const ParameterBridge,
     ) -> tresult {
-        if bridge.is_null() {
+        if this.is_null() || bridge.is_null() {
             return kInvalidArgument;
         }
         let base = Self::from_connection(this);
@@ -1857,33 +2504,56 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
         }
     }
 
-    unsafe extern "system" fn initialize(_this: *mut c_void, _context: *mut c_void) -> tresult {
-        kResultOk
+    unsafe extern "system" fn initialize(this: *mut c_void, _context: *mut c_void) -> tresult {
+        if this.is_null() {
+            kInvalidArgument
+        } else {
+            kResultOk
+        }
     }
-    unsafe extern "system" fn terminate(_this: *mut c_void) -> tresult {
-        kResultOk
+    unsafe extern "system" fn terminate(this: *mut c_void) -> tresult {
+        if this.is_null() {
+            kInvalidArgument
+        } else {
+            kResultOk
+        }
     }
     unsafe extern "system" fn set_component_state(
         this: *mut c_void,
         state: *mut c_void,
     ) -> tresult {
-        let obj = this as *mut Self;
-        load_parameter_state(state, &(*obj).params, |id, value| {
-            (*obj).parameter_bridge.set(id, value);
-            if let Some(plugin) = (*obj).plugin.as_mut() {
-                plugin.set_param(id, value);
+        ffi_guard(kInternalError, || unsafe {
+            if this.is_null() {
+                return kInvalidArgument;
             }
+            let obj = this as *mut Self;
+            load_parameter_state(state, &(*obj).params, |id, value| {
+                let value = sanitize_normalized(value, (*obj).parameter_bridge.get(id));
+                if let Some(plugin) = (*obj).plugin.as_mut() {
+                    plugin.set_param(id, value);
+                }
+                // Publish only after the user callback returns normally.
+                (*obj).parameter_bridge.set(id, value);
+            })
         })
     }
     unsafe extern "system" fn set_state(this: *mut c_void, state: *mut c_void) -> tresult {
         Self::set_component_state(this, state)
     }
     unsafe extern "system" fn get_state(this: *mut c_void, state: *mut c_void) -> tresult {
-        let obj = this as *mut Self;
-        save_parameter_state(state, &(*obj).params, |id| (*obj).parameter_bridge.get(id))
+        ffi_guard(kInternalError, || unsafe {
+            if this.is_null() {
+                return kInvalidArgument;
+            }
+            let obj = this as *mut Self;
+            save_parameter_state(state, &(*obj).params, |id| (*obj).parameter_bridge.get(id))
+        })
     }
 
     unsafe extern "system" fn get_parameter_count(this: *mut c_void) -> int32 {
+        if this.is_null() {
+            return 0;
+        }
         (*(this as *mut Self)).params.len() as int32
     }
 
@@ -1892,6 +2562,9 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
         param_index: int32,
         info: *mut ParameterInfo,
     ) -> tresult {
+        if this.is_null() || info.is_null() || param_index < 0 {
+            return kInvalidArgument;
+        }
         let obj = this as *mut Self;
         if let Some(param) = (&(*obj).params).get(param_index as usize) {
             let info = &mut *info;
@@ -1902,7 +2575,12 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
             info.step_count = param.step_count;
             info.default_normalized_value = param.default;
             info.unit_id = 0;
-            info.flags = ParameterFlags::kCanAutomate;
+            info.flags = param.flags.0 as int32
+                | if param.step_count > 0 {
+                    ParameterFlags::kIsList
+                } else {
+                    0
+                };
             return kResultOk;
         }
         kInvalidArgument
@@ -1914,9 +2592,13 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
         value: ParamValue,
         string: *mut String128,
     ) -> tresult {
+        if this.is_null() || string.is_null() {
+            return kInvalidArgument;
+        }
         let obj = this as *mut Self;
         if let Some(param) = (&(*obj).params).iter().find(|p| p.id == id) {
-            let plain = param.to_plain(value);
+            let normalized = sanitize_normalized(value, (*obj).parameter_bridge.get(id));
+            let plain = safe_plain_value(param, normalized);
             let s = format!("{:.2}{}", plain, param.units);
             str16cpy_safe(&mut *string, &s);
             return kResultOk;
@@ -1938,11 +2620,15 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
         id: ParamID,
         value: ParamValue,
     ) -> ParamValue {
+        if this.is_null() {
+            return value;
+        }
         let obj = this as *mut Self;
         if let Some(param) = (&(*obj).params).iter().find(|p| p.id == id) {
-            param.to_plain(value)
+            let normalized = sanitize_normalized(value, (*obj).parameter_bridge.get(id));
+            safe_plain_value(param, normalized)
         } else {
-            value
+            sanitize_normalized(value, 0.0)
         }
     }
 
@@ -1951,15 +2637,25 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
         id: ParamID,
         value: ParamValue,
     ) -> ParamValue {
+        if this.is_null() {
+            return value;
+        }
         let obj = this as *mut Self;
         if let Some(param) = (&(*obj).params).iter().find(|p| p.id == id) {
-            param.to_normalized(value)
+            let current_normalized = (*obj).parameter_bridge.get(id);
+            let current_plain = safe_plain_value(param, current_normalized);
+            let plain = sanitize_plain(value, current_plain);
+            let normalized = param.to_normalized(plain);
+            sanitize_normalized(normalized, current_normalized)
         } else {
-            value
+            sanitize_normalized(value, 0.0)
         }
     }
 
     unsafe extern "system" fn get_param_normalized(this: *mut c_void, id: ParamID) -> ParamValue {
+        if this.is_null() {
+            return 0.0;
+        }
         let obj = this as *mut Self;
         (*obj).parameter_bridge.get(id)
     }
@@ -1969,31 +2665,44 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
         id: ParamID,
         value: ParamValue,
     ) -> tresult {
-        let obj = this as *mut Self;
-        if (&(*obj).params).iter().any(|param| param.id == id) {
-            (*obj).parameter_bridge.set(id, value);
-            if let Some(plugin) = (*obj).plugin.as_mut() {
-                plugin.set_param(id as u32, value);
+        ffi_guard(kInternalError, || unsafe {
+            if this.is_null() {
+                return kInvalidArgument;
             }
-            return kResultOk;
-        }
-        kInvalidArgument
+            let obj = this as *mut Self;
+            if (&(*obj).params).iter().any(|param| param.id == id) {
+                let value = sanitize_normalized(value, (*obj).parameter_bridge.get(id));
+                if let Some(plugin) = (*obj).plugin.as_mut() {
+                    plugin.set_param(id as u32, value);
+                }
+                // Keep the controller/processor bridge consistent with the
+                // user object when the callback succeeds.
+                (*obj).parameter_bridge.set(id, value);
+                return kResultOk;
+            }
+            kInvalidArgument
+        })
     }
 
     unsafe extern "system" fn set_component_handler(
         this: *mut c_void,
         handler: *mut c_void,
     ) -> tresult {
-        let obj = this as *mut Self;
-        if (*obj).host.set_component_handler(handler) {
-            kResultOk
-        } else {
-            kInvalidArgument
-        }
+        ffi_guard(kInternalError, || unsafe {
+            if this.is_null() {
+                return kInvalidArgument;
+            }
+            let obj = this as *mut Self;
+            if (*obj).host.set_component_handler(handler) {
+                kResultOk
+            } else {
+                kInvalidArgument
+            }
+        })
     }
 
     unsafe extern "system" fn create_view(this: *mut c_void, name: FIDString) -> *mut c_void {
-        if name.is_null() {
+        if this.is_null() || name.is_null() {
             return std::ptr::null_mut();
         }
         let name_str = std::ffi::CStr::from_ptr(name);
@@ -2005,7 +2714,7 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
         if let Some(plugin) = (*obj).plugin.as_mut() {
             // Create PlugViewWrapper with pointer to plugin
             let plugin_ptr = plugin as *mut P;
-            PlugViewWrapper::new(plugin_ptr, (*obj).host.clone()) as *mut c_void
+            PlugViewWrapper::new(obj, plugin_ptr, (*obj).host.clone()) as *mut c_void
         } else {
             std::ptr::null_mut()
         }
@@ -2024,11 +2733,24 @@ macro_rules! export_vst3_plugin {
             use $crate::vst3_sys::*;
 
             fn processor_cid() -> TUID {
-                <$plugin_type as $crate::Plugin>::class_id()
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    <$plugin_type as $crate::Plugin>::class_id()
+                }))
+                .unwrap_or([0; 16])
             }
 
             fn controller_cid() -> TUID {
-                <$plugin_type as $crate::Plugin>::controller_class_id()
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    <$plugin_type as $crate::Plugin>::controller_class_id()
+                }))
+                .unwrap_or([0; 16])
+            }
+
+            fn plugin_info() -> $crate::PluginInfo {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    <$plugin_type as $crate::Plugin>::info()
+                }))
+                .unwrap_or_default()
             }
 
             #[repr(C)]
@@ -2087,6 +2809,10 @@ macro_rules! export_vst3_plugin {
                 iid: *const TUID,
                 obj: *mut *mut c_void,
             ) -> tresult {
+                if this.is_null() || iid.is_null() || obj.is_null() {
+                    return kInvalidArgument;
+                }
+                *obj = std::ptr::null_mut();
                 let iid = &*iid;
                 if iid_equal(iid, &iid::IUnknown)
                     || iid_equal(iid, &base_iid::IPluginFactory)
@@ -2102,6 +2828,9 @@ macro_rules! export_vst3_plugin {
             }
 
             unsafe extern "system" fn factory_add_ref(this: *mut c_void) -> uint32 {
+                if this.is_null() {
+                    return 0;
+                }
                 (*(this as *mut PluginFactoryObj))
                     .ref_count
                     .fetch_add(1, Ordering::SeqCst) as uint32
@@ -2109,6 +2838,9 @@ macro_rules! export_vst3_plugin {
             }
 
             unsafe extern "system" fn factory_release(this: *mut c_void) -> uint32 {
+                if this.is_null() {
+                    return 0;
+                }
                 ((*(this as *mut PluginFactoryObj))
                     .ref_count
                     .fetch_sub(1, Ordering::SeqCst)
@@ -2119,7 +2851,10 @@ macro_rules! export_vst3_plugin {
                 _this: *mut c_void,
                 info: *mut PFactoryInfoData,
             ) -> tresult {
-                let plugin_info = <$plugin_type as $crate::Plugin>::info();
+                if info.is_null() {
+                    return kInvalidArgument;
+                }
+                let plugin_info = plugin_info();
                 let info = &mut *info;
                 strcpy_safe(&mut info.vendor, plugin_info.vendor.as_bytes());
                 strcpy_safe(&mut info.url, plugin_info.url.as_bytes());
@@ -2137,7 +2872,10 @@ macro_rules! export_vst3_plugin {
                 index: int32,
                 info: *mut PClassInfoData,
             ) -> tresult {
-                let plugin_info = <$plugin_type as $crate::Plugin>::info();
+                if info.is_null() {
+                    return kInvalidArgument;
+                }
+                let plugin_info = plugin_info();
                 let info = &mut *info;
                 match index {
                     0 => {
@@ -2163,7 +2901,10 @@ macro_rules! export_vst3_plugin {
                 index: int32,
                 info: *mut PClassInfo2Data,
             ) -> tresult {
-                let plugin_info = <$plugin_type as $crate::Plugin>::info();
+                if info.is_null() {
+                    return kInvalidArgument;
+                }
+                let plugin_info = plugin_info();
                 let info = &mut *info;
                 match index {
                     0 => {
@@ -2203,6 +2944,7 @@ macro_rules! export_vst3_plugin {
                 if cid.is_null() || requested_iid.is_null() || obj.is_null() {
                     return kInvalidArgument;
                 }
+                *obj = std::ptr::null_mut();
                 let cid_bytes = std::slice::from_raw_parts(cid as *const i8, 16);
                 let mut cid_arr: TUID = [0; 16];
                 cid_arr.copy_from_slice(cid_bytes);
@@ -2228,7 +2970,10 @@ macro_rules! export_vst3_plugin {
                 index: int32,
                 info: *mut PClassInfoWData,
             ) -> tresult {
-                let plugin_info = <$plugin_type as $crate::Plugin>::info();
+                if info.is_null() {
+                    return kInvalidArgument;
+                }
+                let plugin_info = plugin_info();
                 let info = &mut *info;
                 match index {
                     0 => {
@@ -2329,11 +3074,24 @@ macro_rules! export_vst3_plugin_with_gui {
             use $crate::vst3_sys::*;
 
             fn processor_cid() -> TUID {
-                <$plugin_type as $crate::Plugin>::class_id()
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    <$plugin_type as $crate::Plugin>::class_id()
+                }))
+                .unwrap_or([0; 16])
             }
 
             fn controller_cid() -> TUID {
-                <$plugin_type as $crate::Plugin>::controller_class_id()
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    <$plugin_type as $crate::Plugin>::controller_class_id()
+                }))
+                .unwrap_or([0; 16])
+            }
+
+            fn plugin_info() -> $crate::PluginInfo {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    <$plugin_type as $crate::Plugin>::info()
+                }))
+                .unwrap_or_default()
             }
 
             #[repr(C)]
@@ -2392,6 +3150,10 @@ macro_rules! export_vst3_plugin_with_gui {
                 iid: *const TUID,
                 obj: *mut *mut c_void,
             ) -> tresult {
+                if this.is_null() || iid.is_null() || obj.is_null() {
+                    return kInvalidArgument;
+                }
+                *obj = std::ptr::null_mut();
                 let iid = &*iid;
                 if iid_equal(iid, &iid::IUnknown)
                     || iid_equal(iid, &base_iid::IPluginFactory)
@@ -2407,6 +3169,9 @@ macro_rules! export_vst3_plugin_with_gui {
             }
 
             unsafe extern "system" fn factory_add_ref(this: *mut c_void) -> uint32 {
+                if this.is_null() {
+                    return 0;
+                }
                 (*(this as *mut PluginFactoryObj))
                     .ref_count
                     .fetch_add(1, Ordering::SeqCst) as uint32
@@ -2414,6 +3179,9 @@ macro_rules! export_vst3_plugin_with_gui {
             }
 
             unsafe extern "system" fn factory_release(this: *mut c_void) -> uint32 {
+                if this.is_null() {
+                    return 0;
+                }
                 ((*(this as *mut PluginFactoryObj))
                     .ref_count
                     .fetch_sub(1, Ordering::SeqCst)
@@ -2424,7 +3192,10 @@ macro_rules! export_vst3_plugin_with_gui {
                 _this: *mut c_void,
                 info: *mut PFactoryInfoData,
             ) -> tresult {
-                let plugin_info = <$plugin_type as $crate::Plugin>::info();
+                if info.is_null() {
+                    return kInvalidArgument;
+                }
+                let plugin_info = plugin_info();
                 let info = &mut *info;
                 strcpy_safe(&mut info.vendor, plugin_info.vendor.as_bytes());
                 strcpy_safe(&mut info.url, plugin_info.url.as_bytes());
@@ -2442,7 +3213,10 @@ macro_rules! export_vst3_plugin_with_gui {
                 index: int32,
                 info: *mut PClassInfoData,
             ) -> tresult {
-                let plugin_info = <$plugin_type as $crate::Plugin>::info();
+                if info.is_null() {
+                    return kInvalidArgument;
+                }
+                let plugin_info = plugin_info();
                 let info = &mut *info;
                 match index {
                     0 => {
@@ -2468,7 +3242,10 @@ macro_rules! export_vst3_plugin_with_gui {
                 index: int32,
                 info: *mut PClassInfo2Data,
             ) -> tresult {
-                let plugin_info = <$plugin_type as $crate::Plugin>::info();
+                if info.is_null() {
+                    return kInvalidArgument;
+                }
+                let plugin_info = plugin_info();
                 let info = &mut *info;
                 match index {
                     0 => {
@@ -2508,6 +3285,7 @@ macro_rules! export_vst3_plugin_with_gui {
                 if cid.is_null() || requested_iid.is_null() || obj.is_null() {
                     return kInvalidArgument;
                 }
+                *obj = std::ptr::null_mut();
                 let cid_bytes = std::slice::from_raw_parts(cid as *const i8, 16);
                 let mut cid_arr: TUID = [0; 16];
                 cid_arr.copy_from_slice(cid_bytes);
@@ -2533,7 +3311,10 @@ macro_rules! export_vst3_plugin_with_gui {
                 index: int32,
                 info: *mut PClassInfoWData,
             ) -> tresult {
-                let plugin_info = <$plugin_type as $crate::Plugin>::info();
+                if info.is_null() {
+                    return kInvalidArgument;
+                }
+                let plugin_info = plugin_info();
                 let info = &mut *info;
                 match index {
                     0 => {
@@ -2625,6 +3406,7 @@ macro_rules! export_vst3_plugin_with_gui {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AudioConfig, PluginInfo, ProcessResult};
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::cell::Cell;
     use std::sync::Mutex;
@@ -2688,6 +3470,25 @@ mod tests {
         let allocator_calls = ALLOCATOR_CALL_COUNT.with(|count| count.get() as usize);
         drop(scope);
         (result, allocator_calls)
+    }
+
+    unsafe fn begin_test_processing<P: Plugin>(
+        processor: *mut ProcessorWrapper<P>,
+        audio: *mut c_void,
+    ) {
+        let component = processor.cast::<c_void>();
+        assert_eq!(
+            ProcessorWrapper::<P>::processor_initialize(component, std::ptr::null_mut()),
+            kResultOk
+        );
+        assert_eq!(
+            ProcessorWrapper::<P>::processor_set_active(component, 1),
+            kResultOk
+        );
+        assert_eq!(
+            ProcessorWrapper::<P>::audio_set_processing(audio, 1),
+            kResultOk
+        );
     }
 
     #[repr(C)]
@@ -2961,6 +3762,14 @@ mod tests {
             Self
         }
 
+        fn audio_config() -> crate::AudioConfig {
+            crate::AudioConfig {
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                accepts_midi: true,
+            }
+        }
+
         fn get_param(&self, _id: u32) -> f64 {
             0.0
         }
@@ -3104,11 +3913,17 @@ mod tests {
             crate::AudioConfig {
                 inputs: vec![
                     crate::PortConfig::mono("Input A"),
-                    crate::PortConfig::mono("Input B"),
+                    crate::PortConfig {
+                        port_type: crate::PortType::Aux,
+                        ..crate::PortConfig::mono("Input B")
+                    },
                 ],
                 outputs: vec![
                     crate::PortConfig::mono("Output A"),
-                    crate::PortConfig::mono("Output B"),
+                    crate::PortConfig {
+                        port_type: crate::PortType::Aux,
+                        ..crate::PortConfig::mono("Output B")
+                    },
                 ],
                 accepts_midi: false,
             }
@@ -3237,6 +4052,10 @@ mod tests {
         unsafe { (*(this as *const TestParamQueue)).points.len() as int32 }
     }
 
+    unsafe extern "system" fn huge_param_point_count(_this: *mut c_void) -> int32 {
+        int32::MAX
+    }
+
     unsafe extern "system" fn test_param_get_point(
         this: *mut c_void,
         index: int32,
@@ -3268,6 +4087,10 @@ mod tests {
 
     unsafe extern "system" fn test_parameter_count(this: *mut c_void) -> int32 {
         unsafe { (*(this as *const TestParameterChanges)).queues.len() as int32 }
+    }
+
+    unsafe extern "system" fn huge_parameter_count(_this: *mut c_void) -> int32 {
+        int32::MAX
     }
 
     unsafe extern "system" fn test_parameter_data(this: *mut c_void, index: int32) -> *mut c_void {
@@ -3313,6 +4136,18 @@ mod tests {
         add_point: test_param_add_point,
     };
 
+    static HUGE_PARAM_QUEUE_VTBL: IParamValueQueueVtbl = IParamValueQueueVtbl {
+        unknown: IUnknownVtbl {
+            query_interface: test_event_query_interface,
+            add_ref: test_event_add_ref,
+            release: test_event_release,
+        },
+        get_parameter_id: test_param_id,
+        get_point_count: huge_param_point_count,
+        get_point: test_param_get_point,
+        add_point: test_param_add_point,
+    };
+
     static TEST_PARAMETER_CHANGES_VTBL: IParameterChangesVtbl = IParameterChangesVtbl {
         unknown: IUnknownVtbl {
             query_interface: test_event_query_interface,
@@ -3320,6 +4155,17 @@ mod tests {
             release: test_event_release,
         },
         get_parameter_count: test_parameter_count,
+        get_parameter_data: test_parameter_data,
+        add_parameter_data: test_add_parameter_data,
+    };
+
+    static HUGE_PARAMETER_CHANGES_VTBL: IParameterChangesVtbl = IParameterChangesVtbl {
+        unknown: IUnknownVtbl {
+            query_interface: test_event_query_interface,
+            add_ref: test_event_add_ref,
+            release: test_event_release,
+        },
+        get_parameter_count: huge_parameter_count,
         get_parameter_data: test_parameter_data,
         add_parameter_data: test_add_parameter_data,
     };
@@ -3361,6 +4207,46 @@ mod tests {
             kResultOk
         );
         connection
+    }
+
+    #[test]
+    fn malformed_vst3_note_fields_are_rejected_before_plugin_dispatch() {
+        let mut event = Event {
+            bus_index: 0,
+            sample_offset: 0,
+            ppq_position: 0.0,
+            flags: 0,
+            type_: EventTypes::kNoteOnEvent,
+            event: EventData {
+                note_on: NoteOnEvent {
+                    channel: 0,
+                    pitch: 60,
+                    tuning: 0.0,
+                    velocity: 0.5,
+                    length: 0,
+                    note_id: -1,
+                },
+            },
+        };
+        assert!(valid_note_event(&event, true));
+
+        unsafe {
+            event.event.note_on.channel = -1;
+        }
+        assert!(!valid_note_event(&event, true));
+
+        unsafe {
+            event.event.note_on.channel = 0;
+            event.event.note_on.velocity = f32::NAN;
+        }
+        assert!(!valid_note_event(&event, true));
+
+        unsafe {
+            event.event.note_on.velocity = 0.5;
+            event.bus_index = 1;
+        }
+        assert!(!valid_note_event(&event, true));
+        assert!(!valid_note_event(&event, false));
     }
 
     #[test]
@@ -3715,7 +4601,8 @@ mod tests {
         unsafe {
             let controller = GuiControllerWrapper::<HostGuiTestPlugin>::new();
             let plugin = (*controller).plugin.as_mut().unwrap() as *mut HostGuiTestPlugin;
-            let view = PlugViewWrapper::new(plugin, (*controller).host.clone());
+            let view = PlugViewWrapper::new(controller, plugin, (*controller).host.clone());
+            assert_eq!((*controller).ref_count.load(Ordering::SeqCst), 2);
             let mut frame = TestPlugFrame {
                 vtbl: &TEST_PLUG_FRAME_VTBL,
                 refs: AtomicU32::new(1),
@@ -3742,6 +4629,7 @@ mod tests {
                 PlugViewWrapper::<HostGuiTestPlugin>::release(view.cast::<c_void>()),
                 0
             );
+            assert_eq!((*controller).ref_count.load(Ordering::SeqCst), 1);
             assert_eq!(frame.refs.load(Ordering::SeqCst), 1);
             assert!(!(*controller).host.request_resize(800, 600));
             assert_eq!(
@@ -3834,6 +4722,17 @@ mod tests {
             ZERO_FLUSH_PROCESS_CALLS.store(0, Ordering::SeqCst);
             let processor = ProcessorWrapper::<ZeroFlushTestPlugin>::new([0; 16]);
             let audio = std::ptr::addr_of_mut!((*processor).vtbl_audio).cast::<c_void>();
+            let mut setup = ProcessSetup {
+                process_mode: ProcessModes::kRealtime,
+                symbolic_sample_size: SymbolicSampleSizes::kSample32,
+                max_samples_per_block: 1,
+                sample_rate: 48_000.0,
+            };
+            assert_eq!(
+                ProcessorWrapper::<ZeroFlushTestPlugin>::audio_setup_processing(audio, &mut setup,),
+                kResultOk
+            );
+            begin_test_processing(processor, audio);
             let mut queue = TestParamQueue {
                 vtbl: &TEST_PARAM_QUEUE_VTBL,
                 id: 31,
@@ -3899,6 +4798,7 @@ mod tests {
                 ProcessorWrapper::<OverflowTestPlugin>::audio_setup_processing(audio, &mut setup),
                 kResultOk
             );
+            begin_test_processing(processor, audio);
 
             let mut queue = TestParamQueue {
                 vtbl: &TEST_PARAM_QUEUE_VTBL,
@@ -3937,6 +4837,109 @@ mod tests {
     }
 
     #[test]
+    fn huge_parameter_queue_count_is_rejected_before_traversal() {
+        let _guard = OVERFLOW_TEST_LOCK.lock().unwrap();
+        unsafe {
+            OVERFLOW_PROCESS_CALLS.store(0, Ordering::SeqCst);
+            let processor = ProcessorWrapper::<OverflowTestPlugin>::new([0; 16]);
+            let audio = std::ptr::addr_of_mut!((*processor).vtbl_audio).cast::<c_void>();
+            let mut setup = ProcessSetup {
+                process_mode: ProcessModes::kRealtime,
+                symbolic_sample_size: SymbolicSampleSizes::kSample32,
+                max_samples_per_block: 8,
+                sample_rate: 48_000.0,
+            };
+            assert_eq!(
+                ProcessorWrapper::<OverflowTestPlugin>::audio_setup_processing(audio, &mut setup),
+                kResultOk
+            );
+            begin_test_processing(processor, audio);
+
+            let mut changes = TestParameterChanges {
+                vtbl: &HUGE_PARAMETER_CHANGES_VTBL,
+                queues: Vec::new(),
+            };
+            let mut data = ProcessData {
+                process_mode: ProcessModes::kRealtime,
+                symbolic_sample_size: SymbolicSampleSizes::kSample32,
+                num_samples: 8,
+                num_inputs: 0,
+                num_outputs: 0,
+                inputs: std::ptr::null_mut(),
+                outputs: std::ptr::null_mut(),
+                input_parameter_changes: (&mut changes as *mut TestParameterChanges)
+                    .cast::<c_void>(),
+                output_parameter_changes: std::ptr::null_mut(),
+                input_events: std::ptr::null_mut(),
+                output_events: std::ptr::null_mut(),
+                process_context: std::ptr::null_mut(),
+            };
+
+            let (status, allocator_calls) = count_allocator_calls(|| {
+                ProcessorWrapper::<OverflowTestPlugin>::audio_process(audio, &mut data)
+            });
+            assert_eq!(status, kOutOfMemory);
+            assert_eq!(allocator_calls, 0);
+            assert_eq!(OVERFLOW_PROCESS_CALLS.load(Ordering::SeqCst), 0);
+            ProcessorWrapper::<OverflowTestPlugin>::component_release(processor.cast::<c_void>());
+        }
+    }
+
+    #[test]
+    fn huge_known_parameter_point_count_is_rejected_before_get_point() {
+        let _guard = OVERFLOW_TEST_LOCK.lock().unwrap();
+        unsafe {
+            OVERFLOW_PROCESS_CALLS.store(0, Ordering::SeqCst);
+            let processor = ProcessorWrapper::<OverflowTestPlugin>::new([0; 16]);
+            let audio = std::ptr::addr_of_mut!((*processor).vtbl_audio).cast::<c_void>();
+            let mut setup = ProcessSetup {
+                process_mode: ProcessModes::kRealtime,
+                symbolic_sample_size: SymbolicSampleSizes::kSample32,
+                max_samples_per_block: 8,
+                sample_rate: 48_000.0,
+            };
+            assert_eq!(
+                ProcessorWrapper::<OverflowTestPlugin>::audio_setup_processing(audio, &mut setup),
+                kResultOk
+            );
+            begin_test_processing(processor, audio);
+
+            let mut queue = TestParamQueue {
+                vtbl: &HUGE_PARAM_QUEUE_VTBL,
+                id: 77,
+                points: Vec::new(),
+            };
+            let mut changes = TestParameterChanges {
+                vtbl: &TEST_PARAMETER_CHANGES_VTBL,
+                queues: vec![(&mut queue as *mut TestParamQueue).cast::<c_void>()],
+            };
+            let mut data = ProcessData {
+                process_mode: ProcessModes::kRealtime,
+                symbolic_sample_size: SymbolicSampleSizes::kSample32,
+                num_samples: 8,
+                num_inputs: 0,
+                num_outputs: 0,
+                inputs: std::ptr::null_mut(),
+                outputs: std::ptr::null_mut(),
+                input_parameter_changes: (&mut changes as *mut TestParameterChanges)
+                    .cast::<c_void>(),
+                output_parameter_changes: std::ptr::null_mut(),
+                input_events: std::ptr::null_mut(),
+                output_events: std::ptr::null_mut(),
+                process_context: std::ptr::null_mut(),
+            };
+
+            let (status, allocator_calls) = count_allocator_calls(|| {
+                ProcessorWrapper::<OverflowTestPlugin>::audio_process(audio, &mut data)
+            });
+            assert_eq!(status, kOutOfMemory);
+            assert_eq!(allocator_calls, 0);
+            assert_eq!(OVERFLOW_PROCESS_CALLS.load(Ordering::SeqCst), 0);
+            ProcessorWrapper::<OverflowTestPlugin>::component_release(processor.cast::<c_void>());
+        }
+    }
+
+    #[test]
     fn in_budget_parameter_processing_does_not_use_the_allocator() {
         let _guard = OVERFLOW_TEST_LOCK.lock().unwrap();
         unsafe {
@@ -3953,6 +4956,7 @@ mod tests {
                 ProcessorWrapper::<OverflowTestPlugin>::audio_setup_processing(audio, &mut setup),
                 kResultOk
             );
+            begin_test_processing(processor, audio);
 
             let mut queue = TestParamQueue {
                 vtbl: &TEST_PARAM_QUEUE_VTBL,
@@ -4021,6 +5025,7 @@ mod tests {
                 ProcessorWrapper::<OverflowTestPlugin>::audio_setup_processing(audio, &mut setup),
                 kResultOk
             );
+            begin_test_processing(processor, audio);
 
             let mut queue = TestParamQueue {
                 vtbl: &TEST_PARAM_QUEUE_VTBL,
@@ -4110,6 +5115,7 @@ mod tests {
                 ),
                 kResultOk
             );
+            begin_test_processing(processor, audio);
 
             let mut queue_a = TestParamQueue {
                 vtbl: &TEST_PARAM_QUEUE_VTBL,
@@ -4223,6 +5229,17 @@ mod tests {
         unsafe {
             let processor = ProcessorWrapper::<BridgeTestPlugin>::new([0; 16]);
             let audio = std::ptr::addr_of_mut!((*processor).vtbl_audio).cast::<c_void>();
+            let mut setup = ProcessSetup {
+                process_mode: ProcessModes::kRealtime,
+                symbolic_sample_size: SymbolicSampleSizes::kSample32,
+                max_samples_per_block: 1024,
+                sample_rate: 48_000.0,
+            };
+            assert_eq!(
+                ProcessorWrapper::<BridgeTestPlugin>::audio_setup_processing(audio, &mut setup),
+                kResultOk
+            );
+            begin_test_processing(processor, audio);
             let mut data = ProcessData {
                 process_mode: ProcessModes::kRealtime,
                 symbolic_sample_size: SymbolicSampleSizes::kSample32,
@@ -4243,6 +5260,102 @@ mod tests {
                 kInvalidArgument
             );
             ProcessorWrapper::<BridgeTestPlugin>::component_release(processor.cast::<c_void>());
+        }
+    }
+
+    #[test]
+    fn process_requires_the_vst3_active_and_processing_lifecycle() {
+        unsafe {
+            let processor = ProcessorWrapper::<BridgeTestPlugin>::new([0; 16]);
+            let component = processor.cast::<c_void>();
+            let audio = std::ptr::addr_of_mut!((*processor).vtbl_audio).cast::<c_void>();
+            let mut data = ProcessData {
+                process_mode: ProcessModes::kRealtime,
+                symbolic_sample_size: SymbolicSampleSizes::kSample32,
+                num_samples: 0,
+                num_inputs: 0,
+                num_outputs: 0,
+                inputs: std::ptr::null_mut(),
+                outputs: std::ptr::null_mut(),
+                input_parameter_changes: std::ptr::null_mut(),
+                output_parameter_changes: std::ptr::null_mut(),
+                input_events: std::ptr::null_mut(),
+                output_events: std::ptr::null_mut(),
+                process_context: std::ptr::null_mut(),
+            };
+
+            assert_eq!(
+                ProcessorWrapper::<BridgeTestPlugin>::audio_process(audio, &mut data),
+                kNotInitialized
+            );
+
+            let mut setup = ProcessSetup {
+                process_mode: ProcessModes::kRealtime,
+                symbolic_sample_size: SymbolicSampleSizes::kSample32,
+                max_samples_per_block: 8,
+                sample_rate: 48_000.0,
+            };
+            assert_eq!(
+                ProcessorWrapper::<BridgeTestPlugin>::audio_setup_processing(audio, &mut setup),
+                kResultOk
+            );
+            assert_eq!(
+                ProcessorWrapper::<BridgeTestPlugin>::audio_process(audio, &mut data),
+                kNotInitialized
+            );
+            assert_eq!(
+                ProcessorWrapper::<BridgeTestPlugin>::processor_initialize(
+                    component,
+                    std::ptr::null_mut(),
+                ),
+                kResultOk
+            );
+            assert_eq!(
+                ProcessorWrapper::<BridgeTestPlugin>::audio_set_processing(audio, 1),
+                kNotInitialized
+            );
+            assert_eq!(
+                ProcessorWrapper::<BridgeTestPlugin>::processor_set_active(component, 1),
+                kResultOk
+            );
+            assert_eq!(
+                ProcessorWrapper::<BridgeTestPlugin>::audio_process(audio, &mut data),
+                kResultFalse
+            );
+            assert_eq!(
+                ProcessorWrapper::<BridgeTestPlugin>::audio_set_processing(audio, 1),
+                kResultOk
+            );
+            assert_eq!(
+                ProcessorWrapper::<BridgeTestPlugin>::audio_process(audio, &mut data),
+                kResultOk
+            );
+            assert_eq!(
+                ProcessorWrapper::<BridgeTestPlugin>::audio_set_processing(audio, 0),
+                kResultOk
+            );
+            assert_eq!(
+                ProcessorWrapper::<BridgeTestPlugin>::audio_process(audio, &mut data),
+                kResultFalse
+            );
+            assert_eq!(
+                ProcessorWrapper::<BridgeTestPlugin>::audio_set_processing(audio, 1),
+                kResultOk
+            );
+            assert_eq!(
+                ProcessorWrapper::<BridgeTestPlugin>::processor_set_active(component, 0),
+                kResultOk
+            );
+            assert_eq!(
+                ProcessorWrapper::<BridgeTestPlugin>::audio_process(audio, &mut data),
+                kResultFalse
+            );
+            assert_eq!(
+                ProcessorWrapper::<BridgeTestPlugin>::audio_set_processing(audio, 1),
+                kNotInitialized
+            );
+
+            ProcessorWrapper::<BridgeTestPlugin>::component_release(component);
         }
     }
 
@@ -4274,6 +5387,34 @@ mod tests {
                 );
             }
 
+            let mut unsupported_setup = ProcessSetup {
+                process_mode: ProcessModes::kRealtime,
+                symbolic_sample_size: SymbolicSampleSizes::kSample64,
+                max_samples_per_block: 64,
+                sample_rate: 48_000.0,
+            };
+            assert_eq!(
+                ProcessorWrapper::<BridgeTestPlugin>::audio_setup_processing(
+                    audio,
+                    &mut unsupported_setup,
+                ),
+                kResultFalse
+            );
+
+            let mut oversized_setup = ProcessSetup {
+                process_mode: ProcessModes::kRealtime,
+                symbolic_sample_size: SymbolicSampleSizes::kSample32,
+                max_samples_per_block: (MAX_PROCESS_FRAMES + 1) as i32,
+                sample_rate: 48_000.0,
+            };
+            assert_eq!(
+                ProcessorWrapper::<BridgeTestPlugin>::audio_setup_processing(
+                    audio,
+                    &mut oversized_setup,
+                ),
+                kOutOfMemory
+            );
+
             assert!((*processor).process_ctx.is_none());
 
             ProcessorWrapper::<BridgeTestPlugin>::component_release(processor.cast::<c_void>());
@@ -4284,6 +5425,16 @@ mod tests {
     fn process_rejects_malformed_audio_bus_storage() {
         unsafe {
             let processor = ProcessorWrapper::<MultiBusTestPlugin>::new([0; 16]);
+            assert_eq!(
+                ProcessorWrapper::<MultiBusTestPlugin>::processor_get_bus_info(
+                    std::ptr::null_mut(),
+                    MediaTypes::kAudio,
+                    BusDirections::kInput,
+                    0,
+                    &mut BusInfo::default(),
+                ),
+                kInvalidArgument
+            );
             let audio = std::ptr::addr_of_mut!((*processor).vtbl_audio).cast::<c_void>();
             let mut setup = ProcessSetup {
                 process_mode: ProcessModes::kRealtime,
@@ -4295,6 +5446,7 @@ mod tests {
                 ProcessorWrapper::<MultiBusTestPlugin>::audio_setup_processing(audio, &mut setup,),
                 kResultOk
             );
+            begin_test_processing(processor, audio);
 
             let mut data = ProcessData {
                 process_mode: ProcessModes::kRealtime,
@@ -4372,6 +5524,17 @@ mod tests {
                 kInvalidArgument
             );
             assert_eq!(
+                ProcessorWrapper::<MultiBusTestPlugin>::processor_get_bus_info(
+                    processor.cast::<c_void>(),
+                    MediaTypes::kAudio,
+                    BusDirections::kInput,
+                    1,
+                    &mut bus,
+                ),
+                kResultOk
+            );
+            assert_eq!(bus.bus_type, BusTypes::kAux);
+            assert_eq!(
                 ProcessorWrapper::<MultiBusTestPlugin>::processor_get_bus_count(
                     processor.cast::<c_void>(),
                     MediaTypes::kAudio,
@@ -4398,6 +5561,7 @@ mod tests {
                 ProcessorWrapper::<MultiBusTestPlugin>::audio_setup_processing(audio, &mut setup,),
                 kResultOk
             );
+            begin_test_processing(processor, audio);
 
             let input_a = [1.0_f32, 2.0];
             let input_b = [10.0_f32, 20.0];
@@ -4462,6 +5626,17 @@ mod tests {
             LAST_NOTE_OFFSET.store(u32::MAX, Ordering::SeqCst);
             let processor = ProcessorWrapper::<MidiOffsetTestPlugin>::new([0; 16]);
             let audio = std::ptr::addr_of_mut!((*processor).vtbl_audio).cast::<c_void>();
+            let mut setup = ProcessSetup {
+                process_mode: ProcessModes::kRealtime,
+                symbolic_sample_size: SymbolicSampleSizes::kSample32,
+                max_samples_per_block: 64,
+                sample_rate: 48_000.0,
+            };
+            assert_eq!(
+                ProcessorWrapper::<MidiOffsetTestPlugin>::audio_setup_processing(audio, &mut setup),
+                kResultOk
+            );
+            begin_test_processing(processor, audio);
             let mut events = TestEventList {
                 vtbl: &TEST_EVENT_LIST_VTBL,
                 event: Event {
@@ -4521,6 +5696,7 @@ mod tests {
                 ProcessorWrapper::<MidiOffsetTestPlugin>::audio_setup_processing(audio, &mut setup,),
                 kResultOk
             );
+            begin_test_processing(processor, audio);
             let mut events = TestEventList {
                 vtbl: std::ptr::null(),
                 event: Event::default(),
@@ -4544,6 +5720,307 @@ mod tests {
                 kInvalidArgument
             );
             ProcessorWrapper::<MidiOffsetTestPlugin>::component_release(processor.cast::<c_void>());
+        }
+    }
+
+    struct PanickingConstructorVstPlugin;
+
+    impl Plugin for PanickingConstructorVstPlugin {
+        fn info() -> PluginInfo {
+            PluginInfo {
+                id: "com.example.panicking-constructor",
+                name: "Panicking Constructor",
+                ..PluginInfo::default()
+            }
+        }
+
+        fn new(_host: HostHandle) -> Self {
+            panic!("intentional VST3 constructor panic");
+        }
+
+        fn get_param(&self, _id: u32) -> f64 {
+            0.0
+        }
+
+        fn set_param(&mut self, _id: u32, _value: f64) {}
+
+        fn process(&mut self, _ctx: &mut ProcessContext) -> ProcessResult {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn processor_constructor_panics_return_null() {
+        assert!(ProcessorWrapper::<PanickingConstructorVstPlugin>::new([0; 16]).is_null());
+    }
+
+    struct PanickingInitVstPlugin;
+
+    impl Plugin for PanickingInitVstPlugin {
+        fn info() -> PluginInfo {
+            PluginInfo {
+                id: "com.example.panicking-init",
+                name: "Panicking Init",
+                ..PluginInfo::default()
+            }
+        }
+
+        fn new(_host: HostHandle) -> Self {
+            Self
+        }
+
+        fn audio_config() -> AudioConfig {
+            AudioConfig {
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                accepts_midi: false,
+            }
+        }
+
+        fn init(&mut self) -> bool {
+            panic!("intentional VST3 initialize panic");
+        }
+
+        fn get_param(&self, _id: u32) -> f64 {
+            0.0
+        }
+
+        fn set_param(&mut self, _id: u32, _value: f64) {}
+
+        fn process(&mut self, _ctx: &mut ProcessContext) -> ProcessResult {
+            Ok(())
+        }
+    }
+
+    struct PanickingProcessVstPlugin;
+
+    impl Plugin for PanickingProcessVstPlugin {
+        fn info() -> PluginInfo {
+            PluginInfo {
+                id: "com.example.panicking-process",
+                name: "Panicking Process",
+                ..PluginInfo::default()
+            }
+        }
+
+        fn new(_host: HostHandle) -> Self {
+            Self
+        }
+
+        fn audio_config() -> AudioConfig {
+            AudioConfig {
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                accepts_midi: false,
+            }
+        }
+
+        fn get_param(&self, _id: u32) -> f64 {
+            0.0
+        }
+
+        fn set_param(&mut self, _id: u32, _value: f64) {}
+
+        fn process(&mut self, _ctx: &mut ProcessContext) -> ProcessResult {
+            panic!("intentional VST3 process panic");
+        }
+    }
+
+    #[test]
+    fn raw_lifecycle_and_process_callbacks_contain_panics() {
+        unsafe {
+            let processor = ProcessorWrapper::<PanickingInitVstPlugin>::new([0; 16]);
+            assert_eq!(
+                ProcessorWrapper::<PanickingInitVstPlugin>::processor_initialize(
+                    processor.cast::<c_void>(),
+                    std::ptr::null_mut(),
+                ),
+                kInternalError
+            );
+            ProcessorWrapper::<PanickingInitVstPlugin>::component_release(processor.cast());
+
+            let processor = ProcessorWrapper::<PanickingProcessVstPlugin>::new([0; 16]);
+            let component = processor.cast::<c_void>();
+            assert_eq!(
+                ProcessorWrapper::<PanickingProcessVstPlugin>::processor_initialize(
+                    component,
+                    std::ptr::null_mut(),
+                ),
+                kResultOk
+            );
+            let audio = std::ptr::addr_of_mut!((*processor).vtbl_audio).cast::<c_void>();
+            let mut setup = ProcessSetup {
+                process_mode: ProcessModes::kRealtime,
+                symbolic_sample_size: SymbolicSampleSizes::kSample32,
+                max_samples_per_block: 1,
+                sample_rate: 48_000.0,
+            };
+            assert_eq!(
+                ProcessorWrapper::<PanickingProcessVstPlugin>::audio_setup_processing(
+                    audio, &mut setup,
+                ),
+                kResultOk
+            );
+            begin_test_processing(processor, audio);
+            let mut data = ProcessData {
+                process_mode: ProcessModes::kRealtime,
+                symbolic_sample_size: SymbolicSampleSizes::kSample32,
+                num_samples: 1,
+                num_inputs: 0,
+                num_outputs: 0,
+                inputs: std::ptr::null_mut(),
+                outputs: std::ptr::null_mut(),
+                input_parameter_changes: std::ptr::null_mut(),
+                output_parameter_changes: std::ptr::null_mut(),
+                input_events: std::ptr::null_mut(),
+                output_events: std::ptr::null_mut(),
+                process_context: std::ptr::null_mut(),
+            };
+            assert_eq!(
+                ProcessorWrapper::<PanickingProcessVstPlugin>::audio_process(audio, &mut data),
+                kInternalError
+            );
+            // A failed block must disable processing so a host cannot keep
+            // calling a processor whose state may have been left poisoned.
+            assert_eq!(
+                ProcessorWrapper::<PanickingProcessVstPlugin>::audio_process(audio, &mut data),
+                kResultFalse
+            );
+            assert!(!(*processor).processing);
+            ProcessorWrapper::<PanickingProcessVstPlugin>::component_release(component);
+        }
+    }
+
+    struct PanickingControllerSetParamPlugin;
+
+    impl Plugin for PanickingControllerSetParamPlugin {
+        fn info() -> PluginInfo {
+            PluginInfo::default()
+        }
+
+        fn new(_host: HostHandle) -> Self {
+            Self
+        }
+
+        fn params() -> Vec<ParamInfo> {
+            vec![ParamInfo::new(91, "Panics")]
+        }
+
+        fn get_param(&self, _id: u32) -> f64 {
+            0.0
+        }
+
+        fn set_param(&mut self, _id: u32, _value: f64) {
+            panic!("intentional controller parameter panic");
+        }
+
+        fn process(&mut self, _ctx: &mut ProcessContext) -> ProcessResult {
+            Ok(())
+        }
+    }
+
+    impl GuiPlugin for PanickingControllerSetParamPlugin {
+        fn gui_size() -> GuiSize {
+            GuiSize::new(320, 200)
+        }
+
+        fn gui_create(&mut self, _parent: RawWindowHandle) -> bool {
+            true
+        }
+
+        fn gui_destroy(&mut self) {}
+    }
+
+    static SANITIZED_GUI_PARAM_VALUE: AtomicU64 = AtomicU64::new(0);
+
+    struct SanitizingGuiParamPlugin;
+
+    impl Plugin for SanitizingGuiParamPlugin {
+        fn info() -> PluginInfo {
+            PluginInfo::default()
+        }
+
+        fn new(_host: HostHandle) -> Self {
+            Self
+        }
+
+        fn params() -> Vec<ParamInfo> {
+            vec![ParamInfo::new(92, "Sanitized").default(0.25)]
+        }
+
+        fn get_param(&self, _id: u32) -> f64 {
+            f64::from_bits(SANITIZED_GUI_PARAM_VALUE.load(Ordering::SeqCst))
+        }
+
+        fn set_param(&mut self, _id: u32, value: f64) {
+            SANITIZED_GUI_PARAM_VALUE.store(value.to_bits(), Ordering::SeqCst);
+        }
+
+        fn process(&mut self, _ctx: &mut ProcessContext) -> ProcessResult {
+            Ok(())
+        }
+    }
+
+    impl GuiPlugin for SanitizingGuiParamPlugin {
+        fn gui_size() -> GuiSize {
+            GuiSize::new(320, 200)
+        }
+
+        fn gui_create(&mut self, _parent: RawWindowHandle) -> bool {
+            true
+        }
+
+        fn gui_destroy(&mut self) {}
+    }
+
+    #[test]
+    fn gui_controller_parameter_panics_are_contained_and_not_published() {
+        unsafe {
+            let controller = ControllerWrapper::<PanickingControllerSetParamPlugin>::new();
+            let result = ((*(*controller).vtbl).set_param_normalized)(controller.cast(), 91, 0.75);
+            // The non-GUI controller intentionally has no plugin instance;
+            // it only publishes values into its shared bridge.
+            assert_eq!(result, kResultOk);
+            assert_eq!((*controller).parameter_bridge.get(91), 0.75);
+            ControllerWrapper::<PanickingControllerSetParamPlugin>::release(controller.cast());
+
+            let controller = GuiControllerWrapper::<PanickingControllerSetParamPlugin>::new();
+            let result = ((*(*controller).vtbl).set_param_normalized)(controller.cast(), 91, 0.75);
+            assert_eq!(result, kInternalError);
+            assert_eq!((*controller).parameter_bridge.get(91), 0.0);
+            GuiControllerWrapper::<PanickingControllerSetParamPlugin>::release(controller.cast());
+        }
+    }
+
+    #[test]
+    fn gui_controller_parameter_values_are_sanitized_before_user_callback() {
+        unsafe {
+            SANITIZED_GUI_PARAM_VALUE.store(0.25_f64.to_bits(), Ordering::SeqCst);
+            let controller = GuiControllerWrapper::<SanitizingGuiParamPlugin>::new();
+            let set_param = (*(*controller).vtbl).set_param_normalized;
+
+            assert_eq!(set_param(controller.cast(), 92, f64::NAN), kResultOk);
+            assert_eq!(
+                f64::from_bits(SANITIZED_GUI_PARAM_VALUE.load(Ordering::SeqCst)),
+                0.25
+            );
+            assert_eq!(set_param(controller.cast(), 92, f64::INFINITY), kResultOk);
+            assert_eq!(
+                f64::from_bits(SANITIZED_GUI_PARAM_VALUE.load(Ordering::SeqCst)),
+                0.25
+            );
+            assert_eq!(set_param(controller.cast(), 92, -2.0), kResultOk);
+            assert_eq!(
+                f64::from_bits(SANITIZED_GUI_PARAM_VALUE.load(Ordering::SeqCst)),
+                0.0
+            );
+            assert_eq!(set_param(controller.cast(), 92, 2.0), kResultOk);
+            assert_eq!(
+                f64::from_bits(SANITIZED_GUI_PARAM_VALUE.load(Ordering::SeqCst)),
+                1.0
+            );
+            assert_eq!((*controller).parameter_bridge.get(92), 1.0);
+            GuiControllerWrapper::<SanitizingGuiParamPlugin>::release(controller.cast());
         }
     }
 }

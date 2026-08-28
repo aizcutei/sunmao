@@ -13,7 +13,9 @@
 //! AU/VST3/CLAP GUI export.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use baseview::{
     Event, EventStatus, MouseEvent, ScrollDelta, Window, WindowEvent, WindowHandler,
@@ -21,7 +23,9 @@ use baseview::{
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle, WindowHandle};
 
-use sunmao_core::{ParentWindow, SunmaoView, ViewContext, ViewHandle};
+use sunmao_core::{
+    ParentWindow, StandaloneViewOptions, StandaloneViewResult, SunmaoView, ViewContext, ViewHandle,
+};
 use sunmao_gui::{
     Color, Event as GuiEvent, GuiContext, KeyCode as GuiKeyCode, Modifiers,
     MouseButton as GuiMouseButton,
@@ -33,9 +37,149 @@ mod pixel_probe;
 static _SUNMAO_DEBUG_READ_FRAME: unsafe extern "C" fn(*mut u32, *mut u32, *mut u32, usize) -> i32 =
     pixel_probe::sunmao_debug_read_frame;
 
+#[used]
+static _SUNMAO_DEBUG_PIXEL_PROBE_STATUS: extern "C" fn() -> i32 =
+    pixel_probe::sunmao_debug_pixel_probe_status;
+
 fn resize_baseview_window(handle: &mut baseview::WindowHandle, width: u32, height: u32) -> bool {
     handle.resize(baseview::Size::new(width as f64, height as f64));
     true
+}
+
+struct StandaloneWindowHandler<H> {
+    inner: H,
+    close_after_frames: Option<u32>,
+    rendered_frames: u32,
+    smoke_completed: Arc<AtomicBool>,
+}
+
+const STANDALONE_GUI_SMOKE_TIMEOUT: Duration = Duration::from_secs(15);
+const STANDALONE_GUI_STOP_RETRY: Duration = Duration::from_millis(25);
+
+struct StandaloneSmokeWatchdog {
+    cancel: mpsc::Sender<()>,
+    timed_out: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl StandaloneSmokeWatchdog {
+    fn start(timeout: Duration) -> std::io::Result<Self> {
+        Self::start_with_stop(timeout, baseview::request_event_loop_stop)
+    }
+
+    fn start_with_stop<F>(timeout: Duration, request_stop: F) -> std::io::Result<Self>
+    where
+        F: Fn() + Send + 'static,
+    {
+        let (cancel, cancelled) = mpsc::channel();
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let timed_out_in_thread = Arc::clone(&timed_out);
+        let thread = std::thread::Builder::new()
+            .name("sunmao-standalone-gui-watchdog".into())
+            .spawn(move || {
+                match cancelled.recv_timeout(timeout) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+
+                timed_out_in_thread.store(true, Ordering::Release);
+                loop {
+                    request_stop();
+                    match cancelled.recv_timeout(STANDALONE_GUI_STOP_RETRY) {
+                        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    }
+                }
+            })?;
+        Ok(Self {
+            cancel,
+            timed_out,
+            thread: Some(thread),
+        })
+    }
+
+    fn finish(mut self) -> bool {
+        let _ = self.cancel.send(());
+        let thread_panicked = self
+            .thread
+            .take()
+            .is_some_and(|thread| thread.join().is_err());
+        thread_panicked || self.timed_out.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for StandaloneSmokeWatchdog {
+    fn drop(&mut self) {
+        let _ = self.cancel.send(());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl<H: WindowHandler> WindowHandler for StandaloneWindowHandler<H> {
+    fn on_frame(&mut self, window: &mut Window) {
+        self.inner.on_frame(window);
+        let Some(close_after_frames) = self.close_after_frames else {
+            return;
+        };
+        self.rendered_frames = self.rendered_frames.saturating_add(1);
+        if self.rendered_frames >= close_after_frames.max(1) {
+            self.smoke_completed.store(true, Ordering::Release);
+            window.close();
+        }
+    }
+
+    fn on_event(&mut self, window: &mut Window, event: Event) -> EventStatus {
+        self.inner.on_event(window, event)
+    }
+}
+
+fn open_standalone_window<H, B>(
+    options: WindowOpenOptions,
+    view_options: StandaloneViewOptions,
+    initialized: Arc<AtomicBool>,
+    build: B,
+) -> StandaloneViewResult
+where
+    H: WindowHandler + 'static,
+    B: FnOnce(&mut Window) -> H + Send + 'static,
+{
+    let close_after_frames = view_options.close_after_frames();
+    let smoke_completed = Arc::new(AtomicBool::new(false));
+    let smoke_completed_in_handler = Arc::clone(&smoke_completed);
+    let watchdog = match close_after_frames {
+        Some(_) => match StandaloneSmokeWatchdog::start(STANDALONE_GUI_SMOKE_TIMEOUT) {
+            Ok(watchdog) => Some(watchdog),
+            Err(error) => {
+                eprintln!("Failed to start standalone GUI smoke watchdog: {error}");
+                return StandaloneViewResult::Failed;
+            }
+        },
+        None => None,
+    };
+    let opened = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Window::open_blocking(options, move |window| StandaloneWindowHandler {
+            inner: build(window),
+            close_after_frames,
+            rendered_frames: 0,
+            smoke_completed: smoke_completed_in_handler,
+        });
+    }))
+    .is_ok();
+    let timed_out = watchdog.is_some_and(StandaloneSmokeWatchdog::finish);
+
+    let initialized = initialized.load(Ordering::Acquire);
+    let smoke_completed = smoke_completed.load(Ordering::Acquire);
+    if opened && !timed_out && initialized && (close_after_frames.is_none() || smoke_completed) {
+        StandaloneViewResult::Closed
+    } else {
+        eprintln!(
+            "Standalone GUI lifecycle failed: opened={opened} timed_out={timed_out} \
+             initialized={initialized} rendered={smoke_completed}"
+        );
+        StandaloneViewResult::Failed
+    }
 }
 
 // ============ Shared Types ============
@@ -333,7 +477,7 @@ mod gl_backend {
                     Err(state) => {
                         #[cfg(all(feature = "wgpu", target_os = "windows"))]
                         {
-                            if let Some(handler) = pollster::block_on(WgpuHandler::new(
+                            if let Ok(handler) = pollster::block_on(WgpuHandler::new(
                                 WgpuFallbackState(state),
                                 background,
                                 config.width,
@@ -344,6 +488,8 @@ mod gl_backend {
                                 return BaseviewHandler::Wgpu(handler);
                             }
                         }
+                        #[cfg(not(all(feature = "wgpu", target_os = "windows")))]
+                        let _ = state;
                         window.close();
                         BaseviewHandler::Failed
                     }
@@ -356,6 +502,54 @@ mod gl_backend {
                 handle.close();
                 None
             }
+        }
+
+        fn open_standalone(
+            &self,
+            context: Arc<dyn ViewContext>,
+            view_options: StandaloneViewOptions,
+        ) -> StandaloneViewResult {
+            let config = self.config.clone();
+            let state = (self.builder)(context);
+            let mut options = WindowOpenOptions::new(
+                config.title.clone(),
+                baseview::Size::new(config.width as f64, config.height as f64),
+                config.scale_policy,
+            );
+            let mut gl_config = GlConfig::default();
+            gl_config.srgb = false;
+            options.gl_config = Some(gl_config);
+
+            let background = config.background;
+            let initialized = Arc::new(AtomicBool::new(false));
+            let initialized_in_builder = Arc::clone(&initialized);
+            open_standalone_window(options, view_options, initialized, move |window| {
+                match GlHandler::try_new(state, background, window) {
+                    Ok(handler) => {
+                        initialized_in_builder.store(true, Ordering::Release);
+                        BaseviewHandler::Gl(handler)
+                    }
+                    Err(state) => {
+                        #[cfg(all(feature = "wgpu", target_os = "windows"))]
+                        {
+                            if let Ok(handler) = pollster::block_on(WgpuHandler::new(
+                                WgpuFallbackState(state),
+                                background,
+                                config.width,
+                                config.height,
+                                window,
+                            )) {
+                                initialized_in_builder.store(true, Ordering::Release);
+                                return BaseviewHandler::Wgpu(handler);
+                            }
+                        }
+                        #[cfg(not(all(feature = "wgpu", target_os = "windows")))]
+                        let _ = state;
+                        window.close();
+                        BaseviewHandler::Failed
+                    }
+                }
+            })
         }
     }
 
@@ -425,12 +619,14 @@ mod gl_backend {
                 return Err(state);
             };
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-                gl_ctx.make_current();
+                gl_ctx
+                    .make_current()
+                    .map_err(|error| format!("could not make OpenGL context current: {error}"))?;
                 if ["glCreateShader", "glCreateProgram"]
                     .iter()
                     .any(|symbol| gl_ctx.get_proc_address(symbol).is_null())
                 {
-                    gl_ctx.make_not_current();
+                    let _ = gl_ctx.make_not_current();
                     return Err("required modern OpenGL entry points are unavailable".into());
                 }
                 GlContext::from_loader(|s| gl_ctx.get_proc_address(s), 400.0, 300.0)
@@ -439,15 +635,17 @@ mod gl_backend {
                 Ok(Ok(ctx)) => ctx,
                 Ok(Err(error)) => {
                     eprintln!("Failed to create GL renderer: {error}");
-                    unsafe { gl_ctx.make_not_current() };
+                    let _ = unsafe { gl_ctx.make_not_current() };
                     return Err(state);
                 }
                 Err(_) => {
                     eprintln!("GL renderer initialization panicked; trying compatibility renderer");
-                    unsafe { gl_ctx.make_not_current() };
+                    let _ = unsafe { gl_ctx.make_not_current() };
                     return Err(state);
                 }
             };
+
+            crate::pixel_probe::begin_renderer_session();
 
             Ok(Self {
                 state,
@@ -465,8 +663,10 @@ mod gl_backend {
     impl<S: ViewState> WindowHandler for GlHandler<S> {
         fn on_frame(&mut self, window: &mut Window) {
             if let Some(gl_ctx) = window.gl_context() {
-                unsafe {
-                    gl_ctx.make_current();
+                if let Err(error) = unsafe { gl_ctx.make_current() } {
+                    eprintln!("OpenGL context activation failed: {error}");
+                    window.close();
+                    return;
                 }
 
                 if let Some(ref mut gl) = self.gl {
@@ -488,7 +688,10 @@ mod gl_backend {
                     }
                 }
 
-                gl_ctx.swap_buffers();
+                if let Err(error) = gl_ctx.swap_buffers() {
+                    eprintln!("OpenGL buffer swap failed: {error}");
+                    window.close();
+                }
             }
         }
 
@@ -536,6 +739,35 @@ pub use gl_backend::{BaseviewView, ViewState};
 pub(crate) mod wgpu_backend {
     use super::*;
     use sunmao_gui::wgpu::WgpuContext;
+
+    fn platform_default_backends() -> wgpu::Backends {
+        #[cfg(target_os = "macos")]
+        {
+            wgpu::Backends::METAL
+        }
+        #[cfg(target_os = "windows")]
+        {
+            wgpu::Backends::DX12 | wgpu::Backends::VULKAN | wgpu::Backends::GL
+        }
+        #[cfg(target_os = "linux")]
+        {
+            wgpu::Backends::VULKAN | wgpu::Backends::GL
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        {
+            wgpu::Backends::PRIMARY
+        }
+    }
+
+    fn selected_backends() -> Result<wgpu::Backends, String> {
+        match wgpu::util::backend_bits_from_env() {
+            Some(backends) if backends.is_empty() => {
+                Err("WGPU_BACKEND does not name a supported backend".into())
+            }
+            Some(backends) => Ok(backends),
+            None => Ok(platform_default_backends()),
+        }
+    }
 
     /// Trait for custom view state that draws using wgpu.
     pub trait WgpuViewState: Send + 'static {
@@ -594,11 +826,12 @@ pub(crate) mod wgpu_backend {
             let mut handle = Window::open_parented(&parent_wrapper, options, move |window| {
                 match pollster::block_on(WgpuHandler::new(state, background, width, height, window))
                 {
-                    Some(handler) => {
+                    Ok(handler) => {
                         initialized_in_builder.store(true, Ordering::Release);
                         WgpuHandlerState::Ready(handler)
                     }
-                    None => {
+                    Err(error) => {
+                        eprintln!("Failed to initialize embedded WGPU view: {error}");
                         window.close();
                         WgpuHandlerState::Failed
                     }
@@ -611,6 +844,39 @@ pub(crate) mod wgpu_backend {
                 handle.close();
                 None
             }
+        }
+
+        fn open_standalone(
+            &self,
+            context: Arc<dyn ViewContext>,
+            view_options: StandaloneViewOptions,
+        ) -> StandaloneViewResult {
+            let config = self.config.clone();
+            let state = (self.builder)(context);
+            let options = WindowOpenOptions::new(
+                config.title.clone(),
+                baseview::Size::new(config.width as f64, config.height as f64),
+                config.scale_policy,
+            );
+            let background = config.background;
+            let width = config.width;
+            let height = config.height;
+            let initialized = Arc::new(AtomicBool::new(false));
+            let initialized_in_builder = Arc::clone(&initialized);
+            open_standalone_window(options, view_options, initialized, move |window| {
+                match pollster::block_on(WgpuHandler::new(state, background, width, height, window))
+                {
+                    Ok(handler) => {
+                        initialized_in_builder.store(true, Ordering::Release);
+                        WgpuHandlerState::Ready(handler)
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to initialize standalone WGPU view: {error}");
+                        window.close();
+                        WgpuHandlerState::Failed
+                    }
+                }
+            })
         }
     }
 
@@ -639,18 +905,19 @@ pub(crate) mod wgpu_backend {
             width: u32,
             height: u32,
             window: &mut Window<'_>,
-        ) -> Option<Self> {
+        ) -> Result<Self, String> {
+            let backends = selected_backends()?;
             let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-                backends: wgpu::util::backend_bits_from_env()
-                    .filter(|backends| !backends.is_empty())
-                    .unwrap_or(wgpu::Backends::all()),
+                backends,
                 ..Default::default()
             });
             // The baseview child window outlives the handler and its surface. Using
             // raw handles lets wgpu select Metal, DX12/Vulkan, or Vulkan/GL without
             // coupling this backend to a platform-specific layer type.
-            let target = unsafe { wgpu::SurfaceTargetUnsafe::from_window(window) }.ok()?;
-            let surface = unsafe { instance.create_surface_unsafe(target) }.ok()?;
+            let target = unsafe { wgpu::SurfaceTargetUnsafe::from_window(window) }
+                .map_err(|error| format!("window handle unavailable: {error}"))?;
+            let surface = unsafe { instance.create_surface_unsafe(target) }
+                .map_err(|error| format!("surface creation failed: {error}"))?;
 
             let adapter_options = wgpu::RequestAdapterOptions {
                 compatible_surface: Some(&surface),
@@ -667,14 +934,19 @@ pub(crate) mod wgpu_backend {
                             force_fallback_adapter: true,
                             ..adapter_options
                         })
-                        .await?
+                        .await
+                        .ok_or_else(|| {
+                            format!(
+                                "no adapter supports the window surface for backends {backends:?}"
+                            )
+                        })?
                 }
             };
 
             let (device, queue) = adapter
                 .request_device(&wgpu::DeviceDescriptor::default(), None)
                 .await
-                .ok()?;
+                .map_err(|error| format!("device request failed: {error}"))?;
 
             let width = width.max(1);
             let height = height.max(1);
@@ -685,7 +957,19 @@ pub(crate) mod wgpu_backend {
                 .iter()
                 .find(|f| f.is_srgb())
                 .copied()
-                .unwrap_or(surface_caps.formats[0]);
+                .or_else(|| surface_caps.formats.first().copied())
+                .ok_or_else(|| "surface reports no texture formats".to_string())?;
+            let alpha_mode = surface_caps
+                .alpha_modes
+                .first()
+                .copied()
+                .ok_or_else(|| "surface reports no alpha modes".to_string())?;
+            if !surface_caps
+                .usages
+                .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+            {
+                return Err("surface does not support render attachments".into());
+            }
 
             let surface_config = wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -693,7 +977,7 @@ pub(crate) mod wgpu_backend {
                 width,
                 height,
                 present_mode: wgpu::PresentMode::AutoVsync,
-                alpha_mode: surface_caps.alpha_modes[0],
+                alpha_mode,
                 view_formats: vec![],
                 desired_maximum_frame_latency: 2,
             };
@@ -702,7 +986,9 @@ pub(crate) mod wgpu_backend {
             let wgpu_ctx =
                 WgpuContext::new(device, queue, surface_format, width as f32, height as f32);
 
-            Some(Self {
+            crate::pixel_probe::begin_renderer_session();
+
+            Ok(Self {
                 state,
                 wgpu_ctx,
                 surface,
@@ -984,6 +1270,7 @@ mod webview_backend {
                     state.html(),
                 ) {
                     Ok((webview, receiver)) => {
+                        crate::pixel_probe::begin_native_session();
                         initialized_in_builder.store(true, Ordering::Release);
                         WebviewHandlerState::Ready(WebviewHandler {
                             state,
@@ -1008,6 +1295,50 @@ mod webview_backend {
                 handle.close();
                 None
             }
+        }
+
+        fn open_standalone(
+            &self,
+            context: Arc<dyn ViewContext>,
+            view_options: StandaloneViewOptions,
+        ) -> StandaloneViewResult {
+            let config = self.config.clone();
+            let state = (self.builder)(Arc::clone(&context));
+            let handler_name = self.message_handler_name.clone();
+            let options = WindowOpenOptions::new(
+                config.title.clone(),
+                baseview::Size::new(config.width as f64, config.height as f64),
+                config.scale_policy,
+            );
+            let initialized = Arc::new(AtomicBool::new(false));
+            let initialized_in_builder = Arc::clone(&initialized);
+            open_standalone_window(options, view_options, initialized, move |window| {
+                match WebView::new(
+                    window,
+                    config.width as f64,
+                    config.height as f64,
+                    &handler_name,
+                    state.html(),
+                ) {
+                    Ok((webview, receiver)) => {
+                        crate::pixel_probe::begin_native_session();
+                        initialized_in_builder.store(true, Ordering::Release);
+                        WebviewHandlerState::Ready(WebviewHandler {
+                            state,
+                            context,
+                            webview: Some(webview),
+                            receiver,
+                            width: config.width as f32,
+                            height: config.height as f32,
+                        })
+                    }
+                    Err(error) => {
+                        eprintln!("Failed to create WebView: {error}");
+                        window.close();
+                        WebviewHandlerState::Failed
+                    }
+                }
+            })
         }
     }
 
@@ -1088,6 +1419,40 @@ pub use baseview::{Size, WindowScalePolicy};
 mod tests {
     use super::*;
     use keyboard_types::{Code, Key, KeyState, KeyboardEvent, Location};
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn standalone_watchdog_cancels_without_requesting_stop() {
+        let stop_count = Arc::new(AtomicUsize::new(0));
+        let stop_count_in_thread = Arc::clone(&stop_count);
+        let watchdog =
+            StandaloneSmokeWatchdog::start_with_stop(Duration::from_secs(1), move || {
+                stop_count_in_thread.fetch_add(1, Ordering::AcqRel);
+            })
+            .unwrap();
+
+        assert!(!watchdog.finish());
+        assert_eq!(stop_count.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn standalone_watchdog_reports_timeout_and_requests_stop() {
+        let stop_count = Arc::new(AtomicUsize::new(0));
+        let stop_count_in_thread = Arc::clone(&stop_count);
+        let watchdog =
+            StandaloneSmokeWatchdog::start_with_stop(Duration::from_millis(10), move || {
+                stop_count_in_thread.fetch_add(1, Ordering::AcqRel);
+            })
+            .unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        while stop_count.load(Ordering::Acquire) == 0 && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+
+        assert!(watchdog.finish());
+        assert!(stop_count.load(Ordering::Acquire) > 0);
+    }
 
     fn keyboard_event(
         state: KeyState,

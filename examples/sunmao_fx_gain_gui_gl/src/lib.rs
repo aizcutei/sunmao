@@ -3,14 +3,7 @@
 //! This example demonstrates a gain effect plugin with a custom GUI
 //! using the OpenGL renderer backend.
 
-use std::sync::Arc;
-use sunmao_core::prelude::*;
-use sunmao_gui::ParameterWidget;
-use sunmao_gui::{
-    Color, Event as GuiEvent, Fill, GuiContext, MouseButton as GuiMouseButton, Rect, Slider, Widget,
-};
-use sunmao_macros::Params;
-use sunmao_view_baseview::{BaseviewConfig, BaseviewView, ViewState, WindowScalePolicy};
+use sunmao::prelude::*;
 
 // ============ Plugin Definition ============
 

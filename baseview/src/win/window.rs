@@ -25,6 +25,7 @@ use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::ptr::null_mut;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawWindowHandle,
@@ -33,6 +34,40 @@ use raw_window_handle::{
 
 const BV_WINDOW_MUST_CLOSE: UINT = WM_USER + 1;
 const BV_WINDOW_MUST_RESIZE: UINT = WM_USER + 2;
+static BLOCKING_EVENT_LOOP_HWND: AtomicUsize = AtomicUsize::new(0);
+
+struct BlockingEventLoopRegistration {
+    hwnd: HWND,
+}
+
+impl BlockingEventLoopRegistration {
+    fn new(hwnd: HWND) -> Self {
+        BLOCKING_EVENT_LOOP_HWND.store(hwnd as usize, Ordering::Release);
+        Self { hwnd }
+    }
+}
+
+impl Drop for BlockingEventLoopRegistration {
+    fn drop(&mut self) {
+        let _ = BLOCKING_EVENT_LOOP_HWND.compare_exchange(
+            self.hwnd as usize,
+            0,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
+}
+
+/// Ask only the currently registered application-owned blocking window to
+/// close. Embedded editor windows are never registered here.
+pub fn request_event_loop_stop() {
+    let hwnd = BLOCKING_EVENT_LOOP_HWND.load(Ordering::Acquire) as HWND;
+    if !hwnd.is_null() {
+        unsafe {
+            PostMessageW(hwnd, BV_WINDOW_MUST_CLOSE, 0, 0);
+        }
+    }
+}
 
 use crate::win::hook::{self, KeyboardHookHandle};
 use crate::{
@@ -671,6 +706,7 @@ impl Window<'_> {
         B: Send + 'static,
     {
         let (_, hwnd) = Self::open(false, null_mut(), options, build);
+        let _blocking_event_loop = BlockingEventLoopRegistration::new(hwnd);
 
         unsafe {
             let mut msg: MSG = std::mem::zeroed();
@@ -678,7 +714,7 @@ impl Window<'_> {
             loop {
                 let status = GetMessageW(&mut msg, hwnd, 0, 0);
 
-                if status == -1 {
+                if status <= 0 {
                     break;
                 }
 

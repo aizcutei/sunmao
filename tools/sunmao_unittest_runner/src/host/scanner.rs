@@ -29,7 +29,7 @@ pub fn scan_directory(path: &Path) -> Vec<PluginInfo> {
     }
 
     // AU: .component bundles (macOS only)
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", feature = "au"))]
     if let Ok(entries) = std::fs::read_dir(path) {
         for entry in entries.flatten() {
             let p = entry.path();
@@ -276,7 +276,7 @@ pub fn scan_vst3(path: &Path) -> Vec<PluginInfo> {
 /// Scan a .component bundle (AU) for plugin descriptors.
 /// First tries the AudioComponent API (for installed components),
 /// falls back to plist parsing for non-installed bundles.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "au"))]
 pub fn scan_au(path: &Path) -> Vec<PluginInfo> {
     let path_str = path.to_str().unwrap_or("");
 
@@ -338,7 +338,7 @@ pub fn scan_au(path: &Path) -> Vec<PluginInfo> {
 }
 
 /// Scan all installed AU plugins on the system.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "au"))]
 pub fn scan_au_system() -> Vec<PluginInfo> {
     super::au_host::scan_au_components()
         .into_iter()
@@ -362,7 +362,7 @@ pub fn scan_au_system() -> Vec<PluginInfo> {
         .collect()
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "au"))]
 fn fourcc_str(fourcc: u32) -> String {
     let bytes = [
         (fourcc >> 24) as u8,
@@ -373,7 +373,7 @@ fn fourcc_str(fourcc: u32) -> String {
     String::from_utf8_lossy(&bytes).to_string()
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "au"))]
 fn find_au_component(
     component_type: u32,
     component_subtype: u32,
@@ -408,7 +408,7 @@ fn find_au_component(
 }
 
 /// Extract AU type/subtype/manufacturer from Info.plist AudioComponents.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "au"))]
 pub fn extract_au_description(plist: &str) -> Option<(u32, u32, u32)> {
     // Look for AudioComponents dict with type, subtype, manufacturer
     let type_str = extract_plist_value(plist, "type")?;
@@ -423,7 +423,7 @@ pub fn extract_au_description(plist: &str) -> Option<(u32, u32, u32)> {
 }
 
 /// Parse a plist fourcc string like "'aufx'" or "aufx" into OSType.
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "au"))]
 pub fn plist_fourcc(s: &str) -> Option<u32> {
     let s = s.trim_matches('\'');
     if s.len() != 4 {
@@ -439,7 +439,7 @@ pub fn plist_fourcc(s: &str) -> Option<u32> {
 }
 
 /// Extract a plist value for a key (simple XML plist parser).
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "au"))]
 fn extract_plist_value(plist: &str, key: &str) -> Option<String> {
     let key_tag = format!("<key>{}</key>", key);
     let pos = plist.find(&key_tag)?;

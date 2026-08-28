@@ -4,10 +4,7 @@
 //! using the platform WebView renderer. The same codebase exports to
 //! AU, VST3, and CLAP — no format-specific GUI code needed.
 
-use std::sync::Arc;
-use sunmao_core::prelude::*;
-use sunmao_macros::Params;
-use sunmao_view_baseview::{BaseviewConfig, BaseviewWebView, WebViewState, WindowScalePolicy};
+use sunmao::prelude::*;
 
 // ============ Plugin Definition ============
 
@@ -62,6 +59,13 @@ impl SunmaoPlugin for GainPlugin {
     fn initialize(&mut self, _sample_rate: f64, _max_frames: u32) {}
     fn reset(&mut self) {}
 
+    fn clap_info() -> ClapInfo {
+        ClapInfo {
+            id: "com.sunmao.fx.gain.webview",
+            features: &["audio-effect", "utility", "stereo"],
+        }
+    }
+
     fn process(
         &mut self,
         buffer: &mut AudioBuffer,
@@ -97,7 +101,7 @@ impl SunmaoPlugin for GainPlugin {
             width: 400,
             height: 120,
             scale_policy: WindowScalePolicy::SystemScaleFactor,
-            background: sunmao_gui::Color::rgb(0.12, 0.12, 0.18),
+            background: Color::rgb(0.12, 0.12, 0.18),
         };
 
         let view = BaseviewWebView::new(config, |context| GainWebViewState::new(context), "sunmao");
@@ -275,9 +279,8 @@ impl WebViewState for GainWebViewState {
     }
 }
 
-// ============ VST3 Export ============
-use sunmao_backend_vst3::SunmaoVst3Wrapper;
-sunmao_backend_vst3::export_vst3_plugin_with_gui!(SunmaoVst3Wrapper<GainPlugin>);
+// ============ Unified VST3 + CLAP Export ============
+sunmao::sunmao_export!(GainPlugin, gui);
 
 // ============ AU Export (macOS only) ============
 #[cfg(all(target_os = "macos", feature = "au"))]
@@ -300,32 +303,4 @@ mod au_export {
 
     // One macro call — no format-specific GUI code needed!
     sunmao_backend_au::sunmao_export_au_with_view!(GainPlugin, AU_INFO, au_params::<GainParams>());
-}
-
-// ============ CLAP Export ============
-mod clap_export {
-    use super::*;
-    use std::ffi::c_char;
-    use sunmao_backend_clap::SunmaoClapWrapper;
-    use sunmao_backend_clap::{export_clap_plugin_with_gui, ClapFeature, ClapFeatures, PluginInfo};
-
-    static PLUGIN_INFO: PluginInfo = PluginInfo {
-        id: "com.sunmao.fx.gain.webview\0",
-        name: "SunMao Gain WebView\0",
-        vendor: "aizcutei\0",
-        url: "https://aizcutei.github.io/sunmao\0",
-        manual_url: "\0",
-        support_url: "\0",
-        version: "1.0.0\0",
-        description: "Gain effect with WebView GUI\0",
-    };
-
-    const FEATURES_LIST: [*const c_char; 3] = [
-        ClapFeature::AudioEffect.as_ptr(),
-        ClapFeature::Utility.as_ptr(),
-        std::ptr::null(),
-    ];
-    static FEATURES: ClapFeatures = ClapFeatures::new(&FEATURES_LIST);
-
-    export_clap_plugin_with_gui!(SunmaoClapWrapper<GainPlugin>, PLUGIN_INFO, FEATURES);
 }

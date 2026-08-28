@@ -20,8 +20,8 @@ env:
   RUSTFLAGS: -Awarnings
 
 jobs:
-  native-vst3-clap:
-    name: ${{ matrix.name }} VST3 + CLAP
+  native-vst3-clap-standalone:
+    name: ${{ matrix.name }} VST3 + CLAP + standalone
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     strategy:
@@ -148,6 +148,8 @@ jobs:
             sunmao_backend_clap
             sunmao_backend_vst3
             sunmao_packager
+            clap_packager
+            vst3_packager
             sunmao_gui
             sunmao_gui_wgpu
             sunmao_view_baseview
@@ -175,9 +177,59 @@ jobs:
             echo "::endgroup::"
           done
 
-      - name: Test standalone runtime (non-blocking follow-up)
-        continue-on-error: true
-        run: cargo test --locked -p sunmao_runtime
+      - name: Check facade renderer contracts independently
+        shell: bash
+        run: |
+          set -euo pipefail
+          for feature in gui-gl gui-wgpu gui-webview; do
+            cargo check --locked -p sunmao --no-default-features --features "$feature"
+          done
+
+          manifests=(
+            examples/sunmao_fx_gain_gui_gl/Cargo.toml
+            examples/sunmao_fx_gain_gui_wgpu/Cargo.toml
+            examples/sunmao_fx_gain_gui_webview/Cargo.toml
+            examples/sunmao_syn_sine_gui_gl/Cargo.toml
+            examples/sunmao_syn_sine_gui_wgpu/Cargo.toml
+            examples/sunmao_syn_sine_gui_webview/Cargo.toml
+            examples/sunmao_fx_lpf_gui_gl/Cargo.toml
+            examples/sunmao_daw_info_gui/Cargo.toml
+          )
+          packages=(
+            sunmao_fx_gain_gui_gl
+            sunmao_fx_gain_gui_wgpu
+            sunmao_fx_gain_gui_webview
+            sunmao_syn_sine_gui_gl
+            sunmao_syn_sine_gui_wgpu
+            sunmao_syn_sine_gui_webview
+            sunmao_fx_lpf_gui_gl
+            sunmao_daw_info_gui
+          )
+          for manifest in "${manifests[@]}"; do
+            if grep -Eq '^sunmao_(core|macros|gui|view_baseview|backend_(vst3|clap))[[:space:]]*=' "$manifest"; then
+              echo "::error file=$manifest::Phase 1 GUI fixtures must depend on the sunmao facade, not internal crates"
+              exit 1
+            fi
+          done
+          for package in "${packages[@]}"; do
+            cargo check --locked -p "$package"
+          done
+
+      - name: Test standalone runtime, facade, and reference examples
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p sunmao_runtime
+          cargo test --locked -p sunmao --features standalone
+          cargo test --locked --features standalone \
+            -p sunmao_fx_gain \
+            -p sunmao_syn_sine \
+            -p sunmao_fx_gain_gui_gl \
+            -p sunmao_fx_gain_gui_wgpu \
+            -p sunmao_fx_gain_gui_webview \
+            -p sunmao_syn_sine_gui_gl \
+            -p sunmao_syn_sine_gui_wgpu \
+            -p sunmao_syn_sine_gui_webview
 
       - name: Test macOS system-capture linkage (non-blocking follow-up)
         if: runner.os == 'macOS'
@@ -220,6 +272,18 @@ jobs:
           -p sunmao_daw_info_gui
           -p sunmao_packager
 
+      - name: Build standalone reference applications
+        run: >-
+          cargo build --locked --bins --features standalone
+          -p sunmao_fx_gain
+          -p sunmao_syn_sine
+          -p sunmao_fx_gain_gui_gl
+          -p sunmao_fx_gain_gui_webview
+          -p sunmao_fx_gain_gui_wgpu
+          -p sunmao_syn_sine_gui_gl
+          -p sunmao_syn_sine_gui_wgpu
+          -p sunmao_syn_sine_gui_webview
+
       - name: Build test runner separately
         run: cargo build --locked -p sunmao_unittest_runner
 
@@ -254,7 +318,7 @@ jobs:
             exit 1
           fi
 
-      - name: Package and load VST3 + CLAP
+      - name: Package and exercise VST3 + CLAP + standalone
         shell: bash
         run: |
           set -euo pipefail
@@ -262,6 +326,22 @@ jobs:
           runner="target/debug/sunmao_unittest_runner${{ matrix.executable-suffix }}"
           output="target/phase1-artifacts/SunMaoGain"
           synth_output="target/phase1-artifacts/SunMaoSine"
+          standalone_dir="target/phase1-artifacts/standalone"
+          gain_standalone="target/debug/sunmao_fx_gain_standalone${{ matrix.executable-suffix }}"
+          synth_standalone="target/debug/sunmao_syn_sine_standalone${{ matrix.executable-suffix }}"
+          gain_standalone_output="$standalone_dir/SunMaoGain"
+          synth_standalone_output="$standalone_dir/SunMaoSine"
+          mkdir -p "$standalone_dir"
+
+          packaged_standalone() {
+            local output_base="$1" display_name="$2"
+            case "${{ runner.os }}" in
+              macOS) printf '%s.app/Contents/MacOS/%s\n' "$output_base" "$display_name" ;;
+              Windows) printf '%s.exe\n' "$output_base" ;;
+              Linux) printf '%s\n' "$output_base" ;;
+              *) echo "unsupported runner OS: ${{ runner.os }}" >&2; return 1 ;;
+            esac
+          }
 
           "$packager" vst3 \
             --binary "${{ matrix.plugin-binary }}" \
@@ -287,6 +367,21 @@ jobs:
             --name "SunMao Sine Synth" \
             --bundle-id com.sunmao.synth.sine \
             --version 1.0.0
+          "$packager" standalone \
+            --binary "$gain_standalone" \
+            --out "$gain_standalone_output" \
+            --name "SunMao Gain" \
+            --bundle-id com.sunmao.fx.gain \
+            --version 1.0.0
+          "$packager" standalone \
+            --binary "$synth_standalone" \
+            --out "$synth_standalone_output" \
+            --name "SunMao Sine Synth" \
+            --bundle-id com.sunmao.synth.sine \
+            --version 1.0.0
+
+          packaged_gain="$(packaged_standalone "$gain_standalone_output" "SunMao Gain")"
+          packaged_synth="$(packaged_standalone "$synth_standalone_output" "SunMao Sine Synth")"
 
           {
             echo "commit=${GITHUB_SHA:-unknown}"
@@ -294,14 +389,19 @@ jobs:
             echo "os=${RUNNER_OS} arch=${RUNNER_ARCH}"
             echo "packager=$packager"
             echo
-            echo "Packaged gain/sine VST3+CLAP bundles:"
+            echo "Packaged gain/sine VST3+CLAP bundles and standalone applications:"
             ls -la "$output.vst3" "$output.clap" "$synth_output.vst3" "$synth_output.clap"
+            ls -la "$packaged_gain" "$packaged_synth"
           } > target/phase1-artifacts/packager-validation.txt
 
           "$runner" test "$output.vst3" 2>&1 | tee "$output.vst3.test.log"
           "$runner" test "$output.clap" 2>&1 | tee "$output.clap.test.log"
           "$runner" test "$synth_output.vst3" 2>&1 | tee "$synth_output.vst3.test.log"
           "$runner" test "$synth_output.clap" 2>&1 | tee "$synth_output.clap.test.log"
+          "$gain_standalone" --smoke 2>&1 | tee "$gain_standalone_output.raw.smoke.log"
+          "$synth_standalone" --smoke 2>&1 | tee "$synth_standalone_output.raw.smoke.log"
+          "$packaged_gain" --smoke 2>&1 | tee "$gain_standalone_output.packaged.smoke.log"
+          "$packaged_synth" --smoke 2>&1 | tee "$synth_standalone_output.packaged.smoke.log"
 
           if "$runner" test "target/phase1-artifacts/missing.clap" 2>&1 | tee "target/phase1-artifacts/missing.clap.test.log"; then
             echo "runner unexpectedly accepted a missing plugin" >&2
@@ -342,8 +442,10 @@ jobs:
             # invocations after 3 minutes so the ::error log tail shows the
             # last completed phase instead of stalling the job for 75 minutes.
             gui_runner=(timeout --signal=TERM --kill-after=15 180 xvfb-run -a -- env GDK_BACKEND=x11 WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 "$runner")
+            standalone_gui_prefix=(timeout --signal=TERM --kill-after=15 180 xvfb-run -a -- env GDK_BACKEND=x11 WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1)
           else
             gui_runner=("$runner")
+            standalone_gui_prefix=()
           fi
 
           run_gui_test() {
@@ -376,6 +478,64 @@ jobs:
             summary="$(tail -n 25 "$log" | tr '\n' ' ' | cut -c1-1200)"
             echo "::error title=Phase 1 GUI retry failed::$summary"
             return "$status"
+          }
+
+          run_standalone_gui_test() {
+            local log="$1" executable="$2"
+            set +e
+            if [ "${{ runner.os }}" = "Linux" ]; then
+              "${standalone_gui_prefix[@]}" "$executable" --gui-smoke 2>&1 | tee "$log"
+            else
+              "$executable" --gui-smoke 2>&1 | tee "$log"
+            fi
+            local status=${PIPESTATUS[0]}
+            set -e
+            if [ "$status" -eq 0 ]; then
+              if [ "${{ runner.os }}" = "macOS" ]; then sleep 1; fi
+              return 0
+            fi
+            local summary
+            summary="$(tail -n 25 "$log" | tr '\n' ' ' | cut -c1-1200)"
+            echo "::error title=Phase 1 standalone GUI test failed::$summary"
+            if [ "${{ runner.os }}" != "macOS" ]; then
+              return "$status"
+            fi
+            echo "macOS standalone GUI failed; retrying once after WindowServer cooldown" >&2
+            sleep 5
+            set +e
+            "$executable" --gui-smoke 2>&1 | tee "$log"
+            status=${PIPESTATUS[0]}
+            set -e
+            return "$status"
+          }
+
+          packaged_standalone() {
+            local output_base="$1" executable_name="$2"
+            case "${{ runner.os }}" in
+              macOS) printf '%s.app/Contents/MacOS/%s\n' "$output_base" "$executable_name" ;;
+              Windows) printf '%s.exe\n' "$output_base" ;;
+              Linux) printf '%s\n' "$output_base" ;;
+              *) echo "unsupported runner OS: ${{ runner.os }}" >&2; return 1 ;;
+            esac
+          }
+
+          package_and_test_standalone_gui() {
+            local output_name="$1" binary_name="$2" display_name="$3" bundle_id="$4"
+            local binary="target/debug/${binary_name}${{ matrix.executable-suffix }}"
+            local output="target/phase1-artifacts/standalone/${output_name}"
+            local packaged
+            test -f "$binary"
+            mkdir -p target/phase1-artifacts/standalone
+            run_standalone_gui_test "$output.raw.gui-smoke.log" "$binary"
+            "$packager" standalone \
+              --binary "$binary" \
+              --out "$output" \
+              --name "$display_name" \
+              --bundle-id "$bundle_id" \
+              --version 1.0.0
+            packaged="$(packaged_standalone "$output" "$display_name")"
+            test -f "$packaged"
+            run_standalone_gui_test "$output.packaged.gui-smoke.log" "$packaged"
           }
 
           package_and_test_gui() {
@@ -415,6 +575,19 @@ jobs:
           package_and_test_gui SunMaoSineWebView "${{ matrix.synth-webview-binary }}" \
             "SunMao Sine Synth WebView" com.sunmao.synth.sine.webview 120,138 400,138
 
+          package_and_test_standalone_gui SunMaoGainGL sunmao_fx_gain_gui_gl_standalone \
+            "SunMao Gain GL" com.sunmao.fx.gain.gl
+          package_and_test_standalone_gui SunMaoGainWGPU sunmao_fx_gain_gui_wgpu_standalone \
+            "SunMao Gain WGPU" com.sunmao.fx.gain.wgpu
+          package_and_test_standalone_gui SunMaoGainWebView sunmao_fx_gain_gui_webview_standalone \
+            "SunMao Gain WebView" com.sunmao.fx.gain.webview
+          package_and_test_standalone_gui SunMaoSineGL sunmao_syn_sine_gui_gl_standalone \
+            "SunMao Sine Synth GL" com.sunmao.synth.sine.gl
+          package_and_test_standalone_gui SunMaoSineWGPU sunmao_syn_sine_gui_wgpu_standalone \
+            "SunMao Sine Synth WGPU" com.sunmao.synth.sine.wgpu
+          package_and_test_standalone_gui SunMaoSineWebView sunmao_syn_sine_gui_webview_standalone \
+            "SunMao Sine Synth WebView" com.sunmao.synth.sine.webview
+
           package_and_test_gui_lifecycle() {
             local backend="$1" binary="$2" display_name="$3" bundle_suffix="$4"
             local output="target/phase1-artifacts/SunMao${backend}"
@@ -444,7 +617,7 @@ jobs:
         timeout-minutes: 20
         run: tools/package_examples.sh --debug --test
 
-      - name: Upload packaged smoke-test plugins
+      - name: Upload packaged Phase 1 artifacts
         uses: actions/upload-artifact@v4
         with:
           name: phase1-${{ runner.os }}-${{ runner.arch }}
@@ -469,6 +642,8 @@ jobs:
             target/phase1-artifacts/SunMaoLPFGL.clap
             target/phase1-artifacts/SunMaoDAWInfoGUI.vst3
             target/phase1-artifacts/SunMaoDAWInfoGUI.clap
+            target/phase1-artifacts/standalone
+            target/phase1-artifacts/format-tests.log
             target/phase1-artifacts/*.test.log
             target/phase1-artifacts/*.gui-test.log
             target/phase1-artifacts/*.validation.txt

@@ -21,6 +21,16 @@ pub struct WindowHandle {
     phantom: PhantomData<*mut ()>,
 }
 
+/// Request that the current application-owned blocking window event loop stop.
+///
+/// This is used by deterministic standalone GUI smoke tests when a native
+/// compositor fails to deliver frame callbacks. Embedded windows are not
+/// affected. The request is best-effort and safe to call from a watchdog
+/// thread.
+pub fn request_event_loop_stop() {
+    platform::request_event_loop_stop();
+}
+
 impl WindowHandle {
     fn new(window_handle: platform::WindowHandle) -> Self {
         Self {

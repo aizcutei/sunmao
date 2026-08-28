@@ -3,14 +3,10 @@
 //! Provides plugin UI embedding in host windows.
 
 use crate::plugin::Plugin;
-use crate::plugin_instance::PluginInstanceWithGui;
-use clap_sys::ext::gui::{
-    CLAP_EXT_GUI, CLAP_WINDOW_API_COCOA, CLAP_WINDOW_API_WIN32, CLAP_WINDOW_API_X11,
-    clap_gui_resize_hints_t, clap_plugin_gui_t, clap_window_t,
-};
+use crate::plugin_instance::{ffi_guard, instance_ptr};
+use clap_sys::ext::gui::{clap_gui_resize_hints_t, clap_plugin_gui_t, clap_window_t};
 use clap_sys::plugin::clap_plugin_t;
 use std::ffi::{CStr, c_char, c_void};
-use std::ptr;
 
 /// Supported GUI API types
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,7 +68,7 @@ impl Default for GuiResizeHints {
 /// GUI handler trait for plugins with UI
 pub trait GuiHandler {
     /// Check if the given API is supported
-    fn is_api_supported(&self, api: GuiApi, is_floating: bool) -> bool {
+    fn is_api_supported(&self, _api: GuiApi, _is_floating: bool) -> bool {
         false
     }
 
@@ -82,7 +78,7 @@ pub trait GuiHandler {
     }
 
     /// Create the GUI (called by host)
-    fn gui_create(&mut self, api: GuiApi, is_floating: bool) -> bool {
+    fn gui_create(&mut self, _api: GuiApi, _is_floating: bool) -> bool {
         false
     }
 
@@ -115,17 +111,17 @@ pub trait GuiHandler {
     }
 
     /// Set GUI size
-    fn gui_set_size(&mut self, width: u32, height: u32) -> bool {
+    fn gui_set_size(&mut self, _width: u32, _height: u32) -> bool {
         false
     }
 
     /// Set parent window
-    fn gui_set_parent(&mut self, window: *mut c_void) -> bool {
+    fn gui_set_parent(&mut self, _window: *mut c_void) -> bool {
         false
     }
 
     /// Set transient window
-    fn gui_set_transient(&mut self, window: *mut c_void) -> bool {
+    fn gui_set_transient(&mut self, _window: *mut c_void) -> bool {
         false
     }
 
@@ -150,10 +146,15 @@ pub(crate) unsafe extern "C" fn gui_is_api_supported<P: Plugin + GuiHandler>(
     if api.is_null() {
         return false;
     }
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
     let api_cstr = unsafe { CStr::from_ptr(api) };
     if let Some(gui_api) = GuiApi::from_cstr(api_cstr) {
-        unsafe { instance.controller() }.is_api_supported(gui_api, is_floating)
+        ffi_guard(false, || unsafe {
+            instance.controller().is_api_supported(gui_api, is_floating)
+        })
     } else {
         false
     }
@@ -167,8 +168,12 @@ pub(crate) unsafe extern "C" fn gui_get_preferred_api<P: Plugin + GuiHandler>(
     if api.is_null() || is_floating.is_null() {
         return false;
     }
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
-    if let Some((pref_api, floating)) = unsafe { instance.controller() }.preferred_api() {
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
+    let preferred = ffi_guard(None, || unsafe { instance.controller().preferred_api() });
+    if let Some((pref_api, floating)) = preferred {
         unsafe {
             *api = pref_api.as_cstr().as_ptr() as *const c_char;
             *is_floating = floating;
@@ -187,26 +192,44 @@ pub(crate) unsafe extern "C" fn gui_create<P: Plugin + GuiHandler>(
     if api.is_null() {
         return false;
     }
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
     let api_cstr = unsafe { CStr::from_ptr(api) };
     if let Some(gui_api) = GuiApi::from_cstr(api_cstr) {
-        unsafe { instance.controller_mut() }.gui_create(gui_api, is_floating)
+        ffi_guard(false, || unsafe {
+            instance.controller_mut().gui_create(gui_api, is_floating)
+        })
     } else {
         false
     }
 }
 
 pub(crate) unsafe extern "C" fn gui_destroy<P: Plugin + GuiHandler>(plugin: *const clap_plugin_t) {
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
-    unsafe { instance.controller_mut() }.gui_destroy();
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return;
+    };
+    let instance = unsafe { &*instance_ptr };
+    ffi_guard((), || unsafe {
+        instance.controller_mut().gui_destroy();
+    });
 }
 
 pub(crate) unsafe extern "C" fn gui_set_scale<P: Plugin + GuiHandler>(
     plugin: *const clap_plugin_t,
     scale: f64,
 ) -> bool {
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
-    unsafe { instance.controller_mut() }.gui_set_scale(scale)
+    if !scale.is_finite() || scale <= 0.0 {
+        return false;
+    }
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
+    ffi_guard(false, || unsafe {
+        instance.controller_mut().gui_set_scale(scale)
+    })
 }
 
 pub(crate) unsafe extern "C" fn gui_get_size<P: Plugin + GuiHandler>(
@@ -217,8 +240,12 @@ pub(crate) unsafe extern "C" fn gui_get_size<P: Plugin + GuiHandler>(
     if width.is_null() || height.is_null() {
         return false;
     }
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
-    if let Some((w, h)) = unsafe { instance.controller() }.gui_get_size() {
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
+    let size = ffi_guard(None, || unsafe { instance.controller().gui_get_size() });
+    if let Some((w, h)) = size {
         unsafe {
             *width = w;
             *height = h;
@@ -232,8 +259,11 @@ pub(crate) unsafe extern "C" fn gui_get_size<P: Plugin + GuiHandler>(
 pub(crate) unsafe extern "C" fn gui_can_resize<P: Plugin + GuiHandler>(
     plugin: *const clap_plugin_t,
 ) -> bool {
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
-    unsafe { instance.controller() }.gui_can_resize()
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
+    ffi_guard(false, || unsafe { instance.controller().gui_can_resize() })
 }
 
 pub(crate) unsafe extern "C" fn gui_get_resize_hints<P: Plugin + GuiHandler>(
@@ -243,8 +273,15 @@ pub(crate) unsafe extern "C" fn gui_get_resize_hints<P: Plugin + GuiHandler>(
     if hints.is_null() {
         return false;
     }
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
-    let h = unsafe { instance.controller() }.gui_get_resize_hints();
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
+    let Some(h) = ffi_guard(None, || unsafe {
+        Some(instance.controller().gui_get_resize_hints())
+    }) else {
+        return false;
+    };
     let out = unsafe { &mut *hints };
     out.can_resize_horizontally = h.can_resize_horizontally;
     out.can_resize_vertically = h.can_resize_vertically;
@@ -262,9 +299,15 @@ pub(crate) unsafe extern "C" fn gui_adjust_size<P: Plugin + GuiHandler>(
     if width.is_null() || height.is_null() {
         return false;
     }
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
-    let (w, h) =
-        unsafe { instance.controller() }.gui_adjust_size(unsafe { *width }, unsafe { *height });
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
+    let Some((w, h)) = ffi_guard(None, || unsafe {
+        Some(instance.controller().gui_adjust_size(*width, *height))
+    }) else {
+        return false;
+    };
     unsafe {
         *width = w;
         *height = h;
@@ -277,8 +320,13 @@ pub(crate) unsafe extern "C" fn gui_set_size<P: Plugin + GuiHandler>(
     width: u32,
     height: u32,
 ) -> bool {
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
-    unsafe { instance.controller_mut() }.gui_set_size(width, height)
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
+    ffi_guard(false, || unsafe {
+        instance.controller_mut().gui_set_size(width, height)
+    })
 }
 
 pub(crate) unsafe extern "C" fn gui_set_parent<P: Plugin + GuiHandler>(
@@ -288,9 +336,14 @@ pub(crate) unsafe extern "C" fn gui_set_parent<P: Plugin + GuiHandler>(
     if window.is_null() {
         return false;
     }
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
     let handle = unsafe { (*window).handle.ptr };
-    unsafe { instance.controller_mut() }.gui_set_parent(handle)
+    ffi_guard(false, || unsafe {
+        instance.controller_mut().gui_set_parent(handle)
+    })
 }
 
 pub(crate) unsafe extern "C" fn gui_set_transient<P: Plugin + GuiHandler>(
@@ -300,9 +353,14 @@ pub(crate) unsafe extern "C" fn gui_set_transient<P: Plugin + GuiHandler>(
     if window.is_null() {
         return false;
     }
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
     let handle = unsafe { (*window).handle.ptr };
-    unsafe { instance.controller_mut() }.gui_set_transient(handle)
+    ffi_guard(false, || unsafe {
+        instance.controller_mut().gui_set_transient(handle)
+    })
 }
 
 pub(crate) unsafe extern "C" fn gui_suggest_title<P: Plugin + GuiHandler>(
@@ -315,15 +373,21 @@ pub(crate) unsafe extern "C" fn gui_suggest_title<P: Plugin + GuiHandler>(
 pub(crate) unsafe extern "C" fn gui_show<P: Plugin + GuiHandler>(
     plugin: *const clap_plugin_t,
 ) -> bool {
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
-    unsafe { instance.controller_mut() }.gui_show()
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
+    ffi_guard(false, || unsafe { instance.controller_mut().gui_show() })
 }
 
 pub(crate) unsafe extern "C" fn gui_hide<P: Plugin + GuiHandler>(
     plugin: *const clap_plugin_t,
 ) -> bool {
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
-    unsafe { instance.controller_mut() }.gui_hide()
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
+    ffi_guard(false, || unsafe { instance.controller_mut().gui_hide() })
 }
 
 /// Create GUI extension struct (only for plugins implementing GuiHandler)

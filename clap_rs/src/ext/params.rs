@@ -1,13 +1,13 @@
 //! Params Extension for clap_rs
 
 use crate::plugin::Plugin;
-use crate::plugin_instance::PluginInstance;
+use crate::plugin_instance::{ffi_guard, instance_ptr};
+use crate::process::MAX_PROCESS_EVENTS;
 use clap_sys::events::{
     CLAP_EVENT_PARAM_VALUE, clap_event_param_value_t, clap_input_events_t, clap_output_events_t,
 };
 use clap_sys::ext::params::{
-    CLAP_EXT_PARAMS, CLAP_PARAM_IS_AUTOMATABLE, CLAP_PARAM_IS_STEPPED, clap_param_info_t,
-    clap_plugin_params_t,
+    CLAP_PARAM_IS_AUTOMATABLE, CLAP_PARAM_IS_STEPPED, clap_param_info_t, clap_plugin_params_t,
 };
 use clap_sys::id::clap_id;
 use clap_sys::plugin::clap_plugin_t;
@@ -52,8 +52,23 @@ fn parameter_flags(param: &ParameterInfo) -> u32 {
         }
 }
 
+fn valid_parameter_value(param: &ParameterInfo, value: f64) -> bool {
+    value.is_finite()
+        && param.min_value.is_finite()
+        && param.max_value.is_finite()
+        && param.min_value <= param.max_value
+        && (param.min_value..=param.max_value).contains(&value)
+}
+
+fn sanitize_parameter_value(param: &ParameterInfo, value: f64) -> Option<f64> {
+    valid_parameter_value(param, value).then_some(value)
+}
+
 pub(crate) unsafe extern "C" fn params_count<P: Plugin>(plugin: *const clap_plugin_t) -> u32 {
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return 0;
+    };
+    let instance = unsafe { &*instance_ptr };
     instance.params_cache.len() as u32
 }
 
@@ -65,7 +80,10 @@ pub(crate) unsafe extern "C" fn params_get_info<P: Plugin>(
     if param_info.is_null() {
         return false;
     }
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
     if (param_index as usize) >= instance.params_cache.len() {
         return false;
     }
@@ -90,24 +108,47 @@ pub(crate) unsafe extern "C" fn params_get_value<P: Plugin>(
     if out_value.is_null() {
         return false;
     }
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
     if !instance.params_cache.iter().any(|p| p.id == param_id) {
         return false;
     }
-    unsafe {
-        *out_value = instance.controller().get_parameter(param_id);
-    }
+    let Some(param) = instance.params_cache.iter().find(|p| p.id == param_id) else {
+        return false;
+    };
+    let Some(value) = ffi_guard(None, || unsafe {
+        sanitize_parameter_value(param, instance.controller().get_parameter(param_id))
+    }) else {
+        return false;
+    };
+    unsafe { *out_value = value };
     true
 }
 
 pub(crate) unsafe extern "C" fn params_value_to_text<P: Plugin>(
-    _plugin: *const clap_plugin_t,
-    _param_id: clap_id,
+    plugin: *const clap_plugin_t,
+    param_id: clap_id,
     value: f64,
     out_buffer: *mut c_char,
     out_buffer_capacity: u32,
 ) -> bool {
     if out_buffer.is_null() || out_buffer_capacity == 0 {
+        return false;
+    }
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
+    let Some(param) = instance
+        .params_cache
+        .iter()
+        .find(|param| param.id == param_id)
+    else {
+        return false;
+    };
+    if !valid_parameter_value(param, value) {
         return false;
     }
     let text = format!("{:.3}", value);
@@ -123,21 +164,34 @@ pub(crate) unsafe extern "C" fn params_value_to_text<P: Plugin>(
 }
 
 pub(crate) unsafe extern "C" fn params_text_to_value<P: Plugin>(
-    _plugin: *const clap_plugin_t,
-    _param_id: clap_id,
+    plugin: *const clap_plugin_t,
+    param_id: clap_id,
     param_value_text: *const c_char,
     out_value: *mut f64,
 ) -> bool {
     if param_value_text.is_null() || out_value.is_null() {
         return false;
     }
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
+    let Some(param) = instance
+        .params_cache
+        .iter()
+        .find(|param| param.id == param_id)
+    else {
+        return false;
+    };
     let text = unsafe { CStr::from_ptr(param_value_text) };
     if let Ok(value_str) = text.to_str() {
         if let Ok(parsed) = value_str.parse::<f64>() {
-            unsafe {
-                *out_value = parsed;
+            if valid_parameter_value(param, parsed) {
+                unsafe {
+                    *out_value = parsed;
+                }
+                return true;
             }
-            return true;
         }
     }
     false
@@ -148,22 +202,42 @@ pub(crate) unsafe extern "C" fn params_flush<P: Plugin>(
     input: *const clap_input_events_t,
     output: *const clap_output_events_t,
 ) {
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstance<P>) };
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        params_flush_unchecked::<P>(plugin, input, output);
+    }));
+}
+
+unsafe fn params_flush_unchecked<P: Plugin>(
+    plugin: *const clap_plugin_t,
+    input: *const clap_input_events_t,
+    output: *const clap_output_events_t,
+) {
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return;
+    };
+    let instance = unsafe { &*instance_ptr };
     if !input.is_null() {
         let size_fn = unsafe { (*input).size };
         let get_fn = unsafe { (*input).get };
         if let (Some(size_fn), Some(get_fn)) = (size_fn, get_fn) {
             let size = unsafe { size_fn(input) };
-            for index in 0..size {
+            for index in 0..size.min(MAX_PROCESS_EVENTS as u32) {
                 let header = unsafe { get_fn(input, index) };
                 if header.is_null() {
                     continue;
                 }
                 if unsafe { is_param_value_event(header) } {
                     let event = unsafe { &*(header as *const clap_event_param_value_t) };
-                    unsafe {
-                        instance.set_parameter_for_current_thread(event.param_id, event.value)
-                    };
+                    if instance
+                        .params_cache
+                        .iter()
+                        .find(|param| param.id == event.param_id)
+                        .is_some_and(|param| valid_parameter_value(param, event.value))
+                    {
+                        unsafe {
+                            instance.set_parameter_for_current_thread(event.param_id, event.value)
+                        };
+                    }
                 }
             }
         }
@@ -186,12 +260,14 @@ pub(crate) fn create_params_ext<P: Plugin>() -> clap_plugin_params_t {
 // ======= GUI Plugin Support =======
 
 use crate::ext::gui::GuiHandler;
-use crate::plugin_instance::PluginInstanceWithGui;
 
 pub(crate) unsafe extern "C" fn params_count_gui<P: Plugin + GuiHandler>(
     plugin: *const clap_plugin_t,
 ) -> u32 {
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return 0;
+    };
+    let instance = unsafe { &*instance_ptr };
     instance.params_cache.len() as u32
 }
 
@@ -203,7 +279,10 @@ pub(crate) unsafe extern "C" fn params_get_info_gui<P: Plugin + GuiHandler>(
     if param_info.is_null() {
         return false;
     }
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
     if (param_index as usize) >= instance.params_cache.len() {
         return false;
     }
@@ -228,13 +307,22 @@ pub(crate) unsafe extern "C" fn params_get_value_gui<P: Plugin + GuiHandler>(
     if out_value.is_null() {
         return false;
     }
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return false;
+    };
+    let instance = unsafe { &*instance_ptr };
     if !instance.params_cache.iter().any(|p| p.id == param_id) {
         return false;
     }
-    unsafe {
-        *out_value = instance.controller().get_parameter(param_id);
-    }
+    let Some(param) = instance.params_cache.iter().find(|p| p.id == param_id) else {
+        return false;
+    };
+    let Some(value) = ffi_guard(None, || unsafe {
+        sanitize_parameter_value(param, instance.controller().get_parameter(param_id))
+    }) else {
+        return false;
+    };
+    unsafe { *out_value = value };
     true
 }
 
@@ -243,22 +331,42 @@ pub(crate) unsafe extern "C" fn params_flush_gui<P: Plugin + GuiHandler>(
     input: *const clap_input_events_t,
     output: *const clap_output_events_t,
 ) {
-    let instance = unsafe { &*((*plugin).plugin_data as *const PluginInstanceWithGui<P>) };
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        params_flush_gui_unchecked::<P>(plugin, input, output);
+    }));
+}
+
+unsafe fn params_flush_gui_unchecked<P: Plugin + GuiHandler>(
+    plugin: *const clap_plugin_t,
+    input: *const clap_input_events_t,
+    output: *const clap_output_events_t,
+) {
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return;
+    };
+    let instance = unsafe { &*instance_ptr };
     if !input.is_null() {
         let size_fn = unsafe { (*input).size };
         let get_fn = unsafe { (*input).get };
         if let (Some(size_fn), Some(get_fn)) = (size_fn, get_fn) {
             let size = unsafe { size_fn(input) };
-            for index in 0..size {
+            for index in 0..size.min(MAX_PROCESS_EVENTS as u32) {
                 let header = unsafe { get_fn(input, index) };
                 if header.is_null() {
                     continue;
                 }
                 if unsafe { is_param_value_event(header) } {
                     let event = unsafe { &*(header as *const clap_event_param_value_t) };
-                    unsafe {
-                        instance.set_parameter_for_current_thread(event.param_id, event.value)
-                    };
+                    if instance
+                        .params_cache
+                        .iter()
+                        .find(|param| param.id == event.param_id)
+                        .is_some_and(|param| valid_parameter_value(param, event.value))
+                    {
+                        unsafe {
+                            instance.set_parameter_for_current_thread(event.param_id, event.value)
+                        };
+                    }
                 }
             }
         }

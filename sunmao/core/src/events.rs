@@ -113,10 +113,26 @@ impl EventQueue {
     /// Once full, [`Self::push`] and [`Self::push_param_change`] return `false`
     /// without allocating or modifying the queue.
     pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            events: Vec::with_capacity(capacity),
+        Self::try_with_capacity(capacity)
+            .expect("event queue capacity is too large for the available address space")
+    }
+
+    /// Fallibly create an empty event queue with a fixed, activation-owned
+    /// capacity.
+    ///
+    /// Format adapters call this while they still own the plugin instance so
+    /// an invalid or unreasonably large
+    /// [`crate::plugin::SunmaoPlugin::MAX_EVENTS_PER_BLOCK`]
+    /// cannot panic across a host ABI boundary. The returned queue never grows
+    /// during processing; callers should propagate the error and leave the
+    /// plugin inactive when allocation fails.
+    pub fn try_with_capacity(capacity: usize) -> Result<Self, std::collections::TryReserveError> {
+        let mut events = Vec::new();
+        events.try_reserve_exact(capacity)?;
+        Ok(Self {
+            events,
             max_events: capacity,
-        }
+        })
     }
 
     /// Reserve event scratch outside the processing callback.
@@ -255,5 +271,11 @@ mod tests {
         assert_eq!(events.iter().count(), 2);
         assert_eq!(events.capacity(), capacity);
         assert_eq!(events.max_events(), 2);
+    }
+
+    #[test]
+    fn try_with_capacity_rejects_capacity_overflow_without_panicking() {
+        let result = EventQueue::try_with_capacity(usize::MAX);
+        assert!(result.is_err());
     }
 }

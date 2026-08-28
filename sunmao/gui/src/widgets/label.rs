@@ -8,6 +8,7 @@ pub struct Label {
     id: WidgetId,
     bounds: Rect,
     text: String,
+    focused: bool,
     // Visual settings
     pub color: Color,
     pub font_size: f32,
@@ -20,6 +21,7 @@ impl Label {
             id: next_widget_id(),
             bounds: Rect::new(0.0, 0.0, 100.0, 20.0),
             text: text.to_string(),
+            focused: false,
             color: Color::FOREGROUND,
             font_size: 13.0,
             alignment: TextAlign::Left,
@@ -65,8 +67,14 @@ impl Widget for Label {
     fn set_bounds(&mut self, bounds: Rect) {
         self.bounds = bounds;
     }
+    fn set_focused(&mut self, focused: bool) {
+        self.focused = focused;
+    }
     fn state(&self) -> WidgetState {
-        WidgetState::default()
+        WidgetState {
+            focused: self.focused,
+            ..WidgetState::default()
+        }
     }
 
     fn handle_event(&mut self, _event: &Event) -> bool {

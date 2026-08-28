@@ -4,6 +4,7 @@
 
 use raw_window_handle::RawWindowHandle;
 use std::collections::HashMap;
+#[cfg(target_os = "windows")]
 use std::ffi::c_void;
 use std::sync::Arc;
 use sunmao_core::events::MidiMessage;
@@ -14,6 +15,9 @@ use sunmao_core::{
 };
 use vst3_rs::gui::prepare_view;
 use vst3_rs::gui::GuiSize;
+use vst3_rs::process::{
+    MAX_PROCESS_AUDIO_SAMPLES, MAX_PROCESS_CHANNELS, MAX_PROCESS_EVENTS, MAX_PROCESS_FRAMES,
+};
 use vst3_rs::{
     AudioConfig, GuiPlugin, HostHandle, ParamChange as Vst3ParamChange, ParamInfo, ParameterBridge,
     Plugin, PluginInfo, PortConfig, PortType, ProcessContext, ProcessError, ProcessResult,
@@ -21,26 +25,27 @@ use vst3_rs::{
 
 pub use vst3_rs::{export_vst3_plugin, export_vst3_plugin_with_gui};
 
-/// Wrapper for ViewHandle that is Send+Sync (unsafe).
-/// GUI handles are only accessed on the main thread in VST3.
-struct ThreadSafeViewHandle(ViewHandle);
-unsafe impl Send for ThreadSafeViewHandle {}
-unsafe impl Sync for ThreadSafeViewHandle {}
-
 /// Wrapper that adapts a SunmaoPlugin to vst3_rs::Plugin.
 pub struct SunmaoVst3Wrapper<P: SunmaoPlugin> {
     plugin: P,
     params: Arc<P::Params>,
     sample_rate: f64,
+    input_channel_count: usize,
+    output_channel_count: usize,
     // Temporary buffers for deinterleaving
     input_buffers: Vec<Vec<f32>>,
     output_buffers: Vec<Vec<f32>>,
     // MIDI event queue for synths
     pending_midi: Vec<PendingMidi>,
+    // False when the plugin-declared event bound could not be reserved during
+    // construction. In that case note callbacks must fail closed instead of
+    // allocating on the realtime thread.
+    pending_midi_capacity_available: bool,
+    event_capacity_available: bool,
     event_overflowed: bool,
     event_queue: EventQueue,
     // GUI View Handle
-    view_handle: Option<ThreadSafeViewHandle>,
+    view_handle: Option<ViewHandle>,
     // Shared parameter store (shared with GUI/controller)
     shared_params: Arc<ParameterBridge>,
     host: HostHandle,
@@ -124,6 +129,30 @@ fn append_timed_events(
     success
 }
 
+/// Convert a VST3 note payload to the framework's bounded MIDI representation.
+///
+/// VST3 transports channel and pitch as signed values and velocity as a float.
+/// Do not let malformed host data wrap through integer casts into a different
+/// MIDI note/channel; finite velocity values outside the MIDI range are
+/// clamped, matching the CLAP adapter's policy.
+fn note_event_to_midi(
+    sample_offset: u32,
+    channel: i16,
+    pitch: i16,
+    velocity: f32,
+    note_on: bool,
+) -> Option<MidiMessage> {
+    if !(0..=15).contains(&channel) || !(0..=127).contains(&pitch) || !velocity.is_finite() {
+        return None;
+    }
+    let velocity = (velocity.clamp(0.0, 1.0) * 127.0).round() as u8;
+    Some(if note_on {
+        MidiMessage::note_on(sample_offset, channel as u8, pitch as u8, velocity)
+    } else {
+        MidiMessage::note_off(sample_offset, channel as u8, pitch as u8, velocity)
+    })
+}
+
 fn prepare_output_buffers(
     input_buffers: &[Vec<f32>],
     output_buffers: &mut [Vec<f32>],
@@ -142,6 +171,37 @@ fn prepare_output_buffers(
         }
         output[copied..].fill(0.0);
     }
+}
+
+/// Copy one host input channel into activation-owned scratch without retaining
+/// samples from a previous block when the host provides a short or missing
+/// channel.
+fn copy_input_buffer(dst: &mut [f32], src: &[f32], frames: usize) {
+    let active_len = frames.min(dst.len());
+    dst[..active_len].fill(0.0);
+    let copy_len = active_len.min(src.len());
+    dst[..copy_len].copy_from_slice(&src[..copy_len]);
+}
+
+fn allocate_audio_buffers(channel_count: usize, max_frames: u32) -> Option<Vec<Vec<f32>>> {
+    if max_frames > MAX_PROCESS_FRAMES
+        || channel_count > MAX_PROCESS_CHANNELS
+        || channel_count
+            .checked_mul(max_frames as usize)
+            .is_none_or(|samples| samples > MAX_PROCESS_AUDIO_SAMPLES)
+    {
+        return None;
+    }
+    let max_frames = usize::try_from(max_frames).ok()?;
+    let mut buffers = Vec::new();
+    buffers.try_reserve_exact(channel_count).ok()?;
+    for _ in 0..channel_count {
+        let mut buffer = Vec::new();
+        buffer.try_reserve_exact(max_frames).ok()?;
+        buffer.resize(max_frames, 0.0);
+        buffers.push(buffer);
+    }
+    Some(buffers)
 }
 
 impl<P: Params> Vst3ParamsViewContext<P> {
@@ -198,9 +258,6 @@ impl<P: Params> ViewContext for Vst3ParamsViewContext<P> {
     }
 }
 
-unsafe impl<P: SunmaoPlugin> Send for SunmaoVst3Wrapper<P> {}
-unsafe impl<P: SunmaoPlugin> Sync for SunmaoVst3Wrapper<P> {}
-
 impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
     const MAX_EVENTS_PER_BLOCK: usize = P::MAX_EVENTS_PER_BLOCK;
 
@@ -232,19 +289,47 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
     fn new(host: HostHandle) -> Self {
         let plugin = P::default();
         let params = plugin.params();
-        let param_descriptors = params.descriptors();
+        let param_descriptors = params
+            .validated_descriptors()
+            .unwrap_or_else(|error| panic!("invalid SunMao parameter layout: {error}"));
         let shared_params = host.parameter_bridge();
         let input_channels = plugin.input_channels() as usize;
         let output_channels = plugin.output_channels() as usize;
+        let mut pending_midi = Vec::new();
+        let pending_midi_capacity_available = P::MAX_EVENTS_PER_BLOCK <= MAX_PROCESS_EVENTS
+            && pending_midi
+                .try_reserve_exact(P::MAX_EVENTS_PER_BLOCK)
+                .is_ok();
+        // `Plugin::new` is an ABI-mandated infallible constructor. A malformed
+        // event bound must therefore degrade to a fixed zero-capacity queue;
+        // processing will report an out-of-memory result rather than allowing
+        // an allocation or panic on the audio thread.
+        let (event_queue, event_queue_capacity_available) =
+            if P::MAX_EVENTS_PER_BLOCK <= MAX_PROCESS_EVENTS {
+                match EventQueue::try_with_capacity(P::MAX_EVENTS_PER_BLOCK) {
+                    Ok(queue) => (queue, true),
+                    Err(_) => (EventQueue::with_capacity(0), false),
+                }
+            } else {
+                (EventQueue::with_capacity(0), false)
+            };
         Self {
             plugin,
             params,
             sample_rate: 44100.0,
-            input_buffers: vec![vec![0.0; 4096]; input_channels],
-            output_buffers: vec![vec![0.0; 4096]; output_channels],
-            pending_midi: Vec::with_capacity(P::MAX_EVENTS_PER_BLOCK),
+            input_channel_count: input_channels,
+            output_channel_count: output_channels,
+            // Audio scratch is activation-owned. Keeping construction empty
+            // avoids an infallible 4096-frame allocation based solely on a
+            // plugin-declared channel count.
+            input_buffers: Vec::new(),
+            output_buffers: Vec::new(),
+            pending_midi,
+            pending_midi_capacity_available,
+            event_capacity_available: event_queue_capacity_available
+                && pending_midi_capacity_available,
             event_overflowed: false,
-            event_queue: EventQueue::with_capacity(P::MAX_EVENTS_PER_BLOCK),
+            event_queue,
             view_handle: None,
             shared_params,
             host,
@@ -253,14 +338,25 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
     }
 
     fn activate(&mut self, sample_rate: f64, max_frames: u32) -> bool {
+        if !self.event_capacity_available
+            || !sample_rate.is_finite()
+            || sample_rate <= 0.0
+            || max_frames > MAX_PROCESS_FRAMES
+            || P::MAX_EVENTS_PER_BLOCK > MAX_PROCESS_EVENTS
+        {
+            return false;
+        }
+        let Some(input_buffers) = allocate_audio_buffers(self.input_channel_count, max_frames)
+        else {
+            return false;
+        };
+        let Some(output_buffers) = allocate_audio_buffers(self.output_channel_count, max_frames)
+        else {
+            return false;
+        };
+        self.input_buffers = input_buffers;
+        self.output_buffers = output_buffers;
         self.sample_rate = sample_rate;
-        let max = max_frames as usize;
-        for buf in &mut self.input_buffers {
-            buf.resize(max, 0.0);
-        }
-        for buf in &mut self.output_buffers {
-            buf.resize(max, 0.0);
-        }
         self.plugin.initialize(sample_rate, max_frames);
         true
     }
@@ -320,9 +416,10 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
 
     fn params() -> Vec<ParamInfo> {
         let plugin = P::default();
-        plugin
-            .params()
-            .descriptors()
+        let params = plugin.params();
+        params
+            .validated_descriptors()
+            .unwrap_or_else(|error| panic!("invalid SunMao parameter layout: {error}"))
             .into_iter()
             .map(|descriptor| {
                 ParamInfo::new(descriptor.numeric_id, descriptor.name)
@@ -358,13 +455,12 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
     }
 
     fn note_on(&mut self, sample_offset: u32, channel: i16, pitch: i16, velocity: f32) {
-        let midi = MidiMessage::note_on(
-            sample_offset,
-            channel as u8,
-            pitch as u8,
-            (velocity * 127.0) as u8,
-        );
-        if self.pending_midi.len() >= P::MAX_EVENTS_PER_BLOCK {
+        let Some(midi) = note_event_to_midi(sample_offset, channel, pitch, velocity, true) else {
+            return;
+        };
+        if !self.pending_midi_capacity_available
+            || self.pending_midi.len() >= P::MAX_EVENTS_PER_BLOCK
+        {
             self.event_overflowed = true;
             return;
         }
@@ -376,13 +472,12 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
     }
 
     fn note_off(&mut self, sample_offset: u32, channel: i16, pitch: i16, velocity: f32) {
-        let midi = MidiMessage::note_off(
-            sample_offset,
-            channel as u8,
-            pitch as u8,
-            (velocity * 127.0) as u8,
-        );
-        if self.pending_midi.len() >= P::MAX_EVENTS_PER_BLOCK {
+        let Some(midi) = note_event_to_midi(sample_offset, channel, pitch, velocity, false) else {
+            return;
+        };
+        if !self.pending_midi_capacity_available
+            || self.pending_midi.len() >= P::MAX_EVENTS_PER_BLOCK
+        {
             self.event_overflowed = true;
             return;
         }
@@ -403,12 +498,15 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
         let num_in = ctx.num_inputs();
         let num_out = ctx.num_outputs();
 
-        // Copy input data to our buffers
+        // Copy input data to our buffers. Clear every declared channel first
+        // so a short/missing host channel cannot expose a prior block.
+        for buffer in &mut self.input_buffers {
+            let active_len = num_samples.min(buffer.len());
+            buffer[..active_len].fill(0.0);
+        }
         for ch in 0..num_in.min(self.input_buffers.len()) {
             let src = ctx.input(ch);
-            let dst = &mut self.input_buffers[ch];
-            let len = num_samples.min(src.len()).min(dst.len());
-            dst[..len].copy_from_slice(&src[..len]);
+            copy_input_buffer(&mut self.input_buffers[ch], src, num_samples);
         }
 
         // Effects begin with passthrough; synths begin with silence. Use the
@@ -494,7 +592,7 @@ impl<P: SunmaoPlugin> GuiPlugin for SunmaoVst3Wrapper<P> {
                 view.open(parent_window, context)
             })) {
                 Ok(Some(handle)) => {
-                    self.view_handle = Some(ThreadSafeViewHandle(handle));
+                    self.view_handle = Some(handle);
                     true
                 }
                 Ok(None) => false,
@@ -521,7 +619,7 @@ impl<P: SunmaoPlugin> GuiPlugin for SunmaoVst3Wrapper<P> {
 
     fn gui_resize(&mut self, size: GuiSize) {
         if let Some(handle) = self.view_handle.as_mut() {
-            let _ = handle.0.resize(size.width, size.height);
+            let _ = handle.resize(size.width, size.height);
         }
     }
 }
@@ -533,6 +631,7 @@ mod tests {
     use raw_window_handle::{XcbWindowHandle, XlibWindowHandle};
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::cell::Cell;
+    use std::ffi::c_void;
     #[cfg(target_os = "linux")]
     use std::num::NonZeroU32;
     use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
@@ -543,10 +642,13 @@ mod tests {
     use vst3_rs::vst3_sys::base::{
         kInvalidArgument, kNoInterface, kNotImplemented, kResultOk, IUnknownVtbl, TUID,
     };
-    use vst3_rs::vst3_sys::gui::{
-        kPlatformTypeHWND, kPlatformTypeNSView, kPlatformTypeX11EmbedWindowID, IPlugFrameVtbl,
-        IPlugViewVtbl, ViewRect,
-    };
+    #[cfg(target_os = "windows")]
+    use vst3_rs::vst3_sys::gui::kPlatformTypeHWND;
+    #[cfg(target_os = "macos")]
+    use vst3_rs::vst3_sys::gui::kPlatformTypeNSView;
+    #[cfg(target_os = "linux")]
+    use vst3_rs::vst3_sys::gui::kPlatformTypeX11EmbedWindowID;
+    use vst3_rs::vst3_sys::gui::{IPlugFrameVtbl, IPlugViewVtbl, ViewRect};
     use vst3_rs::vst3_sys::vst::iaudioprocessor::{
         AudioBusBuffers, IAudioProcessorVtbl, ProcessData, ProcessSetup,
     };
@@ -739,14 +841,39 @@ mod tests {
         assert_eq!(outputs[1], [0.0, 0.0, 0.0]);
     }
 
+    #[test]
+    fn short_input_channels_do_not_retain_previous_block_samples() {
+        let mut buffer = vec![9.0; 4];
+        copy_input_buffer(&mut buffer, &[1.0, 2.0], 4);
+        assert_eq!(buffer, [1.0, 2.0, 0.0, 0.0]);
+
+        copy_input_buffer(&mut buffer, &[], 4);
+        assert_eq!(buffer, [0.0; 4]);
+    }
+
+    #[test]
+    fn vst3_note_conversion_rejects_invalid_channel_pitch_and_velocity() {
+        assert!(note_event_to_midi(4, -1, 60, 0.5, true).is_none());
+        assert!(note_event_to_midi(4, 16, 60, 0.5, true).is_none());
+        assert!(note_event_to_midi(4, 0, -1, 0.5, true).is_none());
+        assert!(note_event_to_midi(4, 0, 128, 0.5, true).is_none());
+        assert!(note_event_to_midi(4, 0, 60, f32::NAN, true).is_none());
+        assert!(note_event_to_midi(4, 0, 60, f32::INFINITY, false).is_none());
+    }
+
+    #[test]
+    fn vst3_note_conversion_clamps_finite_velocity_without_wrapping_note_data() {
+        let low = note_event_to_midi(4, 15, 127, -1.0, true).expect("valid note");
+        assert_eq!(low.data, [0x9f, 127, 0]);
+
+        let high = note_event_to_midi(4, 15, 127, 2.0, false).expect("valid note");
+        assert_eq!(high.data, [0x8f, 127, 127]);
+    }
+
     #[derive(Default)]
     struct EmptyParams;
 
     impl Params for EmptyParams {
-        fn ids() -> &'static [&'static str] {
-            &[]
-        }
-
         fn get_normalized(&self, _id: &str) -> Option<f32> {
             None
         }
@@ -787,6 +914,38 @@ mod tests {
 
     default_id_plugin!(DefaultIdPluginA, "Default A");
     default_id_plugin!(DefaultIdPluginB, "Default B");
+
+    #[derive(Default)]
+    struct HugeEventCapacityPlugin;
+
+    impl SunmaoPlugin for HugeEventCapacityPlugin {
+        const NAME: &'static str = "Huge Event Capacity";
+        const VENDOR: &'static str = "SunMao Test";
+        const URL: &'static str = "https://example.invalid";
+        const MAX_EVENTS_PER_BLOCK: usize = usize::MAX;
+        type Params = EmptyParams;
+
+        fn input_channels(&self) -> u32 {
+            0
+        }
+
+        fn output_channels(&self) -> u32 {
+            0
+        }
+
+        fn params(&self) -> Arc<Self::Params> {
+            Arc::new(EmptyParams)
+        }
+
+        fn process(
+            &mut self,
+            _buffer: &mut AudioBuffer,
+            _events: &EventQueue,
+            _context: &SunmaoProcessContext,
+        ) -> ProcessStatus {
+            ProcessStatus::Normal
+        }
+    }
 
     #[derive(Default)]
     struct MonoPlugin;
@@ -910,10 +1069,6 @@ mod tests {
     }
 
     impl Params for MetadataParams {
-        fn ids() -> &'static [&'static str] {
-            &["mix", "voices", "bypass"]
-        }
-
         fn get_normalized(&self, id: &str) -> Option<f32> {
             match id {
                 "mix" => Some(self.mix.get_normalized()),
@@ -1466,6 +1621,28 @@ mod tests {
             surround.outputs[0].speaker_arrangement,
             Some(vst3_rs::vst3_sys::vst::SpeakerArr::k71Music)
         );
+    }
+
+    #[test]
+    fn adapter_audio_allocation_rejects_oversized_resource_budgets() {
+        assert!(allocate_audio_buffers(2, 8192).is_some());
+        assert!(allocate_audio_buffers(2, MAX_PROCESS_FRAMES + 1).is_none());
+        assert!(allocate_audio_buffers(MAX_PROCESS_CHANNELS + 1, 1).is_none());
+        let channels_over_sample_budget =
+            MAX_PROCESS_AUDIO_SAMPLES / MAX_PROCESS_FRAMES as usize + 1;
+        assert!(allocate_audio_buffers(channels_over_sample_budget, MAX_PROCESS_FRAMES).is_none());
+    }
+
+    #[test]
+    fn wrapper_construction_contains_unallocatable_event_capacity() {
+        let processor =
+            ProcessorWrapper::<SunmaoVst3Wrapper<HugeEventCapacityPlugin>>::new([0; 16]);
+        assert!(!processor.is_null());
+        unsafe {
+            let component = processor.cast::<c_void>();
+            let component_vtbl = *(component as *const *const IComponentVtbl);
+            assert_eq!(((*component_vtbl).base.unknown.release)(component), 0);
+        }
     }
 
     #[test]

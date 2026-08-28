@@ -11,6 +11,7 @@ pub enum PackageFormat {
     Au,
     Vst3,
     Clap,
+    Standalone,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -75,6 +76,12 @@ enum OutputKind {
     File,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum BinaryKind {
+    DynamicModule,
+    Executable,
+}
+
 struct ValidatedRequest<'a> {
     request: &'a PackageRequest,
     target: &'a Target,
@@ -99,6 +106,7 @@ pub fn package_for_target(request: &PackageRequest, target: &Target) -> Result<P
             PackageFormat::Au => build_au(&validated, staging)?,
             PackageFormat::Vst3 => build_vst3(&validated, staging)?,
             PackageFormat::Clap => build_clap(&validated, staging)?,
+            PackageFormat::Standalone => build_standalone(&validated, staging)?,
         }
 
         if request.codesign {
@@ -145,18 +153,25 @@ fn validate_request<'a>(
         }
     }
 
-    validate_binary(&request.binary, target)?;
+    let binary_kind = if request.format == PackageFormat::Standalone {
+        BinaryKind::Executable
+    } else {
+        BinaryKind::DynamicModule
+    };
+    validate_binary(&request.binary, target, binary_kind)?;
 
     if request.out.as_os_str().is_empty() || request.out.file_name().is_none() {
-        bail!("output path must name a plugin or bundle");
+        bail!("output path must name an artifact");
     }
 
-    let extension = match request.format {
-        PackageFormat::Au => "component",
-        PackageFormat::Vst3 => "vst3",
-        PackageFormat::Clap => "clap",
+    let output = match (request.format, target.platform) {
+        (PackageFormat::Au, _) => request.out.with_extension("component"),
+        (PackageFormat::Vst3, _) => request.out.with_extension("vst3"),
+        (PackageFormat::Clap, _) => request.out.with_extension("clap"),
+        (PackageFormat::Standalone, TargetPlatform::Macos) => request.out.with_extension("app"),
+        (PackageFormat::Standalone, TargetPlatform::Windows) => request.out.with_extension("exe"),
+        (PackageFormat::Standalone, TargetPlatform::Linux) => request.out.with_extension(""),
     };
-    let output = request.out.with_extension(extension);
     let module_stem = output
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -339,42 +354,58 @@ fn validate_existing_ancestor(path: &Path) -> Result<()> {
 
 fn output_kind(format: PackageFormat, platform: TargetPlatform) -> OutputKind {
     match (format, platform) {
-        (PackageFormat::Clap, TargetPlatform::Windows | TargetPlatform::Linux) => OutputKind::File,
+        (
+            PackageFormat::Clap | PackageFormat::Standalone,
+            TargetPlatform::Windows | TargetPlatform::Linux,
+        ) => OutputKind::File,
         _ => OutputKind::Bundle,
     }
 }
 
-fn validate_binary(binary: &Path, target: &Target) -> Result<()> {
+fn validate_binary(binary: &Path, target: &Target, kind: BinaryKind) -> Result<()> {
     let metadata = fs::metadata(binary)
         .with_context(|| format!("input binary does not exist: {}", binary.display()))?;
     if !metadata.is_file() {
         bail!("input binary is not a regular file: {}", binary.display());
     }
 
-    let expected_extension = match target.platform {
-        TargetPlatform::Macos => "dylib",
-        TargetPlatform::Windows => "dll",
-        TargetPlatform::Linux => "so",
+    let expected_extension = match (kind, target.platform) {
+        (BinaryKind::DynamicModule, TargetPlatform::Macos) => Some("dylib"),
+        (BinaryKind::DynamicModule, TargetPlatform::Windows) => Some("dll"),
+        (BinaryKind::DynamicModule, TargetPlatform::Linux) => Some("so"),
+        (BinaryKind::Executable, TargetPlatform::Windows) => Some("exe"),
+        (BinaryKind::Executable, TargetPlatform::Macos | TargetPlatform::Linux) => None,
     };
-    let actual_extension = binary
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .context("input binary must have a UTF-8 file extension")?;
-    if !actual_extension.eq_ignore_ascii_case(expected_extension) {
-        bail!(
-            "input binary for {:?} must have a .{expected_extension} extension, got {}",
-            target.platform,
-            binary.display()
-        );
+    if let Some(expected_extension) = expected_extension {
+        let actual_extension = binary
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .context("input binary must have a UTF-8 file extension")?;
+        if !actual_extension.eq_ignore_ascii_case(expected_extension) {
+            bail!(
+                "input binary for {:?} must have a .{expected_extension} extension, got {}",
+                target.platform,
+                binary.display()
+            );
+        }
     }
 
     let mut file = File::open(binary).context("failed to open input binary")?;
     match target.platform {
-        TargetPlatform::Macos => validate_macho(&mut file, &target.architecture),
-        TargetPlatform::Windows => validate_pe_dll(&mut file, &target.architecture),
-        TargetPlatform::Linux => validate_elf_shared_object(&mut file, &target.architecture),
+        TargetPlatform::Macos => validate_macho(&mut file, &target.architecture, kind),
+        TargetPlatform::Windows => validate_pe(&mut file, &target.architecture, kind),
+        TargetPlatform::Linux => validate_elf(&mut file, &target.architecture, kind),
     }
-    .with_context(|| format!("invalid plugin module {}", binary.display()))
+    .with_context(|| {
+        format!(
+            "invalid {} {}",
+            match kind {
+                BinaryKind::DynamicModule => "plugin module",
+                BinaryKind::Executable => "standalone executable",
+            },
+            binary.display()
+        )
+    })
 }
 
 #[derive(Copy, Clone)]
@@ -383,28 +414,31 @@ enum Endian {
     Big,
 }
 
-fn read_u16(bytes: &[u8], endian: Endian) -> u16 {
-    match endian {
-        Endian::Little => u16::from_le_bytes([bytes[0], bytes[1]]),
-        Endian::Big => u16::from_be_bytes([bytes[0], bytes[1]]),
-    }
+fn read_u16(bytes: &[u8], endian: Endian) -> Option<u16> {
+    let bytes: [u8; 2] = bytes.get(..2)?.try_into().ok()?;
+    Some(match endian {
+        Endian::Little => u16::from_le_bytes(bytes),
+        Endian::Big => u16::from_be_bytes(bytes),
+    })
 }
 
-fn read_u32(bytes: &[u8], endian: Endian) -> u32 {
-    match endian {
-        Endian::Little => u32::from_le_bytes(bytes.try_into().expect("four bytes")),
-        Endian::Big => u32::from_be_bytes(bytes.try_into().expect("four bytes")),
-    }
+fn read_u32(bytes: &[u8], endian: Endian) -> Option<u32> {
+    let bytes: [u8; 4] = bytes.get(..4)?.try_into().ok()?;
+    Some(match endian {
+        Endian::Little => u32::from_le_bytes(bytes),
+        Endian::Big => u32::from_be_bytes(bytes),
+    })
 }
 
-fn read_u64(bytes: &[u8], endian: Endian) -> u64 {
-    match endian {
-        Endian::Little => u64::from_le_bytes(bytes.try_into().expect("eight bytes")),
-        Endian::Big => u64::from_be_bytes(bytes.try_into().expect("eight bytes")),
-    }
+fn read_u64(bytes: &[u8], endian: Endian) -> Option<u64> {
+    let bytes: [u8; 8] = bytes.get(..8)?.try_into().ok()?;
+    Some(match endian {
+        Endian::Little => u64::from_le_bytes(bytes),
+        Endian::Big => u64::from_be_bytes(bytes),
+    })
 }
 
-fn validate_elf_shared_object(file: &mut File, architecture: &str) -> Result<()> {
+fn validate_elf(file: &mut File, architecture: &str, kind: BinaryKind) -> Result<()> {
     let (expected_class, expected_machine, expected_encoding) = match architecture {
         "x86" => (1, 3, 1),
         "x86_64" => (2, 62, 1),
@@ -442,28 +476,27 @@ fn validate_elf_shared_object(file: &mut File, architecture: &str) -> Result<()>
     header[..ident.len()].copy_from_slice(&ident);
     file.read_exact(&mut header[ident.len()..])
         .context("ELF header is truncated")?;
-    if read_u16(&header[16..18], endian) != 3 {
-        bail!("ELF file is not a shared object (ET_DYN)");
-    }
-    let machine = read_u16(&header[18..20], endian);
+    let file_type = read_u16(&header[16..18], endian).context("ELF header is truncated")?;
+    let machine = read_u16(&header[18..20], endian).context("ELF header is truncated")?;
     if machine != expected_machine {
         bail!("ELF architecture does not match target architecture '{architecture}'");
     }
 
     let (program_header_offset, program_header_entry_size, program_header_count) = if class == 1 {
         (
-            read_u32(&header[28..32], endian) as u64,
-            read_u16(&header[42..44], endian) as u64,
-            read_u16(&header[44..46], endian) as u64,
+            read_u32(&header[28..32], endian).context("ELF header is truncated")? as u64,
+            read_u16(&header[42..44], endian).context("ELF header is truncated")? as u64,
+            read_u16(&header[44..46], endian).context("ELF header is truncated")? as u64,
         )
     } else {
         (
-            read_u64(&header[32..40], endian),
-            read_u16(&header[54..56], endian) as u64,
-            read_u16(&header[56..58], endian) as u64,
+            read_u64(&header[32..40], endian).context("ELF header is truncated")?,
+            read_u16(&header[54..56], endian).context("ELF header is truncated")? as u64,
+            read_u16(&header[56..58], endian).context("ELF header is truncated")? as u64,
         )
     };
 
+    let mut has_interpreter = false;
     if program_header_count > 0 {
         let minimum_entry_size = if class == 1 { 32 } else { 56 };
         if program_header_offset == 0 || program_header_entry_size < minimum_entry_size {
@@ -483,22 +516,39 @@ fn validate_elf_shared_object(file: &mut File, architecture: &str) -> Result<()>
             let mut program_type = [0; 4];
             file.read_exact(&mut program_type)
                 .context("ELF program header table is truncated")?;
-            if read_u32(&program_type, endian) == 3 {
-                bail!("ELF module is a PIE executable (PT_INTERP), not a shared object");
-            }
+            has_interpreter |=
+                read_u32(&program_type, endian).context("ELF program header is truncated")? == 3;
         }
     }
-    Ok(())
+
+    match kind {
+        BinaryKind::DynamicModule if file_type != 3 => {
+            bail!("ELF file is not a shared object (ET_DYN)")
+        }
+        BinaryKind::DynamicModule if has_interpreter => {
+            bail!("ELF module is a PIE executable (PT_INTERP), not a shared object")
+        }
+        BinaryKind::DynamicModule => Ok(()),
+        BinaryKind::Executable if file_type == 2 => Ok(()),
+        BinaryKind::Executable if file_type == 3 && has_interpreter => Ok(()),
+        BinaryKind::Executable if file_type == 3 => {
+            bail!("ELF ET_DYN file has no PT_INTERP marker for a PIE executable")
+        }
+        BinaryKind::Executable => {
+            bail!("ELF file is neither ET_EXEC nor a PIE executable")
+        }
+    }
 }
 
-fn validate_pe_dll(file: &mut File, architecture: &str) -> Result<()> {
+fn validate_pe(file: &mut File, architecture: &str, kind: BinaryKind) -> Result<()> {
     let mut dos_header = [0; 64];
     file.read_exact(&mut dos_header)
         .context("PE DOS header is truncated")?;
     if &dos_header[..2] != b"MZ" {
         bail!("expected a Windows PE/COFF module");
     }
-    let pe_offset = u32::from_le_bytes(dos_header[60..64].try_into().unwrap()) as u64;
+    let pe_offset =
+        read_u32(&dos_header[60..64], Endian::Little).context("PE DOS header is truncated")? as u64;
     let mut coff = [0; 24];
     file.seek(SeekFrom::Start(pe_offset))
         .context("failed to seek to PE header")?;
@@ -514,42 +564,52 @@ fn validate_pe_dll(file: &mut File, architecture: &str) -> Result<()> {
         "aarch64" => 0xaa64,
         other => bail!("unsupported Windows plugin architecture '{other}'"),
     };
-    let machine = u16::from_le_bytes(coff[4..6].try_into().unwrap());
+    let machine = read_u16(&coff[4..6], Endian::Little).context("PE header is truncated")?;
     if machine != expected_machine {
         bail!("PE architecture does not match target architecture '{architecture}'");
     }
-    let characteristics = u16::from_le_bytes(coff[22..24].try_into().unwrap());
-    if characteristics & 0x2000 == 0 {
-        bail!("PE module is not marked as a DLL");
+    let characteristics =
+        read_u16(&coff[22..24], Endian::Little).context("PE header is truncated")?;
+    match kind {
+        BinaryKind::DynamicModule if characteristics & 0x2000 == 0 => {
+            bail!("PE module is not marked as a DLL")
+        }
+        BinaryKind::Executable if characteristics & 0x2000 != 0 => {
+            bail!("PE standalone binary is marked as a DLL")
+        }
+        BinaryKind::Executable if characteristics & 0x0002 == 0 => {
+            bail!("PE standalone binary is not marked as an executable image")
+        }
+        _ => {}
     }
     Ok(())
 }
 
-fn validate_macho(file: &mut File, architecture: &str) -> Result<()> {
+fn validate_macho(file: &mut File, architecture: &str, kind: BinaryKind) -> Result<()> {
     let mut prefix = [0; 16];
     file.read_exact(&mut prefix)
         .context("Mach-O header is truncated")?;
 
     match &prefix[..4] {
         [0xce, 0xfa, 0xed, 0xfe] | [0xcf, 0xfa, 0xed, 0xfe] => {
-            validate_thin_macho_header(&prefix, Endian::Little, architecture)
+            validate_thin_macho_header(&prefix, Endian::Little, architecture, kind)
         }
         [0xfe, 0xed, 0xfa, 0xce] | [0xfe, 0xed, 0xfa, 0xcf] => {
-            validate_thin_macho_header(&prefix, Endian::Big, architecture)
+            validate_thin_macho_header(&prefix, Endian::Big, architecture, kind)
         }
         [0xca, 0xfe, 0xba, 0xbe] => {
-            validate_fat_macho(file, &prefix, Endian::Big, false, architecture)
+            validate_fat_macho(file, &prefix, Endian::Big, false, architecture, kind)
         }
         [0xbe, 0xba, 0xfe, 0xca] => {
-            validate_fat_macho(file, &prefix, Endian::Little, false, architecture)
+            validate_fat_macho(file, &prefix, Endian::Little, false, architecture, kind)
         }
         [0xca, 0xfe, 0xba, 0xbf] => {
-            validate_fat_macho(file, &prefix, Endian::Big, true, architecture)
+            validate_fat_macho(file, &prefix, Endian::Big, true, architecture, kind)
         }
         [0xbf, 0xba, 0xfe, 0xca] => {
-            validate_fat_macho(file, &prefix, Endian::Little, true, architecture)
+            validate_fat_macho(file, &prefix, Endian::Little, true, architecture, kind)
         }
-        _ => bail!("expected a Mach-O dynamic library or bundle"),
+        _ => bail!("expected a Mach-O binary"),
     }
 }
 
@@ -563,13 +623,24 @@ fn macho_cpu_type(architecture: &str) -> Result<u32> {
     }
 }
 
-fn validate_thin_macho_header(header: &[u8; 16], endian: Endian, architecture: &str) -> Result<()> {
-    if read_u32(&header[4..8], endian) != macho_cpu_type(architecture)? {
+fn validate_thin_macho_header(
+    header: &[u8; 16],
+    endian: Endian,
+    architecture: &str,
+    kind: BinaryKind,
+) -> Result<()> {
+    if read_u32(&header[4..8], endian).context("Mach-O header is truncated")?
+        != macho_cpu_type(architecture)?
+    {
         bail!("Mach-O architecture does not match target architecture '{architecture}'");
     }
-    match read_u32(&header[12..16], endian) {
-        6 | 8 => Ok(()),
-        _ => bail!("Mach-O file is not a dynamic library or bundle"),
+    let file_type = read_u32(&header[12..16], endian).context("Mach-O header is truncated")?;
+    match (kind, file_type) {
+        (BinaryKind::DynamicModule, 6 | 8) | (BinaryKind::Executable, 2) => Ok(()),
+        (BinaryKind::DynamicModule, _) => {
+            bail!("Mach-O file is not a dynamic library or bundle")
+        }
+        (BinaryKind::Executable, _) => bail!("Mach-O file is not an MH_EXECUTE executable"),
     }
 }
 
@@ -579,8 +650,9 @@ fn validate_fat_macho(
     endian: Endian,
     is_64_bit: bool,
     architecture: &str,
+    kind: BinaryKind,
 ) -> Result<()> {
-    let slice_count = read_u32(&prefix[4..8], endian);
+    let slice_count = read_u32(&prefix[4..8], endian).context("Mach-O header is truncated")?;
     if slice_count == 0 || slice_count > 64 {
         bail!("Mach-O universal binary has an invalid slice count");
     }
@@ -593,14 +665,17 @@ fn validate_fat_macho(
         file.seek(SeekFrom::Start(entry_offset))?;
         file.read_exact(&mut entry[..entry_size as usize])
             .context("Mach-O universal architecture table is truncated")?;
-        if read_u32(&entry[..4], endian) != expected_cpu {
+        if read_u32(&entry[..4], endian).context("Mach-O architecture entry is truncated")?
+            != expected_cpu
+        {
             continue;
         }
 
         let slice_offset = if is_64_bit {
-            read_u64(&entry[8..16], endian)
+            read_u64(&entry[8..16], endian).context("Mach-O architecture entry is truncated")?
         } else {
-            read_u32(&entry[8..12], endian) as u64
+            read_u32(&entry[8..12], endian).context("Mach-O architecture entry is truncated")?
+                as u64
         };
         let mut header = [0; 16];
         file.seek(SeekFrom::Start(slice_offset))?;
@@ -608,10 +683,10 @@ fn validate_fat_macho(
             .context("Mach-O universal slice header is truncated")?;
         return match &header[..4] {
             [0xce, 0xfa, 0xed, 0xfe] | [0xcf, 0xfa, 0xed, 0xfe] => {
-                validate_thin_macho_header(&header, Endian::Little, architecture)
+                validate_thin_macho_header(&header, Endian::Little, architecture, kind)
             }
             [0xfe, 0xed, 0xfa, 0xce] | [0xfe, 0xed, 0xfa, 0xcf] => {
-                validate_thin_macho_header(&header, Endian::Big, architecture)
+                validate_thin_macho_header(&header, Endian::Big, architecture, kind)
             }
             _ => bail!("Mach-O universal slice has an invalid header"),
         };
@@ -690,6 +765,30 @@ fn build_clap(validated: &ValidatedRequest<'_>, staging: &Path) -> Result<()> {
         }
         TargetPlatform::Windows | TargetPlatform::Linux => {
             fs::copy(&validated.request.binary, staging).context("failed to copy CLAP module")?;
+        }
+    }
+    Ok(())
+}
+
+fn build_standalone(validated: &ValidatedRequest<'_>, staging: &Path) -> Result<()> {
+    match validated.target.platform {
+        TargetPlatform::Macos => {
+            let contents = staging.join("Contents");
+            let executable = contents.join("MacOS").join(&validated.module_stem);
+            fs::create_dir_all(executable.parent().unwrap())
+                .context("failed to create standalone executable directory")?;
+            fs::create_dir_all(contents.join("Resources"))
+                .context("failed to create standalone resources")?;
+            fs::copy(&validated.request.binary, executable)
+                .context("failed to copy standalone executable")?;
+            fs::write(contents.join("Info.plist"), standalone_plist(validated))
+                .context("failed to write standalone Info.plist")?;
+            fs::write(contents.join("PkgInfo"), "APPL????")
+                .context("failed to write standalone PkgInfo")?;
+        }
+        TargetPlatform::Windows | TargetPlatform::Linux => {
+            fs::copy(&validated.request.binary, staging)
+                .context("failed to copy standalone executable")?;
         }
     }
     Ok(())
@@ -808,6 +907,44 @@ fn bundle_plist(validated: &ValidatedRequest<'_>) -> String {
     )
 }
 
+fn standalone_plist(validated: &ValidatedRequest<'_>) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>English</string>
+    <key>CFBundleExecutable</key>
+    <string>{exec_name}</string>
+    <key>CFBundleIdentifier</key>
+    <string>{bundle_id}</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>{name}</string>
+    <key>CFBundleDisplayName</key>
+    <string>{name}</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleSignature</key>
+    <string>????</string>
+    <key>CFBundleVersion</key>
+    <string>{version}</string>
+    <key>CFBundleShortVersionString</key>
+    <string>{version}</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>
+"#,
+        exec_name = xml_escape(&validated.module_stem),
+        bundle_id = xml_escape(&validated.request.bundle_id),
+        name = xml_escape(&validated.request.name),
+        version = xml_escape(&validated.request.version),
+    )
+}
+
 fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -838,12 +975,16 @@ fn stage_and_publish(output: &Path, build: impl FnOnce(&Path) -> Result<()>) -> 
 }
 
 fn publish_staging(staging: &Path, output: &Path) -> Result<()> {
-    if !output.exists() {
-        return fs::rename(staging, output).context("failed to publish staged plugin");
-    }
-
     let backup = unique_sibling(output, "backup")?;
-    fs::rename(output, &backup).context("failed to move previous output aside")?;
+    match fs::rename(output, &backup) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            // The output may have been removed after validation. Publish the
+            // complete staging tree directly; no existing path is replaced.
+            return fs::rename(staging, output).context("failed to publish staged plugin");
+        }
+        Err(error) => return Err(error).context("failed to move previous output aside"),
+    }
     if let Err(publish_error) = fs::rename(staging, output) {
         if let Err(rollback_error) = fs::rename(&backup, output) {
             bail!(
@@ -870,8 +1011,17 @@ fn unique_sibling(output: &Path, purpose: &str) -> Result<PathBuf> {
             ".{file_name}.sunmao-{purpose}-{}-{sequence}",
             std::process::id()
         ));
-        if !candidate.exists() {
-            return Ok(candidate);
+        match fs::symlink_metadata(&candidate) {
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(candidate),
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to inspect candidate staging path {}",
+                        candidate.display()
+                    )
+                });
+            }
         }
     }
     bail!("could not allocate a unique staging path")
@@ -985,6 +1135,16 @@ mod tests {
         write_elf_with_class(path, 2, machine);
     }
 
+    fn write_elf_executable(path: &Path, machine: u16) {
+        let mut bytes = vec![0; 64];
+        bytes[..4].copy_from_slice(b"\x7fELF");
+        bytes[4] = 2;
+        bytes[5] = 1;
+        bytes[16..18].copy_from_slice(&2u16.to_le_bytes());
+        bytes[18..20].copy_from_slice(&machine.to_le_bytes());
+        fs::write(path, bytes).unwrap();
+    }
+
     fn write_elf_pie(path: &Path, machine: u16) {
         let mut bytes = vec![0; 64 + 56];
         bytes[..4].copy_from_slice(b"\x7fELF");
@@ -1000,21 +1160,150 @@ mod tests {
     }
 
     fn write_pe(path: &Path, machine: u16) {
+        write_pe_with_characteristics(path, machine, 0x2000);
+    }
+
+    fn write_pe_executable(path: &Path, machine: u16) {
+        write_pe_with_characteristics(path, machine, 0x0002);
+    }
+
+    fn write_pe_with_characteristics(path: &Path, machine: u16, characteristics: u16) {
         let mut bytes = vec![0; 128];
         bytes[..2].copy_from_slice(b"MZ");
         bytes[60..64].copy_from_slice(&64u32.to_le_bytes());
         bytes[64..68].copy_from_slice(b"PE\0\0");
         bytes[68..70].copy_from_slice(&machine.to_le_bytes());
-        bytes[86..88].copy_from_slice(&0x2000u16.to_le_bytes());
+        bytes[86..88].copy_from_slice(&characteristics.to_le_bytes());
         fs::write(path, bytes).unwrap();
     }
 
     fn write_macho(path: &Path, cpu_type: u32) {
+        write_macho_with_type(path, cpu_type, 6);
+    }
+
+    fn write_macho_executable(path: &Path, cpu_type: u32) {
+        write_macho_with_type(path, cpu_type, 2);
+    }
+
+    fn write_macho_with_type(path: &Path, cpu_type: u32, file_type: u32) {
         let mut bytes = vec![0; 32];
         bytes[..4].copy_from_slice(&[0xcf, 0xfa, 0xed, 0xfe]);
         bytes[4..8].copy_from_slice(&cpu_type.to_le_bytes());
-        bytes[12..16].copy_from_slice(&6u32.to_le_bytes());
+        bytes[12..16].copy_from_slice(&file_type.to_le_bytes());
         fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn creates_cross_platform_standalone_artifacts() {
+        let temp = TempDir::new();
+
+        let mac_binary = temp.path().join("source-macos");
+        write_macho_executable(&mac_binary, 0x0100_000c);
+        let mac = request(
+            PackageFormat::Standalone,
+            mac_binary,
+            temp.path().join("Mac Product"),
+        );
+        let mac_output =
+            package_for_target(&mac, &Target::new(TargetPlatform::Macos, "aarch64")).unwrap();
+        assert_eq!(mac_output.extension().unwrap(), "app");
+        assert!(mac_output.join("Contents/MacOS/Mac Product").is_file());
+        assert_eq!(
+            fs::read_to_string(mac_output.join("Contents/PkgInfo")).unwrap(),
+            "APPL????"
+        );
+        let plist = fs::read_to_string(mac_output.join("Contents/Info.plist")).unwrap();
+        assert!(plist.contains("<string>APPL</string>"));
+        assert!(plist.contains("Test &amp; Plugin"));
+
+        let win_binary = temp.path().join("source-windows.exe");
+        write_pe_executable(&win_binary, 0x8664);
+        let win = request(
+            PackageFormat::Standalone,
+            win_binary,
+            temp.path().join("WinProduct.old"),
+        );
+        let win_output =
+            package_for_target(&win, &Target::new(TargetPlatform::Windows, "x86_64")).unwrap();
+        assert_eq!(win_output.file_name().unwrap(), "WinProduct.exe");
+        assert!(win_output.is_file());
+
+        let linux_binary = temp.path().join("source-linux");
+        write_elf_executable(&linux_binary, 62);
+        let linux = request(
+            PackageFormat::Standalone,
+            linux_binary,
+            temp.path().join("LinuxProduct"),
+        );
+        let linux_output =
+            package_for_target(&linux, &Target::new(TargetPlatform::Linux, "x86_64")).unwrap();
+        assert_eq!(linux_output.file_name().unwrap(), "LinuxProduct");
+        assert!(linux_output.is_file());
+    }
+
+    #[test]
+    fn standalone_and_plugin_binary_kinds_are_not_interchangeable() {
+        let temp = TempDir::new();
+
+        let mac_module = temp.path().join("module-macos");
+        write_macho(&mac_module, 0x0100_000c);
+        let mac = request(
+            PackageFormat::Standalone,
+            mac_module,
+            temp.path().join("MacModule"),
+        );
+        let error =
+            package_for_target(&mac, &Target::new(TargetPlatform::Macos, "aarch64")).unwrap_err();
+        assert!(format!("{error:#}").contains("MH_EXECUTE"));
+
+        let win_module = temp.path().join("module-windows.exe");
+        write_pe(&win_module, 0x8664);
+        let win = request(
+            PackageFormat::Standalone,
+            win_module,
+            temp.path().join("WinModule"),
+        );
+        let error =
+            package_for_target(&win, &Target::new(TargetPlatform::Windows, "x86_64")).unwrap_err();
+        assert!(format!("{error:#}").contains("marked as a DLL"));
+
+        let linux_module = temp.path().join("module-linux");
+        write_elf(&linux_module, 62);
+        let linux = request(
+            PackageFormat::Standalone,
+            linux_module,
+            temp.path().join("LinuxModule"),
+        );
+        let error =
+            package_for_target(&linux, &Target::new(TargetPlatform::Linux, "x86_64")).unwrap_err();
+        assert!(format!("{error:#}").contains("no PT_INTERP"));
+
+        let mac_executable = temp.path().join("executable.dylib");
+        write_macho_executable(&mac_executable, 0x0100_000c);
+        let plugin = request(
+            PackageFormat::Clap,
+            mac_executable,
+            temp.path().join("MacExecutable"),
+        );
+        let error = package_for_target(&plugin, &Target::new(TargetPlatform::Macos, "aarch64"))
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("dynamic library or bundle"));
+    }
+
+    #[test]
+    fn accepts_elf_pie_as_a_standalone_executable() {
+        let temp = TempDir::new();
+        let binary = temp.path().join("pie");
+        write_elf_pie(&binary, 62);
+        let package = request(
+            PackageFormat::Standalone,
+            binary,
+            temp.path().join("PieExecutable"),
+        );
+
+        let output =
+            package_for_target(&package, &Target::new(TargetPlatform::Linux, "x86_64")).unwrap();
+        assert!(output.is_file());
     }
 
     #[test]
@@ -1206,6 +1495,46 @@ mod tests {
         )
         .unwrap_err();
         assert!(format!("{error:#}").contains("architecture"));
+    }
+
+    #[test]
+    fn rejects_truncated_binary_headers_without_panicking() {
+        let temp = TempDir::new();
+
+        let elf = temp.path().join("truncated.so");
+        fs::write(&elf, b"\x7fELF\x02\x01").unwrap();
+        let elf_request = request(PackageFormat::Clap, elf, temp.path().join("TruncatedElf"));
+        let error = package_for_target(&elf_request, &Target::new(TargetPlatform::Linux, "x86_64"))
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("ELF header is truncated"));
+
+        let pe = temp.path().join("truncated.dll");
+        let mut pe_bytes = vec![0; 64];
+        pe_bytes[..2].copy_from_slice(b"MZ");
+        pe_bytes[60..64].copy_from_slice(&0x1000_u32.to_le_bytes());
+        fs::write(&pe, pe_bytes).unwrap();
+        let pe_request = request(PackageFormat::Clap, pe, temp.path().join("TruncatedPe"));
+        let error =
+            package_for_target(&pe_request, &Target::new(TargetPlatform::Windows, "x86_64"))
+                .unwrap_err();
+        assert!(format!("{error:#}").contains("PE header is truncated"));
+
+        let macho = temp.path().join("truncated.dylib");
+        let mut macho_bytes = vec![0; 16];
+        macho_bytes[..4].copy_from_slice(&[0xca, 0xfe, 0xba, 0xbe]);
+        macho_bytes[4..8].copy_from_slice(&1_u32.to_be_bytes());
+        fs::write(&macho, macho_bytes).unwrap();
+        let macho_request = request(
+            PackageFormat::Clap,
+            macho,
+            temp.path().join("TruncatedMachO"),
+        );
+        let error = package_for_target(
+            &macho_request,
+            &Target::new(TargetPlatform::Macos, "aarch64"),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("architecture table is truncated"));
     }
 
     #[test]

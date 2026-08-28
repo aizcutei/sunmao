@@ -1,9 +1,11 @@
 use std::cell::Cell;
+use std::convert::TryFrom;
 use std::error::Error;
+use std::io::{Error as IoError, ErrorKind};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Weak};
 use std::thread::{self, JoinHandle};
 
 use raw_window_handle::{
@@ -13,8 +15,8 @@ use raw_window_handle::{
 
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    AtomEnum, ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt as _, CreateGCAux,
-    CreateWindowAux, EventMask, PropMode, Visualid, Window as XWindow, WindowClass,
+    AtomEnum, ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt as _, CreateWindowAux,
+    EventMask, PropMode, Visualid, Window as XWindow, WindowClass,
 };
 use x11rb::wrapper::ConnectionExt as _;
 
@@ -37,11 +39,64 @@ pub struct WindowHandle {
     is_open: Arc<AtomicBool>,
 }
 
+static BLOCKING_EVENT_LOOP_STOP: Mutex<Option<Weak<AtomicBool>>> = Mutex::new(None);
+
+struct BlockingEventLoopRegistration {
+    stop_requested: Arc<AtomicBool>,
+}
+
+impl BlockingEventLoopRegistration {
+    fn new(stop_requested: Arc<AtomicBool>) -> Self {
+        if let Ok(mut registered) = BLOCKING_EVENT_LOOP_STOP.lock() {
+            *registered = Some(Arc::downgrade(&stop_requested));
+        }
+        Self { stop_requested }
+    }
+}
+
+impl Drop for BlockingEventLoopRegistration {
+    fn drop(&mut self) {
+        if let Ok(mut registered) = BLOCKING_EVENT_LOOP_STOP.lock() {
+            let owns_registration = registered
+                .as_ref()
+                .and_then(Weak::upgrade)
+                .is_some_and(|value| Arc::ptr_eq(&value, &self.stop_requested));
+            if owns_registration {
+                *registered = None;
+            }
+        }
+    }
+}
+
+/// Signal only the application-owned blocking X11 loop. Parented editor event
+/// loops use separate close flags and cannot observe this request.
+pub fn request_event_loop_stop() {
+    let stop_requested = BLOCKING_EVENT_LOOP_STOP
+        .lock()
+        .ok()
+        .and_then(|registered| registered.as_ref().and_then(Weak::upgrade));
+    if let Some(stop_requested) = stop_requested {
+        stop_requested.store(true, Ordering::Release);
+    }
+}
+
 impl WindowHandle {
+    fn unavailable() -> Self {
+        Self {
+            raw_window_handle: None,
+            event_loop_handle: None,
+            resize_sender: None,
+            close_requested: Arc::new(AtomicBool::new(false)),
+            is_open: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
     pub fn close(&mut self) {
         self.close_requested.store(true, Ordering::Relaxed);
         if let Some(event_loop) = self.event_loop_handle.take() {
-            let _ = event_loop.join();
+            if event_loop.join().is_err() {
+                eprintln!("baseview: X11 window thread panicked while closing");
+            }
         }
     }
 
@@ -130,7 +185,7 @@ struct SendableRwh(RawWindowHandle);
 
 unsafe impl Send for SendableRwh {}
 
-type WindowOpenResult = Result<SendableRwh, ()>;
+type WindowOpenResult = Result<SendableRwh, String>;
 
 impl<'a> Window<'a> {
     pub fn open_parented<P, H, B>(parent: &P, options: WindowOpenOptions, build: B) -> WindowHandle
@@ -141,32 +196,74 @@ impl<'a> Window<'a> {
         B: Send + 'static,
     {
         // Convert parent into something that X understands
-        let parent_handle = parent
-            .window_handle()
-            .expect("parent window handle is unavailable");
+        let parent_handle = match parent.window_handle() {
+            Ok(handle) => handle,
+            Err(error) => {
+                eprintln!("baseview: parent X11 window handle is unavailable: {error}");
+                return WindowHandle::unavailable();
+            }
+        };
         let parent_id = match parent_handle.as_raw() {
-            RawWindowHandle::Xlib(h) => h.window as u32,
+            RawWindowHandle::Xlib(h) => match u32::try_from(h.window) {
+                Ok(window) => window,
+                Err(_) => {
+                    eprintln!(
+                        "baseview: Xlib parent window ID {} does not fit XCB's 32-bit ID",
+                        h.window
+                    );
+                    return WindowHandle::unavailable();
+                }
+            },
             RawWindowHandle::Xcb(h) => h.window.get(),
-            h => panic!("unsupported parent handle type {:?}", h),
+            handle => {
+                eprintln!("baseview: unsupported X11 parent handle type {handle:?}");
+                return WindowHandle::unavailable();
+            }
         };
 
         let (tx, rx) = mpsc::sync_channel::<WindowOpenResult>(1);
         let (parent_handle, mut window_handle, resize_receiver) = ParentHandle::new();
+        let initialization_finished = Arc::new(AtomicBool::new(false));
+        let worker_initialization_finished = Arc::clone(&initialization_finished);
+        let error_tx = tx.clone();
         let join_handle = thread::spawn(move || {
-            Self::window_thread(
+            if let Err(error) = Self::window_thread(
                 Some(parent_id),
                 options,
                 build,
-                tx.clone(),
+                tx,
                 Some(parent_handle),
                 Some(resize_receiver),
-            )
-            .unwrap();
+                None,
+                worker_initialization_finished,
+            ) {
+                let message = error.to_string();
+                if initialization_finished.load(Ordering::Acquire)
+                    || error_tx.try_send(Err(message.clone())).is_err()
+                {
+                    eprintln!("baseview: X11 window thread failed: {message}");
+                }
+            }
         });
 
-        let raw_window_handle = rx.recv().unwrap().unwrap();
-        window_handle.raw_window_handle = Some(raw_window_handle.0);
-        window_handle.event_loop_handle = Some(join_handle);
+        match rx.recv() {
+            Ok(Ok(raw_window_handle)) => {
+                window_handle.raw_window_handle = Some(raw_window_handle.0);
+                window_handle.event_loop_handle = Some(join_handle);
+            }
+            Ok(Err(error)) => {
+                eprintln!("baseview: could not open parented X11 window: {error}");
+                if join_handle.join().is_err() {
+                    eprintln!("baseview: X11 window thread panicked during initialization");
+                }
+            }
+            Err(error) => {
+                eprintln!("baseview: X11 window thread exited before initialization: {error}");
+                if join_handle.join().is_err() {
+                    eprintln!("baseview: X11 window thread panicked during initialization");
+                }
+            }
+        }
         window_handle
     }
 
@@ -177,12 +274,55 @@ impl<'a> Window<'a> {
         B: Send + 'static,
     {
         let (tx, rx) = mpsc::sync_channel::<WindowOpenResult>(1);
+        let stop_requested = Arc::new(AtomicBool::new(false));
+        let _blocking_event_loop = BlockingEventLoopRegistration::new(Arc::clone(&stop_requested));
+        let initialization_finished = Arc::new(AtomicBool::new(false));
+        let worker_initialization_finished = Arc::clone(&initialization_finished);
 
+        let error_tx = tx.clone();
         let thread = thread::spawn(move || {
-            Self::window_thread(None, options, build, tx, None, None).unwrap();
+            if let Err(error) = Self::window_thread(
+                None,
+                options,
+                build,
+                tx,
+                None,
+                None,
+                Some(stop_requested),
+                worker_initialization_finished,
+            ) {
+                let message = error.to_string();
+                if initialization_finished.load(Ordering::Acquire)
+                    || error_tx.try_send(Err(message.clone())).is_err()
+                {
+                    eprintln!("baseview: blocking X11 window thread failed: {message}");
+                }
+            }
         });
 
-        let _ = rx.recv().unwrap().unwrap();
+        match rx.recv() {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                eprintln!("baseview: could not open blocking X11 window: {error}");
+                if thread.join().is_err() {
+                    eprintln!(
+                        "baseview: blocking X11 window thread panicked during initialization"
+                    );
+                }
+                return;
+            }
+            Err(error) => {
+                eprintln!(
+                    "baseview: blocking X11 window thread exited before initialization: {error}"
+                );
+                if thread.join().is_err() {
+                    eprintln!(
+                        "baseview: blocking X11 window thread panicked during initialization"
+                    );
+                }
+                return;
+            }
+        }
 
         thread.join().unwrap_or_else(|err| {
             eprintln!("Window thread panicked: {:#?}", err);
@@ -196,28 +336,20 @@ impl<'a> Window<'a> {
         tx: mpsc::SyncSender<WindowOpenResult>,
         parent_handle: Option<ParentHandle>,
         resize_receiver: Option<mpsc::Receiver<Size>>,
+        blocking_stop_requested: Option<Arc<AtomicBool>>,
+        initialization_finished: Arc<AtomicBool>,
     ) -> Result<(), Box<dyn Error>>
     where
         H: WindowHandler + 'static,
         B: FnOnce(&mut crate::Window) -> H,
         B: Send + 'static,
     {
-        // Connect to the X server
-        // FIXME: baseview error type instead of unwrap()
+        // Connect to the X server.
         let xcb_connection = XcbConnection::new()?;
 
         // Get screen information
         let screen = xcb_connection.screen();
         let parent_id = parent.unwrap_or(screen.root);
-
-        let gc_id = xcb_connection.conn.generate_id()?;
-        xcb_connection.conn.create_gc(
-            gc_id,
-            parent_id,
-            &CreateGCAux::new()
-                .foreground(screen.black_pixel)
-                .graphics_exposures(0),
-        )?;
 
         let scaling = match options.scale {
             WindowScalePolicy::SystemScaleFactor => xcb_connection.get_scaling().unwrap_or(1.0),
@@ -234,71 +366,79 @@ impl<'a> Window<'a> {
         let visual_info = WindowVisualConfig::find_best_visual_config(&xcb_connection)?;
 
         let window_id = xcb_connection.conn.generate_id()?;
-        xcb_connection.conn.create_window(
-            visual_info.visual_depth,
-            window_id,
-            parent_id,
-            0,                                         // x coordinate of the new window
-            0,                                         // y coordinate of the new window
-            window_info.physical_size().width as u16,  // window width
-            window_info.physical_size().height as u16, // window height
-            0,                                         // window border
-            WindowClass::INPUT_OUTPUT,
-            visual_info.visual_id,
-            &CreateWindowAux::new()
-                .event_mask(
-                    EventMask::EXPOSURE
-                        | EventMask::POINTER_MOTION
-                        | EventMask::BUTTON_PRESS
-                        | EventMask::BUTTON_RELEASE
-                        | EventMask::KEY_PRESS
-                        | EventMask::KEY_RELEASE
-                        | EventMask::STRUCTURE_NOTIFY
-                        | EventMask::ENTER_WINDOW
-                        | EventMask::LEAVE_WINDOW,
-                )
-                // As mentioned above, these two values are needed to be able to create a window
-                // with a depth of 32-bits when the parent window has a different depth
-                .colormap(visual_info.color_map)
-                .border_pixel(0),
-        )?;
-        xcb_connection.conn.map_window(window_id)?;
+        xcb_connection
+            .conn
+            .create_window(
+                visual_info.visual_depth,
+                window_id,
+                parent_id,
+                0,                                         // x coordinate of the new window
+                0,                                         // y coordinate of the new window
+                window_info.physical_size().width as u16,  // window width
+                window_info.physical_size().height as u16, // window height
+                0,                                         // window border
+                WindowClass::INPUT_OUTPUT,
+                visual_info.visual_id,
+                &CreateWindowAux::new()
+                    .event_mask(
+                        EventMask::EXPOSURE
+                            | EventMask::POINTER_MOTION
+                            | EventMask::BUTTON_PRESS
+                            | EventMask::BUTTON_RELEASE
+                            | EventMask::KEY_PRESS
+                            | EventMask::KEY_RELEASE
+                            | EventMask::STRUCTURE_NOTIFY
+                            | EventMask::ENTER_WINDOW
+                            | EventMask::LEAVE_WINDOW,
+                    )
+                    // As mentioned above, these two values are needed to be able to create a window
+                    // with a depth of 32-bits when the parent window has a different depth
+                    .colormap(visual_info.color_map)
+                    .border_pixel(0),
+            )?
+            .check()?;
+        xcb_connection.conn.map_window(window_id)?.check()?;
 
         // Change window title
         let title = options.title;
-        xcb_connection.conn.change_property8(
-            PropMode::REPLACE,
-            window_id,
-            AtomEnum::WM_NAME,
-            AtomEnum::STRING,
-            title.as_bytes(),
-        )?;
+        xcb_connection
+            .conn
+            .change_property8(
+                PropMode::REPLACE,
+                window_id,
+                AtomEnum::WM_NAME,
+                AtomEnum::STRING,
+                title.as_bytes(),
+            )?
+            .check()?;
 
-        xcb_connection.conn.change_property32(
-            PropMode::REPLACE,
-            window_id,
-            xcb_connection.atoms.WM_PROTOCOLS,
-            AtomEnum::ATOM,
-            &[xcb_connection.atoms.WM_DELETE_WINDOW],
-        )?;
+        xcb_connection
+            .conn
+            .change_property32(
+                PropMode::REPLACE,
+                window_id,
+                xcb_connection.atoms.WM_PROTOCOLS,
+                AtomEnum::ATOM,
+                &[xcb_connection.atoms.WM_DELETE_WINDOW],
+            )?
+            .check()?;
 
         xcb_connection.conn.flush()?;
 
-        // TODO: These APIs could use a couple tweaks now that everything is internal and there is
-        //       no error handling anymore at this point. Everything is more or less unchanged
-        //       compared to when raw-gl-context was a separate crate.
         #[cfg(feature = "opengl")]
-        let gl_context = visual_info.fb_config.map(|fb_config| {
-            use std::ffi::c_ulong;
+        let gl_context = visual_info
+            .fb_config
+            .map(|fb_config| -> Result<GlContext, crate::gl::GlError> {
+                use std::ffi::c_ulong;
 
-            let window = window_id as c_ulong;
-            let display = xcb_connection.dpy;
+                let window = window_id as c_ulong;
+                let display = xcb_connection.dpy;
 
-            // Because of the visual negotation we had to take some extra steps to create this context
-            let context = unsafe { platform::GlContext::create(window, display, fb_config) }
-                .expect("Could not create OpenGL context");
-            GlContext::new(context)
-        });
+                // Because of the visual negotation we had to take some extra steps to create this context
+                let context = unsafe { platform::GlContext::create(window, display, fb_config) }?;
+                Ok(GlContext::new(context))
+            })
+            .transpose()?;
 
         let mut inner = WindowInner {
             xcb_connection,
@@ -326,11 +466,29 @@ impl<'a> Window<'a> {
 
         let raw_window_handle = window
             .window_handle()
-            .expect("new X11 window handle is unavailable")
+            .map_err(|error| {
+                IoError::new(
+                    ErrorKind::Other,
+                    format!("new X11 window handle is unavailable: {error}"),
+                )
+            })?
             .as_raw();
-        let _ = tx.send(Ok(SendableRwh(raw_window_handle)));
+        tx.send(Ok(SendableRwh(raw_window_handle))).map_err(|_| {
+            IoError::new(
+                ErrorKind::BrokenPipe,
+                "X11 window caller stopped waiting during initialization",
+            )
+        })?;
+        initialization_finished.store(true, Ordering::Release);
 
-        EventLoop::new(inner, handler, parent_handle, resize_receiver).run()?;
+        EventLoop::new(
+            inner,
+            handler,
+            parent_handle,
+            resize_receiver,
+            blocking_stop_requested,
+        )
+        .run()?;
 
         Ok(())
     }
@@ -340,7 +498,13 @@ impl<'a> Window<'a> {
             return;
         }
 
-        let xid = self.inner.xcb_connection.get_cursor(mouse_cursor).unwrap();
+        let xid = match self.inner.xcb_connection.get_cursor(mouse_cursor) {
+            Ok(xid) => xid,
+            Err(error) => {
+                eprintln!("baseview: could not load X11 cursor {mouse_cursor:?}: {error}");
+                return;
+            }
+        };
 
         if xid != 0 {
             let _ = self.inner.xcb_connection.conn.change_window_attributes(
