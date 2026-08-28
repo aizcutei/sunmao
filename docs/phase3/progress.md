@@ -671,3 +671,12 @@
 - Unresolved: 待三平台 hosted 全绿。M3 余下：envelopes（ADSR/follower）与
   band-limited oscillators（sine/saw/pulse），随后用 oscillator/envelope 把
   instrument 模板压进 ≤50 行（M2 记录的未达标项）。
+
+### 2026-08-29 — M3 filters 验收：hosted run #63 三平台全绿
+
+- Command/platform: push `9db6ff0` 触发 GitHub Actions #63：https://github.com/aizcutei/sunmao/actions/runs/33196120193
+- Result: 三平台三个 job 同一 commit 全部 success、逐步骤零非成功步骤。新 crate
+  `sunmao_dsp` 与换用组件后的 SVF fixture 在三平台原生构建下通过。
+- Evidence/artifact: run #63 上传三平台 artifacts（50.0MB / 74.2MB / 918.2MB），均可下载。
+- Unresolved: M3 余下 envelopes（ADSR/follower）与 band-limited oscillators
+  （sine/saw/pulse），随后用它们把 instrument 模板压进 ≤50 行。
