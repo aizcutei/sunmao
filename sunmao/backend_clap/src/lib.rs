@@ -753,6 +753,16 @@ impl<P: SunmaoPlugin> Plugin for SunmaoClapWrapper<P> {
             .unwrap_or(self.active_tail)
     }
 
+    const STATE_VERSION: u32 = P::STATE_VERSION;
+
+    fn state_loaded(&mut self, from_version: u32) {
+        // clap_rs only calls this once every value from the older blob has been
+        // applied, so the plugin migrates from a complete state.
+        if let Some(plugin) = self.plugin.as_mut() {
+            plugin.migrate_state(from_version);
+        }
+    }
+
     fn set_audio_port_active(
         &mut self,
         is_input: bool,
@@ -1219,6 +1229,7 @@ impl<P: SunmaoPlugin> GuiHandler for SunmaoClapWrapper<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap_rs::clap_sys;
     use clap_rs::clap_sys::audio_buffer::clap_audio_buffer_t;
     use clap_rs::clap_sys::events::{
         clap_event_header_t, clap_event_note_expression_t, clap_event_note_t,
@@ -1235,6 +1246,7 @@ mod tests {
     use clap_rs::clap_sys::fixedpoint::{CLAP_BEATTIME_FACTOR, CLAP_SECTIME_FACTOR};
     use clap_rs::clap_sys::host::clap_host_t;
     use clap_rs::clap_sys::process::{clap_process_t, CLAP_PROCESS_CONTINUE, CLAP_PROCESS_ERROR};
+    use clap_rs::clap_sys::stream::clap_istream_t;
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::cell::Cell;
     use std::ffi::{c_char, c_void, CStr};
@@ -3130,6 +3142,218 @@ mod tests {
             ((*plugin).deactivate.unwrap())(plugin);
             ((*plugin).destroy.unwrap())(plugin);
         }
+    }
+
+    // ======= State migration through the real CLAP state extension =======
+
+    static MIGRATIONS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+    static MIGRATION_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    struct MigrationParams {
+        depth: FloatParam,
+    }
+
+    impl Default for MigrationParams {
+        fn default() -> Self {
+            Self {
+                depth: FloatParam::new("depth", "Depth", 0.5, 0.0, 1.0),
+            }
+        }
+    }
+
+    impl Params for MigrationParams {
+        fn get_normalized(&self, id: &str) -> Option<f32> {
+            (id == "depth").then(|| self.depth.get())
+        }
+
+        fn set_normalized(&self, id: &str, value: f32) {
+            if id == "depth" {
+                self.depth.set(value);
+            }
+        }
+
+        fn descriptors(&self) -> Vec<ParamDescriptor> {
+            vec![ParamDescriptor {
+                id: "depth",
+                numeric_id: sunmao_core::stable_param_id("depth"),
+                name: self.depth.name,
+                default_normalized: 0.5,
+                step_count: 0,
+                kind: ParamKind::Float,
+            }]
+        }
+    }
+
+    /// A build whose state format has moved on to version 2.
+    #[derive(Default)]
+    struct MigrationPlugin {
+        params: Arc<MigrationParams>,
+    }
+
+    impl SunmaoPlugin for MigrationPlugin {
+        const NAME: &'static str = "State Migration Test";
+        const VENDOR: &'static str = "SunMao Test";
+        const URL: &'static str = "https://example.invalid";
+        const STATE_VERSION: u32 = 2;
+        type Params = MigrationParams;
+
+        fn params(&self) -> Arc<Self::Params> {
+            self.params.clone()
+        }
+
+        fn migrate_state(&mut self, from_version: u32) {
+            MIGRATIONS.lock().unwrap().push(from_version);
+        }
+
+        fn process(
+            &mut self,
+            _buffer: &mut AudioBuffer,
+            _events: &EventQueue,
+            _context: &SunmaoProcessContext,
+        ) -> ProcessStatus {
+            ProcessStatus::Normal
+        }
+    }
+
+    struct ByteReader {
+        bytes: Vec<u8>,
+        position: usize,
+    }
+
+    unsafe extern "C" fn byte_reader_read(
+        stream: *const clap_istream_t,
+        buffer: *mut c_void,
+        size: u64,
+    ) -> i64 {
+        let reader = unsafe { &mut *((*stream).ctx as *mut ByteReader) };
+        let remaining = reader.bytes.len() - reader.position;
+        let count = remaining.min(size as usize);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                reader.bytes[reader.position..].as_ptr(),
+                buffer.cast::<u8>(),
+                count,
+            );
+        }
+        reader.position += count;
+        count as i64
+    }
+
+    /// Builds a parameter-state blob exactly as a build stamped `version`
+    /// would have written it.
+    fn state_blob(version: u32, numeric_id: u32, value: f64) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"SMCLPRM\0");
+        bytes.extend_from_slice(&version.to_le_bytes());
+        bytes.extend_from_slice(&1u32.to_le_bytes());
+        bytes.extend_from_slice(&numeric_id.to_le_bytes());
+        bytes.extend_from_slice(&value.to_le_bytes());
+        bytes
+    }
+
+    /// Loads `bytes` through the plugin's real `clap.state` extension.
+    fn load_state_blob(plugin: *const clap_sys::plugin::clap_plugin_t, bytes: Vec<u8>) -> bool {
+        let mut reader = ByteReader { bytes, position: 0 };
+        let stream = clap_istream_t {
+            ctx: (&mut reader as *mut ByteReader).cast::<c_void>(),
+            read: Some(byte_reader_read),
+        };
+        unsafe {
+            let ext = ((*plugin).get_extension.unwrap())(
+                plugin,
+                clap_sys::ext::state::CLAP_EXT_STATE.as_ptr().cast(),
+            ) as *const clap_sys::ext::state::clap_plugin_state_t;
+            assert!(!ext.is_null(), "plugin must expose clap.state");
+            ((*ext).load.unwrap())(plugin, &stream)
+        }
+    }
+
+    #[test]
+    fn clap_state_from_an_older_build_triggers_migration() {
+        let _serialize = MIGRATION_TEST_LOCK.lock().unwrap();
+        MIGRATIONS.lock().unwrap().clear();
+        let numeric_id = sunmao_core::stable_param_id("depth");
+
+        let plugin = unsafe {
+            clap_rs::entry::PluginEntry::create_plugin::<SunmaoClapWrapper<MigrationPlugin>>(
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        assert!(!plugin.is_null());
+        unsafe { assert!(((*plugin).init.unwrap())(plugin)) };
+
+        // A blob written by version 1 is accepted, and the plugin is told which
+        // version it came from so it can reinterpret values.
+        assert!(load_state_blob(plugin, state_blob(1, numeric_id, 0.25)));
+        assert_eq!(
+            MIGRATIONS.lock().unwrap().as_slice(),
+            &[1],
+            "loading an older state must call migrate_state with its version"
+        );
+
+        // The current version needs no migration.
+        MIGRATIONS.lock().unwrap().clear();
+        assert!(load_state_blob(plugin, state_blob(2, numeric_id, 0.5)));
+        assert!(
+            MIGRATIONS.lock().unwrap().is_empty(),
+            "a same-version state must not be migrated"
+        );
+
+        // A future version is refused outright rather than misread, and no
+        // migration is attempted.
+        assert!(!load_state_blob(plugin, state_blob(3, numeric_id, 0.5)));
+        assert!(MIGRATIONS.lock().unwrap().is_empty());
+
+        unsafe { ((*plugin).destroy.unwrap())(plugin) };
+    }
+
+    #[test]
+    fn clap_saved_state_carries_the_plugin_state_version() {
+        // The blob must be stamped with the plugin's version, not a constant,
+        // or a future build could never tell what it is reading.
+        let _serialize = MIGRATION_TEST_LOCK.lock().unwrap();
+        let plugin = unsafe {
+            clap_rs::entry::PluginEntry::create_plugin::<SunmaoClapWrapper<MigrationPlugin>>(
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        unsafe { assert!(((*plugin).init.unwrap())(plugin)) };
+
+        struct ByteWriter {
+            bytes: Vec<u8>,
+        }
+        unsafe extern "C" fn byte_writer_write(
+            stream: *const clap_sys::stream::clap_ostream_t,
+            buffer: *const c_void,
+            size: u64,
+        ) -> i64 {
+            let writer = unsafe { &mut *((*stream).ctx as *mut ByteWriter) };
+            let slice = unsafe { std::slice::from_raw_parts(buffer.cast::<u8>(), size as usize) };
+            writer.bytes.extend_from_slice(slice);
+            size as i64
+        }
+
+        let mut writer = ByteWriter { bytes: Vec::new() };
+        let stream = clap_sys::stream::clap_ostream_t {
+            ctx: (&mut writer as *mut ByteWriter).cast::<c_void>(),
+            write: Some(byte_writer_write),
+        };
+        unsafe {
+            let ext = ((*plugin).get_extension.unwrap())(
+                plugin,
+                clap_sys::ext::state::CLAP_EXT_STATE.as_ptr().cast(),
+            ) as *const clap_sys::ext::state::clap_plugin_state_t;
+            assert!(((*ext).save.unwrap())(plugin, &stream));
+            ((*plugin).destroy.unwrap())(plugin);
+        }
+
+        assert_eq!(&writer.bytes[..8], b"SMCLPRM\0");
+        assert_eq!(
+            u32::from_le_bytes(writer.bytes[8..12].try_into().unwrap()),
+            MigrationPlugin::STATE_VERSION
+        );
     }
 }
 

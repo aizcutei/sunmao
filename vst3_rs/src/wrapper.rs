@@ -957,9 +957,33 @@ impl<P: Plugin> ProcessorWrapper<P> {
             return kInvalidArgument;
         }
         let obj = Self::from_component(this);
-        load_parameter_state(state, &(*obj).params, |id, value| {
-            (*obj).parameter_bridge.set(id, value);
-        })
+        let mut loaded_version = None;
+        let result = load_parameter_state::<P>(
+            state,
+            &(*obj).params,
+            |id, value| {
+                (*obj).parameter_bridge.set(id, value);
+            },
+            &mut loaded_version,
+        );
+        if result == kResultOk {
+            Self::run_state_migration(obj, loaded_version);
+        }
+        result
+    }
+
+    /// Runs the plugin's migration hook when the blob came from an older build.
+    /// An equal version needs no migration, and a newer one never gets this far.
+    unsafe fn run_state_migration(obj: *mut Self, loaded_version: Option<u32>) {
+        let Some(version) = loaded_version else {
+            return;
+        };
+        if version >= P::STATE_VERSION {
+            return;
+        }
+        if let Some(plugin) = (*obj).plugin.as_mut() {
+            plugin.state_loaded(version);
+        }
     }
     unsafe extern "system" fn processor_get_state(
         this: *mut c_void,
@@ -975,7 +999,7 @@ impl<P: Plugin> ProcessorWrapper<P> {
             return kInvalidArgument;
         }
         let obj = Self::from_component(this);
-        save_parameter_state(state, &(*obj).params, |id| (*obj).parameter_bridge.get(id))
+        save_parameter_state::<P>(state, &(*obj).params, |id| (*obj).parameter_bridge.get(id))
     }
 
     // IAudioProcessor methods
@@ -1913,9 +1937,17 @@ impl<P: Plugin> ControllerWrapper<P> {
                 return kInvalidArgument;
             }
             let obj = this as *mut Self;
-            load_parameter_state(state, &(*obj).params, |id, value| {
-                (*obj).parameter_bridge.set(id, value);
-            })
+            // This controller holds no plugin instance, so there is nothing to
+            // migrate; the processor side runs the hook.
+            let mut loaded_version = None;
+            load_parameter_state::<P>(
+                state,
+                &(*obj).params,
+                |id, value| {
+                    (*obj).parameter_bridge.set(id, value);
+                },
+                &mut loaded_version,
+            )
         })
     }
     unsafe extern "system" fn set_state(this: *mut c_void, state: *mut c_void) -> tresult {
@@ -1927,7 +1959,7 @@ impl<P: Plugin> ControllerWrapper<P> {
                 return kInvalidArgument;
             }
             let obj = this as *mut Self;
-            save_parameter_state(state, &(*obj).params, |id| (*obj).parameter_bridge.get(id))
+            save_parameter_state::<P>(state, &(*obj).params, |id| (*obj).parameter_bridge.get(id))
         })
     }
 
@@ -2684,14 +2716,30 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
                 return kInvalidArgument;
             }
             let obj = this as *mut Self;
-            load_parameter_state(state, &(*obj).params, |id, value| {
-                let value = sanitize_normalized(value, (*obj).parameter_bridge.get(id));
-                if let Some(plugin) = (*obj).plugin.as_mut() {
-                    plugin.set_param(id, value);
+            let mut loaded_version = None;
+            let result = load_parameter_state::<P>(
+                state,
+                &(*obj).params,
+                |id, value| {
+                    let value = sanitize_normalized(value, (*obj).parameter_bridge.get(id));
+                    if let Some(plugin) = (*obj).plugin.as_mut() {
+                        plugin.set_param(id, value);
+                    }
+                    // Publish only after the user callback returns normally.
+                    (*obj).parameter_bridge.set(id, value);
+                },
+                &mut loaded_version,
+            );
+            if result == kResultOk {
+                if let Some(version) = loaded_version {
+                    if version < P::STATE_VERSION {
+                        if let Some(plugin) = (*obj).plugin.as_mut() {
+                            plugin.state_loaded(version);
+                        }
+                    }
                 }
-                // Publish only after the user callback returns normally.
-                (*obj).parameter_bridge.set(id, value);
-            })
+            }
+            result
         })
     }
     unsafe extern "system" fn set_state(this: *mut c_void, state: *mut c_void) -> tresult {
@@ -2703,7 +2751,7 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
                 return kInvalidArgument;
             }
             let obj = this as *mut Self;
-            save_parameter_state(state, &(*obj).params, |id| (*obj).parameter_bridge.get(id))
+            save_parameter_state::<P>(state, &(*obj).params, |id| (*obj).parameter_bridge.get(id))
         })
     }
 

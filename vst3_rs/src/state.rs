@@ -1,14 +1,17 @@
 use crate::ParamInfo;
+use crate::plugin::Plugin;
 use std::ffi::c_void;
 use vst3_sys::base::{IBStreamVtbl, int32, kInvalidArgument, kResultFalse, kResultOk, tresult};
 
 const STATE_MAGIC: [u8; 8] = *b"SMV3PRM\0";
+/// Version used when a caller does not supply the plugin's own. Kept so the
+/// header layout stays self-describing for pre-Phase-3 blobs.
 const STATE_VERSION: u32 = 1;
 const HEADER_LEN: usize = 16;
 const ENTRY_LEN: usize = 12;
 const MAX_STATE_PARAMETERS: usize = 65_536;
 
-pub(crate) unsafe fn save_parameter_state(
+pub(crate) unsafe fn save_parameter_state<P: Plugin>(
     stream: *mut c_void,
     params: &[ParamInfo],
     value_for: impl FnMut(u32) -> f64,
@@ -16,7 +19,7 @@ pub(crate) unsafe fn save_parameter_state(
     if stream.is_null() {
         return kInvalidArgument;
     }
-    let Some(bytes) = encode_parameter_state(params, value_for) else {
+    let Some(bytes) = encode_parameter_state(P::STATE_VERSION, params, value_for) else {
         return kResultFalse;
     };
     if unsafe { stream_write_all(stream, &bytes) } {
@@ -26,10 +29,13 @@ pub(crate) unsafe fn save_parameter_state(
     }
 }
 
-pub(crate) unsafe fn load_parameter_state(
+/// Applies a saved blob and reports the version it was written by through
+/// `loaded_version`, so the caller can run a migration when it is older.
+pub(crate) unsafe fn load_parameter_state<P: Plugin>(
     stream: *mut c_void,
     params: &[ParamInfo],
     mut apply: impl FnMut(u32, f64),
+    loaded_version: &mut Option<u32>,
 ) -> tresult {
     if stream.is_null() {
         return kInvalidArgument;
@@ -39,9 +45,10 @@ pub(crate) unsafe fn load_parameter_state(
     if !unsafe { stream_read_exact(stream, &mut header) } {
         return kResultFalse;
     }
-    let Some((_version, count)) = decode_header(&header) else {
+    let Some((version, count)) = decode_header(&header, P::STATE_VERSION) else {
         return kResultFalse;
     };
+    *loaded_version = Some(version);
     let Some(body_len) = count.checked_mul(ENTRY_LEN) else {
         return kResultFalse;
     };
@@ -52,7 +59,7 @@ pub(crate) unsafe fn load_parameter_state(
         return kResultFalse;
     }
 
-    let Some(entries) = decode_parameter_state(&bytes) else {
+    let Some(entries) = decode_parameter_state(&bytes, P::STATE_VERSION) else {
         return kResultFalse;
     };
     for (id, value) in entries {
@@ -64,6 +71,7 @@ pub(crate) unsafe fn load_parameter_state(
 }
 
 fn encode_parameter_state(
+    version: u32,
     params: &[ParamInfo],
     mut value_for: impl FnMut(u32) -> f64,
 ) -> Option<Vec<u8>> {
@@ -73,7 +81,7 @@ fn encode_parameter_state(
     let count = u32::try_from(params.len()).ok()?;
     let mut bytes = Vec::with_capacity(HEADER_LEN + params.len() * ENTRY_LEN);
     bytes.extend_from_slice(&STATE_MAGIC);
-    bytes.extend_from_slice(&STATE_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&version.to_le_bytes());
     bytes.extend_from_slice(&count.to_le_bytes());
     for param in params {
         let value = value_for(param.id);
@@ -92,20 +100,20 @@ fn encode_parameter_state(
 /// parameter id, so parameters that did not exist yet simply keep their
 /// defaults. A *newer* version is rejected because this build cannot know how
 /// to interpret it.
-fn decode_header(bytes: &[u8]) -> Option<(u32, usize)> {
+fn decode_header(bytes: &[u8], current_version: u32) -> Option<(u32, usize)> {
     if bytes.len() < HEADER_LEN || bytes[..8] != STATE_MAGIC {
         return None;
     }
     let version = u32::from_le_bytes(bytes[8..12].try_into().ok()?);
-    if version > STATE_VERSION {
+    if version > current_version {
         return None;
     }
     let count = u32::from_le_bytes(bytes[12..16].try_into().ok()?) as usize;
     (count <= MAX_STATE_PARAMETERS).then_some((version, count))
 }
 
-fn decode_parameter_state(bytes: &[u8]) -> Option<Vec<(u32, f64)>> {
-    let (_version, count) = decode_header(bytes)?;
+fn decode_parameter_state(bytes: &[u8], current_version: u32) -> Option<Vec<(u32, f64)>> {
+    let (_version, count) = decode_header(bytes, current_version)?;
     let required_len = HEADER_LEN.checked_add(count.checked_mul(ENTRY_LEN)?)?;
     if bytes.len() < required_len {
         return None;
@@ -181,19 +189,19 @@ mod tests {
 
     #[test]
     fn state_is_versioned_and_keyed_by_parameter_id() {
-        let bytes = encode_parameter_state(&params(), |id| match id {
+        let bytes = encode_parameter_state(STATE_VERSION, &params(), |id| match id {
             7 => 0.25,
             42 => 1.0,
             _ => unreachable!(),
         })
         .unwrap();
         assert_eq!(
-            decode_parameter_state(&bytes),
+            decode_parameter_state(&bytes, STATE_VERSION),
             Some(vec![(7, 0.25), (42, 1.0)])
         );
 
         let reordered = vec![ParamInfo::new(42, "Mode"), ParamInfo::new(7, "Gain")];
-        let restored = decode_parameter_state(&bytes).unwrap();
+        let restored = decode_parameter_state(&bytes, STATE_VERSION).unwrap();
         assert_eq!(
             reordered
                 .iter()
@@ -205,17 +213,17 @@ mod tests {
 
     #[test]
     fn malformed_state_is_rejected_before_values_are_exposed() {
-        let mut bytes = encode_parameter_state(&params(), |_| 0.5).unwrap();
+        let mut bytes = encode_parameter_state(STATE_VERSION, &params(), |_| 0.5).unwrap();
         bytes.truncate(bytes.len() - 1);
-        assert_eq!(decode_parameter_state(&bytes), None);
+        assert_eq!(decode_parameter_state(&bytes, STATE_VERSION), None);
 
-        let mut bytes = encode_parameter_state(&params(), |_| 0.5).unwrap();
+        let mut bytes = encode_parameter_state(STATE_VERSION, &params(), |_| 0.5).unwrap();
         bytes[8..12].copy_from_slice(&99u32.to_le_bytes());
-        assert_eq!(decode_parameter_state(&bytes), None);
+        assert_eq!(decode_parameter_state(&bytes, STATE_VERSION), None);
 
-        let mut bytes = encode_parameter_state(&params(), |_| 0.5).unwrap();
+        let mut bytes = encode_parameter_state(STATE_VERSION, &params(), |_| 0.5).unwrap();
         bytes[HEADER_LEN + 4..HEADER_LEN + ENTRY_LEN].copy_from_slice(&f64::NAN.to_le_bytes());
-        assert_eq!(decode_parameter_state(&bytes), None);
+        assert_eq!(decode_parameter_state(&bytes, STATE_VERSION), None);
     }
 
     fn header_bytes(version: u32, count: u32) -> Vec<u8> {
@@ -233,7 +241,7 @@ mod tests {
         // must not be rejected outright.
         let header = header_bytes(STATE_VERSION.saturating_sub(1).max(0), 0);
         assert_eq!(
-            decode_header(&header),
+            decode_header(&header, STATE_VERSION),
             Some((STATE_VERSION.saturating_sub(1).max(0), 0))
         );
     }
@@ -242,13 +250,13 @@ mod tests {
     fn a_state_from_a_newer_build_is_rejected() {
         // This build cannot know how a future layout reinterprets values.
         let header = header_bytes(STATE_VERSION + 1, 0);
-        assert_eq!(decode_header(&header), None);
+        assert_eq!(decode_header(&header, STATE_VERSION), None);
     }
 
     #[test]
     fn a_foreign_magic_is_rejected() {
         let mut header = header_bytes(STATE_VERSION, 0);
         header[0] = b'X';
-        assert_eq!(decode_header(&header), None);
+        assert_eq!(decode_header(&header, STATE_VERSION), None);
     }
 }

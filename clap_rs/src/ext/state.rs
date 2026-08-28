@@ -9,6 +9,8 @@ use clap_sys::plugin::clap_plugin_t;
 use clap_sys::stream::{clap_istream_t, clap_ostream_t};
 
 const STATE_MAGIC: [u8; 8] = *b"SMCLPRM\0";
+/// Fallback used by the encoder's tests; live blobs carry the plugin's own
+/// `Plugin::STATE_VERSION`.
 const STATE_VERSION: u32 = 1;
 const HEADER_LEN: usize = 16;
 const ENTRY_LEN: usize = 12;
@@ -137,7 +139,9 @@ unsafe fn save_parameter_state<P: Plugin>(
     params: &[ParameterInfo],
     stream: *const clap_ostream_t,
 ) -> bool {
-    let Some(bytes) = encode_parameter_state(params, |id| plugin.get_parameter(id)) else {
+    let Some(bytes) =
+        encode_parameter_state(P::STATE_VERSION, params, |id| plugin.get_parameter(id))
+    else {
         return false;
     };
     unsafe { stream_write_all(stream, &bytes) }
@@ -152,7 +156,7 @@ unsafe fn load_parameter_state<P: Plugin>(
     if !unsafe { stream_read_exact(stream, &mut header) } {
         return false;
     }
-    let Some((_version, count)) = decode_header(&header) else {
+    let Some((version, count)) = decode_header(&header, P::STATE_VERSION) else {
         return false;
     };
     let Some(body_len) = count.checked_mul(ENTRY_LEN) else {
@@ -165,7 +169,7 @@ unsafe fn load_parameter_state<P: Plugin>(
         return false;
     }
 
-    let Some(entries) = decode_parameter_state(&bytes) else {
+    let Some(entries) = decode_parameter_state(&bytes, P::STATE_VERSION) else {
         return false;
     };
     // CLAP parameter state is stored in the parameter's plain-value domain.
@@ -181,6 +185,11 @@ unsafe fn load_parameter_state<P: Plugin>(
         if params.iter().any(|param| param.id == id) {
             plugin.set_parameter(id, value);
         }
+    }
+    // Only after every value has been applied: the plugin migrates from a
+    // complete older state, never a half-applied one.
+    if version < P::STATE_VERSION {
+        plugin.state_loaded(version);
     }
     true
 }
@@ -201,6 +210,7 @@ fn parameter_value_valid(param: &ParameterInfo, value: f64) -> bool {
 }
 
 fn encode_parameter_state(
+    version: u32,
     params: &[ParameterInfo],
     mut value_for: impl FnMut(u32) -> f64,
 ) -> Option<Vec<u8>> {
@@ -210,7 +220,7 @@ fn encode_parameter_state(
     let count = u32::try_from(params.len()).ok()?;
     let mut bytes = Vec::with_capacity(HEADER_LEN + params.len() * ENTRY_LEN);
     bytes.extend_from_slice(&STATE_MAGIC);
-    bytes.extend_from_slice(&STATE_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&version.to_le_bytes());
     bytes.extend_from_slice(&count.to_le_bytes());
     for param in params {
         let value = value_for(param.id);
@@ -229,20 +239,20 @@ fn encode_parameter_state(
 /// parameter id, so parameters that did not exist yet simply keep their
 /// defaults. A *newer* version is rejected because this build cannot know how
 /// to interpret it.
-fn decode_header(bytes: &[u8]) -> Option<(u32, usize)> {
+fn decode_header(bytes: &[u8], current_version: u32) -> Option<(u32, usize)> {
     if bytes.len() < HEADER_LEN || bytes[..8] != STATE_MAGIC {
         return None;
     }
     let version = u32::from_le_bytes(bytes[8..12].try_into().ok()?);
-    if version > STATE_VERSION {
+    if version > current_version {
         return None;
     }
     let count = u32::from_le_bytes(bytes[12..16].try_into().ok()?) as usize;
     (count <= MAX_STATE_PARAMETERS).then_some((version, count))
 }
 
-fn decode_parameter_state(bytes: &[u8]) -> Option<Vec<(u32, f64)>> {
-    let (_version, count) = decode_header(bytes)?;
+fn decode_parameter_state(bytes: &[u8], current_version: u32) -> Option<Vec<(u32, f64)>> {
+    let (_version, count) = decode_header(bytes, current_version)?;
     let required_len = HEADER_LEN.checked_add(count.checked_mul(ENTRY_LEN)?)?;
     if bytes.len() < required_len {
         return None;
@@ -324,19 +334,19 @@ mod tests {
 
     #[test]
     fn state_is_versioned_and_keyed_by_parameter_id() {
-        let bytes = encode_parameter_state(&params(), |id| match id {
+        let bytes = encode_parameter_state(STATE_VERSION, &params(), |id| match id {
             7 => 0.25,
             42 => 1.0,
             _ => unreachable!(),
         })
         .unwrap();
         assert_eq!(
-            decode_parameter_state(&bytes),
+            decode_parameter_state(&bytes, STATE_VERSION),
             Some(vec![(7, 0.25), (42, 1.0)])
         );
 
         let reordered = [parameter(42, "Mode"), parameter(7, "Gain")];
-        let restored = decode_parameter_state(&bytes).unwrap();
+        let restored = decode_parameter_state(&bytes, STATE_VERSION).unwrap();
         assert_eq!(
             reordered
                 .iter()
@@ -348,17 +358,17 @@ mod tests {
 
     #[test]
     fn malformed_state_is_rejected_before_values_are_exposed() {
-        let mut bytes = encode_parameter_state(&params(), |_| 0.5).unwrap();
+        let mut bytes = encode_parameter_state(STATE_VERSION, &params(), |_| 0.5).unwrap();
         bytes.truncate(bytes.len() - 1);
-        assert_eq!(decode_parameter_state(&bytes), None);
+        assert_eq!(decode_parameter_state(&bytes, STATE_VERSION), None);
 
-        let mut bytes = encode_parameter_state(&params(), |_| 0.5).unwrap();
+        let mut bytes = encode_parameter_state(STATE_VERSION, &params(), |_| 0.5).unwrap();
         bytes[8..12].copy_from_slice(&99u32.to_le_bytes());
-        assert_eq!(decode_parameter_state(&bytes), None);
+        assert_eq!(decode_parameter_state(&bytes, STATE_VERSION), None);
 
-        let mut bytes = encode_parameter_state(&params(), |_| 0.5).unwrap();
+        let mut bytes = encode_parameter_state(STATE_VERSION, &params(), |_| 0.5).unwrap();
         bytes[HEADER_LEN + 4..HEADER_LEN + ENTRY_LEN].copy_from_slice(&f64::NAN.to_le_bytes());
-        assert_eq!(decode_parameter_state(&bytes), None);
+        assert_eq!(decode_parameter_state(&bytes, STATE_VERSION), None);
     }
 
     #[test]
@@ -383,7 +393,7 @@ mod tests {
         // must not be rejected outright.
         let header = header_bytes(STATE_VERSION.saturating_sub(1).max(0), 0);
         assert_eq!(
-            decode_header(&header),
+            decode_header(&header, STATE_VERSION),
             Some((STATE_VERSION.saturating_sub(1).max(0), 0))
         );
     }
@@ -392,13 +402,13 @@ mod tests {
     fn a_state_from_a_newer_build_is_rejected() {
         // This build cannot know how a future layout reinterprets values.
         let header = header_bytes(STATE_VERSION + 1, 0);
-        assert_eq!(decode_header(&header), None);
+        assert_eq!(decode_header(&header, STATE_VERSION), None);
     }
 
     #[test]
     fn a_foreign_magic_is_rejected() {
         let mut header = header_bytes(STATE_VERSION, 0);
         header[0] = b'X';
-        assert_eq!(decode_header(&header), None);
+        assert_eq!(decode_header(&header, STATE_VERSION), None);
     }
 }

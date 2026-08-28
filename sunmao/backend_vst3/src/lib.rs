@@ -496,6 +496,14 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
         clamp_vst3_tail(self.plugin.tail())
     }
 
+    const STATE_VERSION: u32 = P::STATE_VERSION;
+
+    fn state_loaded(&mut self, from_version: u32) {
+        // vst3_rs only calls this after a successful load whose version is
+        // older than this build's, so the plugin migrates from a complete state.
+        self.plugin.migrate_state(from_version);
+    }
+
     fn activate_bus(&mut self, is_input: bool, bus_index: u32, active: bool) -> bool {
         self.plugin.set_bus_active(is_input, bus_index, active)
     }
@@ -850,6 +858,7 @@ mod tests {
     use sunmao_core::{
         BoolParam, FloatParam, IntParam, ParamDescriptor, ParamKind, ProcessStatus, SunmaoView,
     };
+    use vst3_rs::vst3_sys::base::ibstream::IBStreamVtbl;
     use vst3_rs::vst3_sys::base::{
         kInvalidArgument, kNoInterface, kNotImplemented, kResultFalse, kResultOk, IUnknownVtbl,
         TUID,
@@ -2913,6 +2922,218 @@ mod tests {
             assert_eq!(((*component_vtbl).set_active)(component, 0), kResultOk);
             assert_eq!(((*component_vtbl).base.terminate)(component), kResultOk);
             ((*audio_vtbl).unknown.release)(audio);
+            ((*component_vtbl).base.unknown.release)(component);
+        }
+    }
+
+    // ======= State migration through the real VST3 IBStream =======
+
+    static VST3_MIGRATIONS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+    static VST3_MIGRATION_LOCK: Mutex<()> = Mutex::new(());
+
+    /// A build whose state format has moved on to version 2.
+    #[derive(Default)]
+    struct Vst3MigrationPlugin;
+
+    impl SunmaoPlugin for Vst3MigrationPlugin {
+        const NAME: &'static str = "VST3 State Migration Test";
+        const VENDOR: &'static str = "SunMao Test";
+        const URL: &'static str = "https://example.invalid";
+        const STATE_VERSION: u32 = 2;
+        type Params = EmptyParams;
+
+        fn params(&self) -> Arc<Self::Params> {
+            Arc::new(EmptyParams)
+        }
+
+        fn migrate_state(&mut self, from_version: u32) {
+            VST3_MIGRATIONS.lock().unwrap().push(from_version);
+        }
+
+        fn process(
+            &mut self,
+            _buffer: &mut AudioBuffer,
+            _events: &EventQueue,
+            _context: &SunmaoProcessContext,
+        ) -> ProcessStatus {
+            ProcessStatus::Normal
+        }
+    }
+
+    /// Minimal read-only `IBStream` over a byte buffer.
+    #[repr(C)]
+    struct ByteStream {
+        vtbl: *const IBStreamVtbl,
+        bytes: Vec<u8>,
+        position: usize,
+    }
+
+    unsafe extern "system" fn stream_query(
+        _this: *mut c_void,
+        _iid: *const TUID,
+        object: *mut *mut c_void,
+    ) -> i32 {
+        if !object.is_null() {
+            unsafe { *object = std::ptr::null_mut() };
+        }
+        kNoInterface
+    }
+
+    unsafe extern "system" fn stream_add_ref(_this: *mut c_void) -> u32 {
+        1
+    }
+
+    unsafe extern "system" fn stream_release(_this: *mut c_void) -> u32 {
+        1
+    }
+
+    unsafe extern "system" fn stream_read(
+        this: *mut c_void,
+        buffer: *mut c_void,
+        num_bytes: i32,
+        num_bytes_read: *mut i32,
+    ) -> i32 {
+        if this.is_null() || buffer.is_null() || num_bytes < 0 {
+            return kInvalidArgument;
+        }
+        let stream = unsafe { &mut *(this as *mut ByteStream) };
+        let remaining = stream.bytes.len() - stream.position;
+        let count = remaining.min(num_bytes as usize);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                stream.bytes[stream.position..].as_ptr(),
+                buffer.cast::<u8>(),
+                count,
+            );
+        }
+        stream.position += count;
+        if !num_bytes_read.is_null() {
+            unsafe { *num_bytes_read = count as i32 };
+        }
+        kResultOk
+    }
+
+    unsafe extern "system" fn stream_write(
+        this: *mut c_void,
+        buffer: *mut c_void,
+        num_bytes: i32,
+        num_bytes_written: *mut i32,
+    ) -> i32 {
+        if this.is_null() || buffer.is_null() || num_bytes < 0 {
+            return kInvalidArgument;
+        }
+        let stream = unsafe { &mut *(this as *mut ByteStream) };
+        let slice = unsafe { std::slice::from_raw_parts(buffer.cast::<u8>(), num_bytes as usize) };
+        stream.bytes.extend_from_slice(slice);
+        if !num_bytes_written.is_null() {
+            unsafe { *num_bytes_written = num_bytes };
+        }
+        kResultOk
+    }
+
+    unsafe extern "system" fn stream_seek(
+        _this: *mut c_void,
+        _pos: i64,
+        _mode: i32,
+        _result: *mut i64,
+    ) -> i32 {
+        kNotImplemented
+    }
+
+    unsafe extern "system" fn stream_tell(_this: *mut c_void, _pos: *mut i64) -> i32 {
+        kNotImplemented
+    }
+
+    static BYTE_STREAM_VTBL: IBStreamVtbl = IBStreamVtbl {
+        unknown: IUnknownVtbl {
+            query_interface: stream_query,
+            add_ref: stream_add_ref,
+            release: stream_release,
+        },
+        read: stream_read,
+        write: stream_write,
+        seek: stream_seek,
+        tell: stream_tell,
+    };
+
+    /// A parameter-state blob exactly as a build stamped `version` wrote it.
+    fn vst3_state_blob(version: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"SMV3PRM\0");
+        bytes.extend_from_slice(&version.to_le_bytes());
+        // No parameter entries: EmptyParams has none, and the migration hook
+        // must fire on the header alone.
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn vst3_state_from_an_older_build_triggers_migration() {
+        let _serialize = VST3_MIGRATION_LOCK.lock().unwrap();
+        VST3_MIGRATIONS.lock().unwrap().clear();
+
+        unsafe {
+            let processor =
+                ProcessorWrapper::<SunmaoVst3Wrapper<Vst3MigrationPlugin>>::new([0; 16]);
+            let component = processor.cast::<c_void>();
+            let component_vtbl = *(component as *const *const IComponentVtbl);
+            assert_eq!(
+                ((*component_vtbl).base.initialize)(component, std::ptr::null_mut()),
+                kResultOk
+            );
+
+            let mut load = |version: u32| -> i32 {
+                let mut stream = ByteStream {
+                    vtbl: &BYTE_STREAM_VTBL,
+                    bytes: vst3_state_blob(version),
+                    position: 0,
+                };
+                ((*component_vtbl).set_state)(
+                    component,
+                    (&mut stream as *mut ByteStream).cast::<c_void>(),
+                )
+            };
+
+            // Older: accepted, and the plugin is told which version it read.
+            assert_eq!(load(1), kResultOk);
+            assert_eq!(
+                VST3_MIGRATIONS.lock().unwrap().as_slice(),
+                &[1],
+                "loading an older state must call migrate_state with its version"
+            );
+
+            // Same version: nothing to migrate.
+            VST3_MIGRATIONS.lock().unwrap().clear();
+            assert_eq!(load(2), kResultOk);
+            assert!(
+                VST3_MIGRATIONS.lock().unwrap().is_empty(),
+                "a same-version state must not be migrated"
+            );
+
+            // Newer: refused rather than misread.
+            assert_ne!(load(3), kResultOk);
+            assert!(VST3_MIGRATIONS.lock().unwrap().is_empty());
+
+            // And what this build writes is stamped with its own version.
+            let mut out = ByteStream {
+                vtbl: &BYTE_STREAM_VTBL,
+                bytes: Vec::new(),
+                position: 0,
+            };
+            assert_eq!(
+                ((*component_vtbl).get_state)(
+                    component,
+                    (&mut out as *mut ByteStream).cast::<c_void>()
+                ),
+                kResultOk
+            );
+            assert_eq!(&out.bytes[..8], b"SMV3PRM\0");
+            assert_eq!(
+                u32::from_le_bytes(out.bytes[8..12].try_into().unwrap()),
+                Vst3MigrationPlugin::STATE_VERSION
+            );
+
+            ((*component_vtbl).base.terminate)(component);
             ((*component_vtbl).base.unknown.release)(component);
         }
     }

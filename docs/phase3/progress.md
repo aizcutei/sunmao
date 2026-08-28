@@ -326,3 +326,42 @@
 - Unresolved: phase2/status.md 遗留表第 4 项已改为"已实现"（4/7 关闭）。
   下一个瓶颈是第 5 项：backend 在 state load 后按版本回调 `migrate_state`
   （两格式接线 + 测试）。
+
+### 2026-08-28 — M1 第 5 项：`migrate_state` backend 接线（根因在 `_rs` 的硬编码版本号）
+
+- Command/platform: macOS ARM64，分支 `phase3/framework-dsp-library`。
+- Change:
+  - 自底向上定位：core 的 `migrate_state` 钩子与 `STATE_VERSION` 早已就绪，
+    但 **`vst3_rs/src/state.rs` 与 `clap_rs/src/ext/state.rs` 都把版本号硬编码为
+    `const STATE_VERSION: u32 = 1` 写入 blob，并只与该常量比对**——插件即便声明
+    `STATE_VERSION = 2`（`sunmao_state_migration` fixture 正是如此），写出的 blob
+    仍标为 1，读入时版本恒等于当前版本，`migrate_state` **在任何情况下都不会被调用**。
+    所以本项不是"只差 backend 一行转发"，缺口同时在 `_rs` 与 backend 两层。
+  - `_rs` 两层：`Plugin` trait 新增 `const STATE_VERSION: u32 = 1` 与
+    `fn state_loaded(&mut self, from_version: u32)`；encode 改写入 `P::STATE_VERSION`，
+    `decode_header` 改与 `P::STATE_VERSION` 比对（更旧接受、更新拒绝），
+    load 成功后在**全部参数值应用完毕**才回调 `state_loaded`（保证插件从完整旧状态迁移）。
+    VST3 侧三个 state 入口（processor、controller、GUI controller）全部接线，其中
+    controller 无插件实例故只透传版本、由 processor 侧负责迁移。
+  - backend 两侧：`const STATE_VERSION: u32 = P::STATE_VERSION;` 上抛插件版本，
+    `state_loaded` 转发 `SunmaoPlugin::migrate_state`。
+  - 测试（各走真实 stream ABI，不走内部辅助函数）：
+    `clap_state_from_an_older_build_triggers_migration`（自建 `clap_istream_t`，
+    经真实 `clap.state` 扩展载入 v1/v2/v3 三种 blob，断言 v1→`migrate_state(1)`、
+    v2→不迁移、v3→拒绝且不迁移）、`clap_saved_state_carries_the_plugin_state_version`
+    （经真实 `clap.state` save 断言写出的版本是插件的 2 而非常量 1）、
+    `vst3_state_from_an_older_build_triggers_migration`（自建 `IBStream`，经真实
+    `IComponent::setState`/`getState` 做同样三段断言 + 写出版本断言）。
+- Result:
+  - `RUSTFLAGS=-Awarnings cargo test --locked` 115 套件全绿、exit 0；
+    `sunmao_state_migration` fixture 的 state round-trip 未破（硬性规则）。
+  - `cargo metadata --locked`、`cargo fmt --all -- --check`、`git diff --check` 通过；
+    `cargo check --locked --target x86_64-pc-windows-msvc` 覆盖两个 `_rs` 与两个 backend 通过；
+    `tools/package_examples.sh --debug --test` 退出 0、24 套件各 19/19。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/m1e_test.log`、`/tmp/m1e_pkg.log`、
+  `/tmp/m1e_win.log`）——本地证据等级。
+- Unresolved: 待三平台 hosted 全绿方可把遗留表第 5 项改为"已实现"。
+  **诚实标注一次性兼容影响**：修复前的构建写出的 blob 一律标为版本 1（即便插件已是 v2），
+  修复后会被当作 v1 读入并触发 `migrate_state(1)`。`sunmao_state_migration` 的迁移是
+  幂等的（把 trim 设为常量）故无害，但非幂等迁移的插件需自行权衡；已记入 semantics.md。
+  M1 余下 2 项，下一个瓶颈是第 6 项 preset-load / program list。

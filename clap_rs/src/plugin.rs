@@ -216,6 +216,16 @@ pub trait Plugin: Sized {
         false
     }
 
+    // Version stamped into saved state. A blob written by an older build is
+    // accepted and `state_loaded` reports its version; a newer one is refused
+    // because this build cannot know how to read it.
+    const STATE_VERSION: u32 = 1;
+
+    // Called after a state blob has been applied, with the version it was
+    // written by. Only called when that version is older than
+    // `STATE_VERSION` — an identical version needs no migration.
+    fn state_loaded(&mut self, _from_version: u32) {}
+
     // Latency (samples of processing delay)
     fn latency(&self) -> u32 {
         0
