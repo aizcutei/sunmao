@@ -1221,10 +1221,13 @@ mod tests {
     use super::*;
     use clap_rs::clap_sys::audio_buffer::clap_audio_buffer_t;
     use clap_rs::clap_sys::events::{
-        clap_event_header_t, clap_event_note_t, clap_event_param_value_t, clap_event_transport_t,
-        clap_input_events_t, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_VALUE,
-        CLAP_TRANSPORT_HAS_BEATS_TIMELINE, CLAP_TRANSPORT_HAS_SECONDS_TIMELINE,
-        CLAP_TRANSPORT_HAS_TEMPO, CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_LOOP_ACTIVE,
+        clap_event_header_t, clap_event_note_expression_t, clap_event_note_t,
+        clap_event_param_mod_t, clap_event_param_value_t, clap_event_transport_t,
+        clap_input_events_t, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_NOTE_EXPRESSION,
+        CLAP_EVENT_NOTE_ON, CLAP_EVENT_PARAM_MOD, CLAP_EVENT_PARAM_VALUE,
+        CLAP_NOTE_EXPRESSION_TUNING, CLAP_TRANSPORT_HAS_BEATS_TIMELINE,
+        CLAP_TRANSPORT_HAS_SECONDS_TIMELINE, CLAP_TRANSPORT_HAS_TEMPO,
+        CLAP_TRANSPORT_HAS_TIME_SIGNATURE, CLAP_TRANSPORT_IS_LOOP_ACTIVE,
         CLAP_TRANSPORT_IS_PLAYING, CLAP_TRANSPORT_IS_RECORDING,
     };
     use clap_rs::clap_sys::ext::gui::{clap_host_gui_t, CLAP_EXT_GUI};
@@ -2873,6 +2876,260 @@ mod tests {
         assert_eq!(context.bar_number, None);
         assert_eq!(context.loop_beats, None);
         assert_eq!(context.sample_pos, 0);
+    }
+
+    // ======= Raw host event -> core queue (Phase 3 M1 item 4) =======
+
+    /// What the plugin actually found in its core `EventQueue`, recorded from
+    /// inside `process`. The `_rs` layer and core are tested separately; this
+    /// closes the gap in the middle — the backend adapter.
+    #[derive(Debug, Default, PartialEq)]
+    struct SeenEvents {
+        param_mods: Vec<(String, f32, u32)>,
+        expressions: Vec<(String, Option<u8>, Option<u8>, Option<i32>, f64, u32)>,
+        param_changes: Vec<String>,
+    }
+
+    static SEEN: Mutex<Option<SeenEvents>> = Mutex::new(None);
+
+    struct ExprParams {
+        depth: FloatParam,
+    }
+
+    impl Default for ExprParams {
+        fn default() -> Self {
+            Self {
+                depth: FloatParam::new("depth", "Depth", 0.5, 0.0, 1.0),
+            }
+        }
+    }
+
+    impl Params for ExprParams {
+        fn get_normalized(&self, id: &str) -> Option<f32> {
+            (id == "depth").then(|| self.depth.get())
+        }
+
+        fn set_normalized(&self, id: &str, value: f32) {
+            if id == "depth" {
+                self.depth.set(value);
+            }
+        }
+
+        fn descriptors(&self) -> Vec<ParamDescriptor> {
+            vec![ParamDescriptor {
+                id: "depth",
+                numeric_id: sunmao_core::stable_param_id("depth"),
+                name: self.depth.name,
+                default_normalized: 0.5,
+                step_count: 0,
+                kind: ParamKind::Float,
+            }]
+        }
+    }
+
+    #[derive(Default)]
+    struct ExprPlugin {
+        params: Arc<ExprParams>,
+    }
+
+    impl SunmaoPlugin for ExprPlugin {
+        const NAME: &'static str = "Expression Mapping Test";
+        const VENDOR: &'static str = "SunMao Test";
+        const URL: &'static str = "https://example.invalid";
+        type Params = ExprParams;
+
+        fn accepts_midi(&self) -> bool {
+            true
+        }
+
+        fn params(&self) -> Arc<Self::Params> {
+            self.params.clone()
+        }
+
+        fn process(
+            &mut self,
+            _buffer: &mut AudioBuffer,
+            events: &EventQueue,
+            _context: &SunmaoProcessContext,
+        ) -> ProcessStatus {
+            let mut seen = SeenEvents::default();
+            for event in events.iter() {
+                match event {
+                    SunmaoEvent::ParamMod { id, amount, offset } => {
+                        seen.param_mods.push((id.to_string(), *amount, *offset));
+                    }
+                    SunmaoEvent::NoteExpression(expression) => {
+                        seen.expressions.push((
+                            format!("{:?}", expression.kind),
+                            expression.channel,
+                            expression.key,
+                            expression.note_id,
+                            expression.value,
+                            expression.offset,
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            // Modulation must never surface as automation, whatever route it
+            // took to get here.
+            for change in events.param_changes() {
+                seen.param_changes.push(change.id.to_string());
+            }
+            *SEEN.lock().unwrap() = Some(seen);
+            ProcessStatus::Normal
+        }
+    }
+
+    /// Raw CLAP events of mixed kinds, laid out as a host would deliver them.
+    struct MixedInputEvents {
+        expression: clap_event_note_expression_t,
+        param_mod: clap_event_param_mod_t,
+    }
+
+    unsafe extern "C" fn mixed_event_count(_list: *const clap_input_events_t) -> u32 {
+        2
+    }
+
+    unsafe extern "C" fn mixed_event_get(
+        list: *const clap_input_events_t,
+        index: u32,
+    ) -> *const clap_event_header_t {
+        let events = unsafe { &*((*list).ctx as *const MixedInputEvents) };
+        match index {
+            0 => &events.expression.header as *const clap_event_header_t,
+            1 => &events.param_mod.header as *const clap_event_header_t,
+            _ => std::ptr::null(),
+        }
+    }
+
+    #[test]
+    fn raw_clap_expression_and_mod_events_reach_the_core_queue() {
+        *SEEN.lock().unwrap() = None;
+
+        let numeric_depth_id = sunmao_core::stable_param_id("depth");
+
+        let plugin = unsafe {
+            clap_rs::entry::PluginEntry::create_plugin::<SunmaoClapWrapper<ExprPlugin>>(
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        assert!(!plugin.is_null());
+        unsafe {
+            assert!(((*plugin).init.unwrap())(plugin));
+            assert!(((*plugin).activate.unwrap())(plugin, 48_000.0, 1, 8));
+            assert!(((*plugin).start_processing.unwrap())(plugin));
+        }
+
+        let mut raw_events = MixedInputEvents {
+            expression: clap_event_note_expression_t {
+                header: clap_event_header_t {
+                    size: std::mem::size_of::<clap_event_note_expression_t>() as u32,
+                    time: 3,
+                    space_id: CLAP_CORE_EVENT_SPACE_ID,
+                    type_: CLAP_EVENT_NOTE_EXPRESSION,
+                    flags: 0,
+                },
+                expression_id: CLAP_NOTE_EXPRESSION_TUNING,
+                note_id: 42,
+                port_index: 0,
+                channel: 1,
+                key: 64,
+                value: 0.25,
+            },
+            param_mod: clap_event_param_mod_t {
+                header: clap_event_header_t {
+                    size: std::mem::size_of::<clap_event_param_mod_t>() as u32,
+                    time: 5,
+                    space_id: CLAP_CORE_EVENT_SPACE_ID,
+                    type_: CLAP_EVENT_PARAM_MOD,
+                    flags: 0,
+                },
+                param_id: numeric_depth_id,
+                cookie: std::ptr::null_mut(),
+                note_id: -1,
+                port_index: -1,
+                channel: -1,
+                key: -1,
+                amount: -0.75,
+            },
+        };
+        let input_events = clap_input_events_t {
+            ctx: (&mut raw_events as *mut MixedInputEvents).cast::<c_void>(),
+            size: Some(mixed_event_count),
+            get: Some(mixed_event_get),
+        };
+
+        let input_left = [0.0_f32; 8];
+        let input_right = [0.0_f32; 8];
+        let mut input_channels = [
+            input_left.as_ptr() as *mut f32,
+            input_right.as_ptr() as *mut f32,
+        ];
+        let input_buffers = [clap_audio_buffer_t {
+            data32: input_channels.as_mut_ptr(),
+            data64: std::ptr::null_mut(),
+            channel_count: 2,
+            latency: 0,
+            constant_mask: 0,
+        }];
+        let mut output_left = [0.0_f32; 8];
+        let mut output_right = [0.0_f32; 8];
+        let mut output_channels = [output_left.as_mut_ptr(), output_right.as_mut_ptr()];
+        let mut output_buffers = [clap_audio_buffer_t {
+            data32: output_channels.as_mut_ptr(),
+            data64: std::ptr::null_mut(),
+            channel_count: 2,
+            latency: 0,
+            constant_mask: 0,
+        }];
+        let process = clap_process_t {
+            steady_time: 0,
+            frames_count: 8,
+            transport: std::ptr::null(),
+            audio_inputs: input_buffers.as_ptr(),
+            audio_outputs: output_buffers.as_mut_ptr(),
+            audio_inputs_count: 1,
+            audio_outputs_count: 1,
+            in_events: &input_events,
+            out_events: std::ptr::null(),
+        };
+
+        let status = unsafe { ((*plugin).process.unwrap())(plugin, &process) };
+        assert_eq!(status, CLAP_PROCESS_CONTINUE);
+
+        let seen = SEEN.lock().unwrap().take().expect("process ran");
+
+        // The expression survives the whole chain with its addressing intact.
+        // CLAP carries channel and key, so unlike VST3 they must be `Some`.
+        assert_eq!(
+            seen.expressions,
+            vec![("Tuning".to_string(), Some(1), Some(64), Some(42), 0.25, 3)],
+            "raw CLAP note expression must arrive as a core NoteExpression"
+        );
+
+        // The modulation arrives keyed by the *string* id, translated from the
+        // numeric CLAP id by the backend.
+        assert_eq!(
+            seen.param_mods,
+            vec![("depth".to_string(), -0.75, 5)],
+            "raw CLAP param mod must arrive as a core ParamMod"
+        );
+
+        // And it must not have leaked into the automation stream, which is what
+        // would put a modulation into saved state.
+        assert!(
+            seen.param_changes.is_empty(),
+            "modulation must never appear as a parameter change, got {:?}",
+            seen.param_changes
+        );
+
+        unsafe {
+            ((*plugin).stop_processing.unwrap())(plugin);
+            ((*plugin).deactivate.unwrap())(plugin);
+            ((*plugin).destroy.unwrap())(plugin);
+        }
     }
 }
 

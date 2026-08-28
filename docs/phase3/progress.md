@@ -267,3 +267,48 @@
   若后续运行出现 `took n attempts` 日志，即为加固确实在吸收竞态的证据；若再出现
   三次全失败，则为真实回归，需深入 baseview 命中测试 / D3D 首帧 / SendInput 时序。
   下一个瓶颈是第 4 项 backend 层 expression/mod 端到端映射测试。
+
+### 2026-08-28 — M1 第 4 项：backend 端到端 expression/mod 映射测试（发现并修复 VST3 expression 完全失效）
+
+- Command/platform: macOS ARM64，分支 `phase3/framework-dsp-library`。
+- Change:
+  - backend_clap 新增 `raw_clap_expression_and_mod_events_reach_the_core_queue`：
+    构造原始 `clap_event_note_expression_t` 与 `clap_event_param_mod_t`，经真实
+    `clap_input_events_t` vtable 与真实 CLAP ABI `process` 进入插件，在插件的
+    `process` 内读取 core `EventQueue` 并断言——expression 的 kind/channel/key/
+    note_id/value/offset 全部保真（CLAP 携带 channel/key，故为 `Some`）、
+    param mod 由数值 id 正确译回字符串 id 且 amount/offset 保真、
+    且 **modulation 不出现在 `param_changes()`**（否则会流入插件 state）。
+  - backend_vst3 新增 `raw_vst3_expression_events_reach_the_core_queue`：构造原始
+    `NoteExpressionValueEvent` 经真实 `IEventList` 进入，断言 kind/note_id/value/
+    offset 保真、**VST3 侧 channel/key 为 `None`**（文档化的降级）、未知 type id
+    保留为 `Unknown(9999)` 而非被丢弃，并与一个交错的 MIDI note 一起断言
+    **三路归并按 sample offset 排序**（expression@2 → midi@3 → expression@4）。
+  - **修复真实缺陷（由该测试发现）**：VST3 backend 的 `note_expression` 回调直接
+    push 进 `self.event_queue`，而 `process` 在合并本块事件前会
+    `self.event_queue.clear()`——**clear 发生在回调之后，于是每个 VST3 note
+    expression 都被静默丢弃，插件永远收不到**。MIDI 不受影响是因为它走
+    `pending_midi` 暂存再合并，expression 没有对应暂存。修法：新增
+    `pending_expressions`（与 `pending_midi` 同容量策略与 `try_reserve_exact`
+    预分配，故 audio callback 仍零分配），`append_timed_events` 改为 param/MIDI/
+    expression 三路按 offset 归并（并列时序 param → MIDI → expression，确定性），
+    并在 deactivate/reset/overflow 三处与 `pending_midi` 一同清空。
+  - 说明该缺陷为何一直未被发现：`_rs` 层测试证明 vst3_rs 正确分发
+    `kNoteExpressionValueEvent`，core/fixture 测试（`sunmao_syn_poly_expr`）直接调
+    `plugin.process` 证明 core 正确处理 expression——**缺口恰在中间的 backend**，
+    而 Phase 2 从未在该层做端到端测试。这正是本项存在的意义。
+- Result:
+  - 两个新测试通过；`sunmao_backend_vst3` 24 测试全绿。
+  - `RUSTFLAGS=-Awarnings cargo test --locked` 115 套件全绿、exit 0。
+  - 零分配未回退：`cargo test --release --locked` 的 realtime allocation matrix
+    四个 crate 全绿，`unified_vst3_audio_processing_does_not_use_the_allocator` 与
+    `unified_vst3_effect_processing_does_not_use_the_allocator` 通过。
+  - `cargo metadata --locked`、`cargo fmt --all -- --check`、`git diff --check` 通过；
+    `cargo check --locked --target x86_64-pc-windows-msvc` 覆盖两个 backend 通过；
+    `tools/package_examples.sh --debug --test` 退出 0、24 套件各 19/19。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/m1d_test.log`、`/tmp/m1d_pkg.log`、
+  `/tmp/m1d_win.log`）——本地证据等级。
+- Unresolved: 待三平台 hosted 全绿方可把遗留表第 4 项改为"已实现"。M1 余下 3 项未开始，
+  下一个瓶颈是第 5 项 `migrate_state` backend 接线。**遗留观察**：测试中发现
+  `DenseEventList` 等既有测试用 COM 结构未标 `#[repr(C)]`，其 vtbl 在首字段属侥幸；
+  本次新增的 `ExprEventList` 已显式标注，既有的未改（不在本项范围，且当前行为正确）。

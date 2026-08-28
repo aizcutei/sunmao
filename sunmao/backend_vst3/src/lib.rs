@@ -82,6 +82,13 @@ pub struct SunmaoVst3Wrapper<P: SunmaoPlugin> {
     output_buffers: Vec<Vec<f32>>,
     // MIDI event queue for synths
     pending_midi: Vec<PendingMidi>,
+    /// Note expressions buffered for this block.
+    ///
+    /// They cannot be pushed straight into `event_queue`: `process` clears that
+    /// queue before merging the block's events, and the host delivers
+    /// expressions through callbacks that run *before* `process`. Buffering
+    /// here and merging alongside MIDI is what keeps them from being dropped.
+    pending_expressions: Vec<PendingExpression>,
     // False when the plugin-declared event bound could not be reserved during
     // construction. In that case note callbacks must fail closed instead of
     // allocating on the realtime thread.
@@ -102,6 +109,12 @@ pub struct SunmaoVst3Wrapper<P: SunmaoPlugin> {
 #[derive(Clone, Copy)]
 struct PendingMidi {
     message: MidiMessage,
+    sequence: u32,
+}
+
+#[derive(Clone, Copy)]
+struct PendingExpression {
+    expression: SunmaoNoteExpression,
     sequence: u32,
 }
 
@@ -133,15 +146,56 @@ fn parent_window_from_raw(parent: RawWindowHandle) -> Option<ParentWindow> {
 fn append_timed_events(
     parameter_changes: &[Vst3ParamChange],
     midi_events: &mut Vec<PendingMidi>,
+    expressions: &mut Vec<PendingExpression>,
     descriptors: &[ParamDescriptor],
     events: &mut EventQueue,
 ) -> bool {
     midi_events.sort_unstable_by_key(|event| (event.message.offset, event.sequence));
+    expressions.sort_unstable_by_key(|event| (event.expression.offset, event.sequence));
     let mut parameter_index = 0;
     let mut midi_index = 0;
+    let mut expression_index = 0;
     let mut success = true;
 
-    while parameter_index < parameter_changes.len() || midi_index < midi_events.len() {
+    while parameter_index < parameter_changes.len()
+        || midi_index < midi_events.len()
+        || expression_index < expressions.len()
+    {
+        // Merge three sample-ordered streams. Ties resolve parameter, then
+        // MIDI, then expression, so a block's ordering is deterministic.
+        let next_offset = [
+            parameter_changes
+                .get(parameter_index)
+                .map(|change| change.sample_offset),
+            midi_events
+                .get(midi_index)
+                .map(|event| event.message.offset),
+            expressions
+                .get(expression_index)
+                .map(|event| event.expression.offset),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+        .expect("at least one stream is non-empty");
+
+        if expression_index < expressions.len()
+            && expressions[expression_index].expression.offset == next_offset
+            && !(parameter_index < parameter_changes.len()
+                && parameter_changes[parameter_index].sample_offset == next_offset)
+            && !(midi_index < midi_events.len()
+                && midi_events[midi_index].message.offset == next_offset)
+        {
+            if !events.push(Event::NoteExpression(
+                expressions[expression_index].expression,
+            )) {
+                success = false;
+                break;
+            }
+            expression_index += 1;
+            continue;
+        }
+
         let take_parameter = parameter_index < parameter_changes.len()
             && (midi_index == midi_events.len()
                 || parameter_changes[parameter_index].sample_offset
@@ -173,6 +227,7 @@ fn append_timed_events(
     }
 
     midi_events.clear();
+    expressions.clear();
     success
 }
 
@@ -354,8 +409,12 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
             .map(|bus| bus.channels as usize)
             .sum::<usize>();
         let mut pending_midi = Vec::new();
+        let mut pending_expressions = Vec::new();
         let pending_midi_capacity_available = P::MAX_EVENTS_PER_BLOCK <= MAX_PROCESS_EVENTS
             && pending_midi
+                .try_reserve_exact(P::MAX_EVENTS_PER_BLOCK)
+                .is_ok()
+            && pending_expressions
                 .try_reserve_exact(P::MAX_EVENTS_PER_BLOCK)
                 .is_ok();
         // `Plugin::new` is an ABI-mandated infallible constructor. A malformed
@@ -383,6 +442,7 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
             input_buffers: Vec::new(),
             output_buffers: Vec::new(),
             pending_midi,
+            pending_expressions,
             pending_midi_capacity_available,
             event_capacity_available: event_queue_capacity_available
                 && pending_midi_capacity_available,
@@ -423,6 +483,7 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
     fn deactivate(&mut self) {
         self.plugin.reset();
         self.pending_midi.clear();
+        self.pending_expressions.clear();
         self.event_overflowed = false;
         self.event_queue.clear();
     }
@@ -464,6 +525,7 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
         // Forward it to the actual SunMao instance and discard queued events.
         self.plugin.reset();
         self.pending_midi.clear();
+        self.pending_expressions.clear();
         self.event_overflowed = false;
         self.event_queue.clear();
         for buffer in &mut self.input_buffers {
@@ -595,13 +657,17 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
             key: None,
             value,
         };
-        if !self.event_capacity_available {
+        if !self.event_capacity_available
+            || self.pending_expressions.len() >= P::MAX_EVENTS_PER_BLOCK
+        {
             self.event_overflowed = true;
             return;
         }
-        if !self.event_queue.push(Event::NoteExpression(expression)) {
-            self.event_overflowed = true;
-        }
+        let sequence = self.pending_expressions.len() as u32;
+        self.pending_expressions.push(PendingExpression {
+            expression,
+            sequence,
+        });
     }
 
     fn note_off(&mut self, sample_offset: u32, channel: i16, pitch: i16, velocity: f32) {
@@ -624,6 +690,7 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
     fn process(&mut self, ctx: &mut ProcessContext) -> ProcessResult {
         if self.event_overflowed {
             self.pending_midi.clear();
+            self.pending_expressions.clear();
             self.event_overflowed = false;
             return Err(ProcessError::OutOfMemory);
         }
@@ -680,6 +747,7 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
         if !append_timed_events(
             ctx.param_changes(),
             &mut self.pending_midi,
+            &mut self.pending_expressions,
             &self.param_descriptors,
             &mut self.event_queue,
         ) {
@@ -1994,7 +2062,13 @@ mod tests {
         let mut events = EventQueue::with_capacity(4);
 
         let (merged, allocator_calls) = count_allocator_calls(|| {
-            append_timed_events(&parameter_changes, &mut midi, &[descriptor], &mut events)
+            append_timed_events(
+                &parameter_changes,
+                &mut midi,
+                &mut Vec::new(),
+                &[descriptor],
+                &mut events,
+            )
         });
         assert!(merged);
         assert_eq!(allocator_calls, 0);
@@ -2046,6 +2120,7 @@ mod tests {
         assert!(!append_timed_events(
             &parameter_changes,
             &mut midi,
+            &mut Vec::new(),
             &[descriptor],
             &mut events
         ));
@@ -2600,5 +2675,245 @@ mod tests {
         assert_eq!(context.bar_number, None);
         assert_eq!(context.loop_beats, None);
         assert_eq!(context.sample_pos, 0);
+    }
+
+    // ======= Raw host event -> core queue (Phase 3 M1 item 4) =======
+
+    /// Note expressions the plugin found in its core queue.
+    static VST3_SEEN_EXPRESSIONS: Mutex<
+        Vec<(String, Option<u8>, Option<u8>, Option<i32>, f64, u32)>,
+    > = Mutex::new(Vec::new());
+    /// Parameter changes seen in the same block, to prove nothing leaked.
+    static VST3_SEEN_CHANGES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static VST3_EXPR_TEST_LOCK: Mutex<()> = Mutex::new(());
+    /// Every event in queue order, as (kind, sample offset).
+    static VST3_SEEN_ORDER: Mutex<Vec<(&'static str, u32)>> = Mutex::new(Vec::new());
+
+    #[derive(Default)]
+    struct ExprSynthPlugin;
+
+    impl SunmaoPlugin for ExprSynthPlugin {
+        const NAME: &'static str = "VST3 Expression Mapping Test";
+        const VENDOR: &'static str = "SunMao Test";
+        const URL: &'static str = "https://example.invalid";
+        type Params = EmptyParams;
+
+        fn accepts_midi(&self) -> bool {
+            true
+        }
+
+        fn input_channels(&self) -> u32 {
+            0
+        }
+
+        fn params(&self) -> Arc<Self::Params> {
+            Arc::new(EmptyParams)
+        }
+
+        fn process(
+            &mut self,
+            _buffer: &mut AudioBuffer,
+            events: &EventQueue,
+            _context: &SunmaoProcessContext,
+        ) -> ProcessStatus {
+            let mut order = VST3_SEEN_ORDER.lock().unwrap();
+            for event in events.iter() {
+                match event {
+                    Event::NoteExpression(expression) => {
+                        order.push(("expression", expression.offset))
+                    }
+                    Event::Midi(midi) => order.push(("midi", midi.offset)),
+                    _ => {}
+                }
+            }
+            drop(order);
+            let mut expressions = VST3_SEEN_EXPRESSIONS.lock().unwrap();
+            for event in events.iter() {
+                if let Event::NoteExpression(expression) = event {
+                    expressions.push((
+                        format!("{:?}", expression.kind),
+                        expression.channel,
+                        expression.key,
+                        expression.note_id,
+                        expression.value,
+                        expression.offset,
+                    ));
+                }
+            }
+            let mut changes = VST3_SEEN_CHANGES.lock().unwrap();
+            for change in events.param_changes() {
+                changes.push(change.id.to_string());
+            }
+            ProcessStatus::Normal
+        }
+    }
+
+    /// `repr(C)` matters: the wrapper reads the first pointer-sized field as
+    /// the COM vtable, so the field order must not be reordered.
+    #[repr(C)]
+    struct ExprEventList {
+        vtbl: *const IEventListVtbl,
+        events: Vec<Vst3Event>,
+    }
+
+    unsafe extern "system" fn expr_event_count(this: *mut c_void) -> i32 {
+        if this.is_null() {
+            return 0;
+        }
+        unsafe { (*(this as *const ExprEventList)).events.len() as i32 }
+    }
+
+    unsafe extern "system" fn expr_event_get(
+        this: *mut c_void,
+        index: i32,
+        event: *mut Vst3Event,
+    ) -> i32 {
+        if this.is_null() || event.is_null() || index < 0 {
+            return kInvalidArgument;
+        }
+        let events = unsafe { &(*(this as *const ExprEventList)).events };
+        let Some(source) = events.get(index as usize) else {
+            return kInvalidArgument;
+        };
+        unsafe { *event = *source };
+        kResultOk
+    }
+
+    static EXPR_EVENT_LIST_VTBL: IEventListVtbl = IEventListVtbl {
+        unknown: IUnknownVtbl {
+            query_interface: event_query_interface,
+            add_ref: event_add_ref,
+            release: event_release,
+        },
+        get_event_count: expr_event_count,
+        get_event: expr_event_get,
+        add_event: event_add,
+    };
+
+    fn vst3_expression_event(
+        sample_offset: i32,
+        type_id: u32,
+        note_id: i32,
+        value: f64,
+    ) -> Vst3Event {
+        use vst3_rs::vst3_sys::vst::ievents::NoteExpressionValueEvent;
+        Vst3Event {
+            bus_index: 0,
+            sample_offset,
+            ppq_position: 0.0,
+            flags: 0,
+            type_: EventTypes::kNoteExpressionValueEvent,
+            event: Vst3EventData {
+                note_expression_value: NoteExpressionValueEvent {
+                    type_id,
+                    note_id,
+                    value,
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn raw_vst3_expression_events_reach_the_core_queue() {
+        use vst3_rs::vst3_sys::vst::ievents::NoteExpressionTypeIDs;
+
+        let _serialize = VST3_EXPR_TEST_LOCK.lock().unwrap();
+        VST3_SEEN_EXPRESSIONS.lock().unwrap().clear();
+        VST3_SEEN_CHANGES.lock().unwrap().clear();
+        VST3_SEEN_ORDER.lock().unwrap().clear();
+
+        unsafe {
+            let processor = ProcessorWrapper::<SunmaoVst3Wrapper<ExprSynthPlugin>>::new([0; 16]);
+            let component = processor.cast::<c_void>();
+            let component_vtbl = *(component as *const *const IComponentVtbl);
+            assert_eq!(
+                ((*component_vtbl).base.initialize)(component, std::ptr::null_mut()),
+                kResultOk
+            );
+            let audio = query_audio_processor(component);
+            let audio_vtbl = *(audio as *const *const IAudioProcessorVtbl);
+            let mut setup = ProcessSetup {
+                process_mode: ProcessModes::kRealtime,
+                symbolic_sample_size: SymbolicSampleSizes::kSample32,
+                max_samples_per_block: 8,
+                sample_rate: 48_000.0,
+            };
+            assert_eq!(
+                ((*audio_vtbl).setup_processing)(audio, &mut setup),
+                kResultOk
+            );
+            assert_eq!(((*component_vtbl).set_active)(component, 1), kResultOk);
+            assert_eq!(((*audio_vtbl).set_processing)(audio, 1), kResultOk);
+
+            let mut left = [0.0_f32; 8];
+            let mut right = [0.0_f32; 8];
+            let mut channels = [
+                left.as_mut_ptr().cast::<c_void>(),
+                right.as_mut_ptr().cast::<c_void>(),
+            ];
+            let mut outputs = [AudioBusBuffers {
+                num_channels: 2,
+                silence_flags: 0,
+                buffers: channels.as_mut_ptr(),
+            }];
+            let mut events = ExprEventList {
+                vtbl: &EXPR_EVENT_LIST_VTBL,
+                events: vec![
+                    vst3_expression_event(2, NoteExpressionTypeIDs::kTuningTypeID as u32, 7, 0.75),
+                    // An id VST3 does not name must still be delivered, with
+                    // its raw value preserved.
+                    vst3_expression_event(4, 9_999, 8, 0.25),
+                    // Interleaved between the two expressions, to pin the
+                    // three-way merge's sample ordering.
+                    vst3_note_event(3),
+                ],
+            };
+            let mut data = ProcessData {
+                process_mode: ProcessModes::kRealtime,
+                symbolic_sample_size: SymbolicSampleSizes::kSample32,
+                num_samples: 8,
+                num_inputs: 0,
+                num_outputs: 1,
+                inputs: std::ptr::null_mut(),
+                outputs: outputs.as_mut_ptr(),
+                input_parameter_changes: std::ptr::null_mut(),
+                output_parameter_changes: std::ptr::null_mut(),
+                input_events: (&mut events as *mut ExprEventList).cast::<c_void>(),
+                output_events: std::ptr::null_mut(),
+                process_context: std::ptr::null_mut(),
+            };
+
+            assert_eq!(((*audio_vtbl).process)(audio, &mut data), kResultOk);
+
+            let seen = VST3_SEEN_EXPRESSIONS.lock().unwrap().clone();
+            assert_eq!(
+                seen,
+                vec![
+                    // VST3 addresses notes only by note_id, so channel and key
+                    // are absent here where CLAP supplies them. This asymmetry
+                    // is the documented degradation, so pin it.
+                    ("Tuning".to_string(), None, None, Some(7), 0.75, 2),
+                    ("Unknown(9999)".to_string(), None, None, Some(8), 0.25, 4),
+                ],
+                "raw VST3 expression events must arrive as core NoteExpressions"
+            );
+            assert!(
+                VST3_SEEN_CHANGES.lock().unwrap().is_empty(),
+                "an expression must not surface as a parameter change"
+            );
+            // Expressions and MIDI must interleave by sample offset, not be
+            // appended in stream order.
+            assert_eq!(
+                VST3_SEEN_ORDER.lock().unwrap().as_slice(),
+                &[("expression", 2), ("midi", 3), ("expression", 4)],
+                "the merged block must be sample-ordered"
+            );
+
+            assert_eq!(((*audio_vtbl).set_processing)(audio, 0), kResultOk);
+            assert_eq!(((*component_vtbl).set_active)(component, 0), kResultOk);
+            assert_eq!(((*component_vtbl).base.terminate)(component), kResultOk);
+            ((*audio_vtbl).unknown.release)(audio);
+            ((*component_vtbl).base.unknown.release)(component);
+        }
     }
 }
