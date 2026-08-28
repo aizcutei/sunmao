@@ -520,3 +520,12 @@
   `/tmp/m2a_win.log`）——本地证据等级。
 - Unresolved: 待三平台 hosted 全绿。M2 余下两项：零分配参数 smoothing、
   effect/instrument template（新插件样板 ≤50 行）。
+
+### 2026-08-29 — M2 分组/嵌套验收：hosted run #57 三平台全绿
+
+- Command/platform: push `94b3542` 触发 GitHub Actions #57：https://github.com/aizcutei/sunmao/actions/runs/33189876572
+- Result: 三平台三个 job 同一 commit 全部 success、逐步骤零非成功步骤。新增的
+  `vst3_sys::IUnitInfo` 绑定与 shim 暴露路径、`clap_rs` 的 module 写入修正，
+  在三平台原生构建下全部通过。
+- Evidence/artifact: run #57 上传三平台 artifacts（50.0MB / 74.2MB / 918.2MB），均可下载。
+- Unresolved: M2 余下两项：零分配参数 smoothing、effect/instrument template。
