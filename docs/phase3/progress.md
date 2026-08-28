@@ -752,3 +752,24 @@
   则说明还有另一处释放顺序问题；若崩在其**之后**，则问题在运行器之外的进程收尾。
   M3 的 envelopes/oscillators 本身在 #65 的 macOS/Linux 已通过，但按"同 commit 三平台全绿"
   的判定标准仍未验收，将与本修复一并验收。
+
+### 2026-08-29 — M3 完成 + Windows WGPU 收尾段错误修复验收：hosted run #66 三平台全绿
+
+- Command/platform: push `9dd749b` 触发 GitHub Actions #66：https://github.com/aizcutei/sunmao/actions/runs/33199051341
+- Result: macOS ARM64、Windows x86_64、Ubuntu x86_64 三个 job 同一 commit 全部
+  success，逐步骤零非成功步骤；**"Package and exercise native GUI backends" 三平台
+  均 success**（#65 正是该步在 Windows 上 exit 139）。M3 三家族
+  （filters / envelopes / oscillators）与 host 库常驻修复一并验收。
+- Evidence/artifact: run #66 上传三平台 artifacts（50.0MB / 74.2MB / 918.2MB），均可下载。
+- **关于已知 flake 的处置更新**：该项此前记为"Windows WGPU 偶发在断言全过、打印 Done.
+  后 exit 139"。#65 复现后已定位到具体机制（host 结构体无 `Drop` impl，
+  `_lib` 按字段序在进程收尾时 `FreeLibrary` 卸载已初始化 D3D12 的插件模块）并修复
+  （`ManuallyDrop` 常驻）。**但必须诚实说明证据强度**：该失败本就是间歇性的，
+  **单次 Windows 绿不足以证明根因判断正确**——它与修复一致，但不是证明。
+  新增的 `Teardown complete.` 标记使后续任何一次复现都可定位：崩在该行之前＝释放/卸载
+  路径仍有问题；之后＝运行器之外的进程收尾。若长期不再复现，可在 M5 收尾时把该项
+  从"已知 flake"降级为"已修复"。
+- Unresolved: M3 完成。进入 M4：2x/4x oversampling（latency 接 Phase 2 契约并被 runner
+  断言）、dry/wet 与增益工具、peak/RMS metering（GUI 可读的无锁发布），
+  由 `sunmao_fx_os_dist` 与 `sunmao_fx_meter` 两个 fixture 消费验证。
+  仍挂账：instrument 模板 81 行未达 ≤50（需 voice/synth 抽象，非 M4 范围）。

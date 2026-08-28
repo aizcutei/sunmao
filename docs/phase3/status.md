@@ -53,8 +53,8 @@ M2 的验收方式是 grouped synth 换用分组 + smoothing + template 后测�
 | M0 脚手架 | 文档、4 fixtures、workspace/CI 骨架 | **完成**（三平台 hosted 全绿） | [run #41](https://github.com/aizcutei/sunmao/actions/runs/33167456623)（commit `9f65af5`）三 job success，"Test Phase 3 acceptance fixtures" 三平台均 success，artifacts 齐备 | — |
 | M1 Phase 2 收口 | 7 项遗留（见 phase2/status.md 遗留表），每项完成即更新该表 | **完成**：7/7 项全部验收（各自三平台 hosted 绿）（第 1 项 bus 激活/去激活回调 11 测试；第 2 项 speaker layout 动态协商 12 测试；第 3 项 runner 宿主侧断言 3 测试 + 套件 16→19、打包 20→24 套件；各自三平台 hosted 全绿）。原盘点（2026-08-28）已确认 `_sys` 层无缺口（`clap_sys::clap_plugin_audio_ports_activation_t`、`audio_ports_config` 全家族、`vst3_sys::IComponent::activate_bus`），缺口在 `_rs`/core，activation 与 `audio_ports_config`（layout 协商）两侧现均已补齐 | 第 1 项：[run #42](https://github.com/aizcutei/sunmao/actions/runs/33171119003)（commit `b78aca6`）；第 2 项：[run #44](https://github.com/aizcutei/sunmao/actions/runs/33174187893)（commit `1478189`）；第 3 项：[run #47](https://github.com/aizcutei/sunmao/actions/runs/33177884493)（commit `0e79bd2`）。三次均三 job success、全部 blocking 步骤零非成功、artifacts 齐备 | M1 七项全部落地后进入 M2（参数分组/smoothing/template） |
 | M2 参数系统与构造 API | 分组/嵌套、smoothing、effect/instrument template | **完成**（三项均三平台 hosted 全绿）（各自三平台 hosted 全绿）。smoothing 的指数 ramp 不终止与 `is_smoothing` 残余偏移两个缺陷由新增 proptest 抓出并修正（详见 progress.md）。自 `_sys` 补起：`vst3_sys` 新增 `IUnitInfo` 绑定（IID 自上游头文件转录），并修正 `clap_rs` 把 `info.module` 无条件清零的既有缺陷 | 分组：[run #57](https://github.com/aizcutei/sunmao/actions/runs/33189876572)（commit `94b3542`）；smoothing：[run #59](https://github.com/aizcutei/sunmao/actions/runs/33192422381)（commit `d0a13d3`）；template：[run #61](https://github.com/aizcutei/sunmao/actions/runs/33194134348)（commit `3374c5f`）。三次均三 job success、零非成功步骤、artifacts 齐备 | — （M2 完成；instrument 模板 86 行未达 ≤50，待 M3 的 oscillator/envelope 落地后重测） |
-| M3 DSP 基础组件 | `sunmao/dsp`：filters/envelopes/oscillators | 进行中：**filters 已验收**（三平台 hosted 全绿；一阶/SVF/biquad + 4 proptest；SVF fixture 已换组件实现且**测试零改动**通过；顺带修掉 f32 biquad 低 cutoff DC 增益 14% 失准）。**envelopes/oscillators 已落地待 hosted**（ADSR/follower、PolyBLEP sine/saw/pulse，+3 proptest；instrument 模板换用组件后 86→81 行，仍未达 ≤50，原因见 progress.md） | filters：[run #63](https://github.com/aizcutei/sunmao/actions/runs/33196120193)（commit `9db6ff0`）三 job success、零非成功步骤、artifacts 齐备 | hosted 验收后进入 M4（oversampling/mixing/metering） |
-| M4 oversampling/mixing/metering | 2x/4x oversampling、dry-wet/增益、peak/RMS metering | 未开始 | — | oversampler latency 接 Phase 2 契约并被 runner 断言 |
+| M3 DSP 基础组件 | `sunmao/dsp`：filters/envelopes/oscillators | **完成**：filters/envelopes/oscillators 三家族齐备且三平台 hosted 全绿。filters（三平台 hosted 全绿；一阶/SVF/biquad + 4 proptest；SVF fixture 已换组件实现且**测试零改动**通过；顺带修掉 f32 biquad 低 cutoff DC 增益 14% 失准）。**envelopes/oscillators 已验收**（ADSR/follower、PolyBLEP sine/saw/pulse，+3 proptest；instrument 模板换用组件后 86→81 行，**仍未达 ≤50**，原因见 progress.md） | filters：[run #63](https://github.com/aizcutei/sunmao/actions/runs/33196120193)（commit `9db6ff0`）三 job success、零非成功步骤、artifacts 齐备 | — （M3 完成；进入 M4） |
+| M4 oversampling/mixing/metering | 2x/4x oversampling、dry-wet/增益、peak/RMS metering | 进行中 | — | oversampler latency 接 Phase 2 契约并被 runner 断言；`sunmao_fx_os_dist` 与 `sunmao_fx_meter` fixture 消费验证 |
 | M5 版本兼容策略与总验收 | semver/state 兼容文档、proptest/文档收尾 | 未开始 | — | — |
 
 ## 完成规则
@@ -78,7 +78,7 @@ artifacts 可下载后，才把本文件状态改为 "Phase 3 完成"。任何�
   （commit `b78aca6`）三平台 native job 全绿，三个 job 的全部 blocking 步骤零非
   成功（Phase 1+2 既有 gate 与 "Test Phase 3 acceptance fixtures" 同时 success），
   artifacts `phase1-macOS-ARM64`（48.8MB）、`phase1-Windows-X64`（73.4MB）、
-  `phase1-Linux-X64`（912.1MB）可下载；#37 的 Windows WGPU 收尾段错误未复现。
+  `phase1-Linux-X64`（912.1MB）可下载；
   第 3 项（runner 宿主侧断言）已验收——hosted run #47（commit `0e79bd2`）三平台
   全绿、零非成功步骤，artifacts 齐备；该项当即发现并修复了 CLAP 激活期间 latency/
   tail 上报 0 的真实缺陷。第 4 项（backend 层 expression/mod 端到端映射测试）已验收——hosted
