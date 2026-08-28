@@ -279,6 +279,8 @@ jobs:
             sunmao_fx_os_dist
             sunmao_fx_meter
             sunmao_fx_layout_gain
+            sunmao_template_effect
+            sunmao_template_instrument
           )
           for fixture in "${fixtures[@]}"; do
             echo "::group::cargo test -p $fixture"

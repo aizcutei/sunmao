@@ -66,6 +66,8 @@ members = [
     "examples/sunmao_syn_grouped_params",
     "examples/sunmao_fx_svf",
     "examples/sunmao_fx_layout_gain",
+    "examples/sunmao_template_effect",
+    "examples/sunmao_template_instrument",
     "examples/sunmao_fx_os_dist",
     "examples/sunmao_fx_meter",
 ]

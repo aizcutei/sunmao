@@ -4890,6 +4890,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sunmao_template_effect"
+version = "0.1.0"
+dependencies = [
+ "sunmao",
+]
+
+[[package]]
+name = "sunmao_template_instrument"
+version = "0.1.0"
+dependencies = [
+ "sunmao",
+]
+
+[[package]]
 name = "sunmao_unittest_runner"
 version = "0.1.0"
 dependencies = [

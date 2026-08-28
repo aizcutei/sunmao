@@ -584,3 +584,35 @@
   matrix 保持绿色。
 - Evidence/artifact: run #59 上传三平台 artifacts（50.0MB / 74.2MB / 918.2MB），均可下载。
 - Unresolved: M2 余下最后一项：effect/instrument template（新插件样板 ≤50 行）。
+
+### 2026-08-29 — M2 第三项：effect/instrument template（effect 达标 50 行，instrument 未达标并说明原因）
+
+- Command/platform: macOS ARM64，分支 `phase3/framework-dsp-library`。
+- Change:
+  - 新增 `examples/sunmao_template_effect`（**恰好 50 行**）与
+    `examples/sunmao_template_instrument`（86 行），均为可真正编译成 VST3+CLAP 的
+    起始骨架，并入 workspace 与 CI 的 Phase 3 fixture 列表。
+  - 新增 `sunmao/tests/template_size.rs`：**用测试机械强制行数预算**
+    （`include_str!` + 行数断言），而不是在文档里声称。effect 断言 ≤50；
+    instrument 钉住当前 86 行上限（不得静默增长），并额外断言它**仍然大于 50**——
+    这样一旦 M3 让它降到预算内，测试会主动失败提醒把断言改回预算并更新 status。
+  - **先核实而未改动**：原以为 `Vst3Info::default()` 的全零 `class_id` 与
+    `ClapInfo::default()` 的空 id 是碰撞隐患，读代码后确认两个 backend **早已**
+    在未设置时从 `VENDOR::NAME` 派生唯一 id（`backend_vst3` 的 `class_id()`、
+    `backend_clap` 导出宏的 `resolved_id`）。因此模板可以完全省略
+    `vst3_info`/`clap_info` 两个函数——省下约 14 行且不教坏习惯。**没有去"修"不存在的问题。**
+- Result:
+  - `RUSTFLAGS=-Awarnings cargo test --locked` 120 套件全绿、exit 0（新增 3 个套件）。
+  - 两个模板 cdylib 均只导出 `GetPluginFactory` + `clap_entry`，`nm -gU` 复查无 AU 符号。
+  - metadata/fmt/diff-check、workflow YAML 解析通过；Windows 交叉 check 通过；
+    `tools/package_examples.sh --debug --test` 退出 0、24 套件各 19/19。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/m2c_test.log`、`/tmp/m2c_pkg.log`、
+  `/tmp/m2c_win.log`）——本地证据等级。
+- Unresolved（**诚实标注未达标项**）：instrument 模板 86 行，**未达到 ≤50 行目标**。
+  原因：一个能真正发声的乐器需要 voice 管理（note on/off、相位、频率换算），
+  而在 `sunmao/dsp` 提供 oscillator/envelope 之前（正是 **M3** 的内容），这些代码
+  只能写在模板里。我没有为了凑数把 DSP 从模板里删掉（那会变成不能用的模板），
+  也没有把"样板行数"重新定义成不含 process 体（那是为了达标而改测量口径）。
+  M3 落地后应重测并把 `template_size.rs` 的 instrument 断言改为预算。
+  已识别的另一个减负杠杆：让 `#[derive(Params)]` 依属性生成 `Default`
+  （`#[param(default=, min=, max=)]`），两个模板各可再省约 7 行——未做，属独立改动。
