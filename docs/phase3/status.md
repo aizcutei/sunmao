@@ -50,7 +50,7 @@ M2 的验收方式是 grouped synth 换用分组 + smoothing + template 后测�
 | Milestone | 范围 | 当前判断 | 权威证据 | 下一步 |
 |---|---|---|---|---|
 | M0 脚手架 | 文档、4 fixtures、workspace/CI 骨架 | **完成**（三平台 hosted 全绿） | [run #41](https://github.com/aizcutei/sunmao/actions/runs/33167456623)（commit `9f65af5`）三 job success，"Test Phase 3 acceptance fixtures" 三平台均 success，artifacts 齐备 | — |
-| M1 Phase 2 收口 | 7 项遗留（见 phase2/status.md 遗留表），每项完成即更新该表 | 进行中：**4/7 项已验收 + 1 项待 hosted**（第 1 项 bus 激活/去激活回调 11 测试；第 2 项 speaker layout 动态协商 12 测试；第 3 项 runner 宿主侧断言 3 测试 + 套件 16→19、打包 20→24 套件；各自三平台 hosted 全绿）。原盘点（2026-08-28）已确认 `_sys` 层无缺口（`clap_sys::clap_plugin_audio_ports_activation_t`、`audio_ports_config` 全家族、`vst3_sys::IComponent::activate_bus`），缺口在 `_rs`/core，activation 与 `audio_ports_config`（layout 协商）两侧现均已补齐 | 第 1 项：[run #42](https://github.com/aizcutei/sunmao/actions/runs/33171119003)（commit `b78aca6`）；第 2 项：[run #44](https://github.com/aizcutei/sunmao/actions/runs/33174187893)（commit `1478189`）；第 3 项：[run #47](https://github.com/aizcutei/sunmao/actions/runs/33177884493)（commit `0e79bd2`）。三次均三 job success、全部 blocking 步骤零非成功、artifacts 齐备 | 第 6 项 `clap.preset-load` 与 VST3 program list（统一为插件侧载入回调 + 状态应用） |
+| M1 Phase 2 收口 | 7 项遗留（见 phase2/status.md 遗留表），每项完成即更新该表 | 进行中：**5/7 项已验收**（第 1 项 bus 激活/去激活回调 11 测试；第 2 项 speaker layout 动态协商 12 测试；第 3 项 runner 宿主侧断言 3 测试 + 套件 16→19、打包 20→24 套件；各自三平台 hosted 全绿）。原盘点（2026-08-28）已确认 `_sys` 层无缺口（`clap_sys::clap_plugin_audio_ports_activation_t`、`audio_ports_config` 全家族、`vst3_sys::IComponent::activate_bus`），缺口在 `_rs`/core，activation 与 `audio_ports_config`（layout 协商）两侧现均已补齐 | 第 1 项：[run #42](https://github.com/aizcutei/sunmao/actions/runs/33171119003)（commit `b78aca6`）；第 2 项：[run #44](https://github.com/aizcutei/sunmao/actions/runs/33174187893)（commit `1478189`）；第 3 项：[run #47](https://github.com/aizcutei/sunmao/actions/runs/33177884493)（commit `0e79bd2`）。三次均三 job success、全部 blocking 步骤零非成功、artifacts 齐备 | 第 6 项 `clap.preset-load` 与 VST3 program list（统一为插件侧载入回调 + 状态应用） |
 | M2 参数系统与构造 API | 分组/嵌套、smoothing、effect/instrument template | 未开始 | — | 读 vst3_sys `IUnitInfo` 与 clap_sys params module 路径约定 |
 | M3 DSP 基础组件 | `sunmao/dsp`：filters/envelopes/oscillators | 未开始 | — | 新 crate + SVF fixture 换组件实现 |
 | M4 oversampling/mixing/metering | 2x/4x oversampling、dry-wet/增益、peak/RMS metering | 未开始 | — | oversampler latency 接 Phase 2 契约并被 runner 断言 |
@@ -83,8 +83,8 @@ artifacts 可下载后，才把本文件状态改为 "Phase 3 完成"。任何�
   tail 上报 0 的真实缺陷。第 4 项（backend 层 expression/mod 端到端映射测试）已验收——hosted
   run #49（commit `03a53eb`）三平台全绿、零非成功步骤；该项同样当即发现并修复了一个
   更严重的缺陷：**VST3 note expression 从未真正到达插件**（backend 在回调之后 clear
-  事件队列，Phase 2 M4 标记完成时即已失效）。第 5 项（`migrate_state` backend 接线）
-  本地就绪待 hosted，同样发现根因不在 core：两个 `_rs` 层把 state 版本硬编码为 1，
-  插件声明的 `STATE_VERSION` 从未写入或比对，`migrate_state` 因此永远不可能触发。
-  其余 2 项未开始。
+  事件队列，Phase 2 M4 标记完成时即已失效）。第 5 项（`migrate_state` backend 接线）已验收——hosted
+  run #51（commit `7999b73`）三平台全绿、零非成功步骤；同样发现根因不在 core：两个
+  `_rs` 层把 state 版本硬编码为 1，插件声明的 `STATE_VERSION` 从未写入或比对，
+  `migrate_state` 因此永远不可能触发。其余 2 项未开始。
 - 分支：`phase3/framework-dsp-library`（自 main `2df01ce` 切出）。

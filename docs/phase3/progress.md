@@ -365,3 +365,16 @@
   修复后会被当作 v1 读入并触发 `migrate_state(1)`。`sunmao_state_migration` 的迁移是
   幂等的（把 trim 设为常量）故无害，但非幂等迁移的插件需自行权衡；已记入 semantics.md。
   M1 余下 2 项，下一个瓶颈是第 6 项 preset-load / program list。
+
+### 2026-08-28 — M1 第 5 项验收：hosted run #51 三平台全绿
+
+- Command/platform: push `7999b73` 触发 GitHub Actions #51：https://github.com/aizcutei/sunmao/actions/runs/33182548781
+- Result: macOS ARM64、Windows x86_64、Ubuntu x86_64 三个 job 同一 commit 全部
+  success，逐步骤复查零非成功步骤。state 版本改由插件提供后，既有 fixture 的
+  state round-trip 在三平台保持绿色（硬性规则），三个新增的真实 stream ABI
+  迁移测试全部通过。
+- Evidence/artifact: run #51 上传 `phase1-macOS-ARM64`（49.5MB）、
+  `phase1-Windows-X64`（73.9MB）、`phase1-Linux-X64`（915.7MB），均可下载。
+- Unresolved: phase2/status.md 遗留表第 5 项已改为"已实现"（5/7 关闭）。
+  下一个瓶颈是第 6 项：`clap.preset-load` 与 VST3 program list，统一为
+  "插件侧载入回调 + 状态应用"，program list 可选实现。
