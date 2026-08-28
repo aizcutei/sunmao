@@ -95,3 +95,10 @@
   - Windows target check（两 backend + fixture）通过；`tools/package_examples.sh --debug --test` 退出 0，Phase 1 的 20 个 runner 套件仍各 16/16——本轮改了两个 backend 的通道拓扑推导，这条回归是关键证据。
 - Evidence/artifact: macOS ARM64 本地日志（`/tmp/phase2_m3_test.log`、`/tmp/phase2_m3_pkg.log`）——本地证据等级。
 - Unresolved: 三平台 hosted 验证本 commit 后 M3 才算完成。仍未做：bus 激活/去激活回调、speaker layout 动态协商（`setBusArrangements` 目前仍按声明固定接受）、runner 侧多 bus 宿主测试——这三项列为 M3 收尾或 M6 收口项。
+
+### 2026-08-28 — M3 核心完成：hosted run #33 三平台全绿
+
+- Command/platform: push `1daf86e` 触发 GitHub Actions #33：https://github.com/aizcutei/sunmao/actions/runs/33160731528
+- Result: macOS ARM64、Windows x86_64、Ubuntu x86_64 三个 job 同一 commit 全部 success。bus 声明模型与 sidechain 路由在两种格式、三个平台通过；改动了两个 backend 的通道拓扑推导后，Phase 1 既有 gate（含 GUI matrix、standalone、packager、runner）仍保持绿色。
+- Evidence/artifact: run #33 上传 `phase1-macOS-ARM64`（51.0MB）、`phase1-Windows-X64`（76.8MB）、`phase1-Linux-X64`（955.8MB）。
+- Unresolved: M3 的三项延后工作（bus 激活/去激活回调、speaker layout 动态协商、runner 多 bus 宿主测试）转入 M6 收口。进入 M4；M4 盘点：`_sys` 两侧齐全（`clap_sys` 有 `CLAP_EVENT_NOTE_EXPRESSION`/`CLAP_EVENT_PARAM_MOD` 与 expression 种类常量，`vst3_sys::ievents` 有 `NoteExpressionValueEvent`），`clap_rs::Plugin` 已有 `voice_info()`；**最大缺口在 `_rs` 事件层**——`clap_rs::Event` 只有 5 个变体，note expression 与 param mod 都落入 `Unknown` 被静默丢弃，违反 semantics.md 的"严禁静默丢事件"，必须先修。
