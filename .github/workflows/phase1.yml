@@ -40,6 +40,8 @@ jobs:
             synth-webview-binary: target/debug/libsunmao_syn_sine_gui_webview.so
             lpf-binary: target/debug/libsunmao_fx_lpf_gui_gl.so
             daw-binary: target/debug/libsunmao_daw_info_gui.so
+            delay-binary: target/debug/libsunmao_fx_tempo_delay.so
+            sidechain-binary: target/debug/libsunmao_fx_sidechain_comp.so
             executable-suffix: ""
           - name: macOS native
             os: macos-latest
@@ -53,6 +55,8 @@ jobs:
             synth-webview-binary: target/debug/libsunmao_syn_sine_gui_webview.dylib
             lpf-binary: target/debug/libsunmao_fx_lpf_gui_gl.dylib
             daw-binary: target/debug/libsunmao_daw_info_gui.dylib
+            delay-binary: target/debug/libsunmao_fx_tempo_delay.dylib
+            sidechain-binary: target/debug/libsunmao_fx_sidechain_comp.dylib
             executable-suffix: ""
           - name: Windows x86_64
             os: windows-latest
@@ -66,6 +70,8 @@ jobs:
             synth-webview-binary: target/debug/sunmao_syn_sine_gui_webview.dll
             lpf-binary: target/debug/sunmao_fx_lpf_gui_gl.dll
             daw-binary: target/debug/sunmao_daw_info_gui.dll
+            delay-binary: target/debug/sunmao_fx_tempo_delay.dll
+            sidechain-binary: target/debug/sunmao_fx_sidechain_comp.dll
             executable-suffix: .exe
 
     steps:
@@ -384,6 +390,8 @@ jobs:
           runner="target/debug/sunmao_unittest_runner${{ matrix.executable-suffix }}"
           output="target/phase1-artifacts/SunMaoGain"
           synth_output="target/phase1-artifacts/SunMaoSine"
+          delay_output="target/phase1-artifacts/SunMaoTempoDelay"
+          sidechain_output="target/phase1-artifacts/SunMaoSidechainComp"
           standalone_dir="target/phase1-artifacts/standalone"
           gain_standalone="target/debug/sunmao_fx_gain_standalone${{ matrix.executable-suffix }}"
           synth_standalone="target/debug/sunmao_syn_sine_standalone${{ matrix.executable-suffix }}"
@@ -427,6 +435,24 @@ jobs:
             --name "SunMao Sine Synth" \
             --bundle-id com.sunmao.synth.sine \
             --version 1.0.0
+          # Phase 2 contract fixtures. The Phase 1 gain/sine plugins report zero
+          # latency, no tail and a single input bus, so the runner's host-side
+          # latency/tail, bus-topology and sidechain-routing assertions would
+          # only ever take their skip paths without these two.
+          for format in vst3 clap; do
+            "$packager" "$format" \
+              --binary "${{ matrix.delay-binary }}" \
+              --out "$delay_output" \
+              --name "SunMao Tempo Delay" \
+              --bundle-id com.sunmao.fx.tempo-delay \
+              --version 1.0.0
+            "$packager" "$format" \
+              --binary "${{ matrix.sidechain-binary }}" \
+              --out "$sidechain_output" \
+              --name "SunMao Sidechain Comp" \
+              --bundle-id com.sunmao.fx.sidechain-comp \
+              --version 1.0.0
+          done
           "$packager" standalone \
             --binary "$gain_standalone" \
             --out "$gain_standalone_output" \
@@ -458,6 +484,10 @@ jobs:
           "$runner" test "$output.clap" 2>&1 | tee "$output.clap.test.log"
           "$runner" test "$synth_output.vst3" 2>&1 | tee "$synth_output.vst3.test.log"
           "$runner" test "$synth_output.clap" 2>&1 | tee "$synth_output.clap.test.log"
+          "$runner" test "$delay_output.vst3" 2>&1 | tee "$delay_output.vst3.test.log"
+          "$runner" test "$delay_output.clap" 2>&1 | tee "$delay_output.clap.test.log"
+          "$runner" test "$sidechain_output.vst3" 2>&1 | tee "$sidechain_output.vst3.test.log"
+          "$runner" test "$sidechain_output.clap" 2>&1 | tee "$sidechain_output.clap.test.log"
           "$gain_standalone" --smoke 2>&1 | tee "$gain_standalone_output.raw.smoke.log"
           "$synth_standalone" --smoke 2>&1 | tee "$synth_standalone_output.raw.smoke.log"
           "$packaged_gain" --smoke 2>&1 | tee "$gain_standalone_output.packaged.smoke.log"

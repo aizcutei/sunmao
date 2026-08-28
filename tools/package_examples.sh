@@ -78,6 +78,16 @@ EXAMPLES=(
   "sunmao_syn_sine_gui_gl|SunMao Sine Synth GL|com.sunmao.synth.sine.gl|||"
   "sunmao_syn_sine_gui_wgpu|SunMao Sine Synth WGPU|com.sunmao.synth.sine.wgpu|||"
   "sunmao_syn_sine_gui_webview|SunMao Sine Synth WebView|com.sunmao.synth.sine.webview|||"
+  # Phase 2 contract fixtures. Packaged so the runner's host-side assertions
+  # (latency/tail queries, multi-bus topology, sidechain routing) run against
+  # plugins that actually have those properties — every Phase 1 example above
+  # reports zero latency, no tail and a single input bus, so the assertions
+  # would otherwise only ever take their skip paths.
+  # Bundle ids use hyphens: the packager rejects underscores in bundle
+  # identifier components. This is the macOS bundle id, not the plugin's own
+  # CLAP id, so the fixtures' `clap_info` ids are unaffected.
+  "sunmao_fx_tempo_delay|SunMao Tempo Delay|com.sunmao.fx.tempo-delay|||"
+  "sunmao_fx_sidechain_comp|SunMao Sidechain Comp|com.sunmao.fx.sidechain-comp|||"
 )
 
 supports_au() {

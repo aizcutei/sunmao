@@ -546,6 +546,15 @@ pub struct SunmaoClapWrapper<P: SunmaoPlugin> {
     input_buses: Vec<SunmaoBusInfo>,
     output_buses: Vec<SunmaoBusInfo>,
     accepts_midi: bool,
+    /// Latency and tail captured while the plugin was last reachable.
+    ///
+    /// `activate` moves the plugin into the audio processor, so between
+    /// activate and deactivate `self.plugin` is `None` — which is exactly when
+    /// a host queries `clap.latency`/`clap.tail`. Reporting 0 there would tell
+    /// the host to align the track by nothing and let a tail be cut off, so the
+    /// last known values stand in instead.
+    active_latency: u32,
+    active_tail: u32,
     // GUI State
     view_handle: Option<MainThreadViewHandle>,
     gui_api: Option<GuiApi>,
@@ -650,6 +659,8 @@ impl<P: SunmaoPlugin> Plugin for SunmaoClapWrapper<P> {
             input_buses,
             output_buses,
             accepts_midi,
+            active_latency: 0,
+            active_tail: 0,
             view_handle: None,
             gui_api: None,
             host,
@@ -699,6 +710,10 @@ impl<P: SunmaoPlugin> Plugin for SunmaoClapWrapper<P> {
             self.plugin = Some(plugin);
             return None;
         }
+        // Last chance to read these before ownership moves to the processor:
+        // `initialize` has run, so they reflect the activated sample rate.
+        self.active_latency = plugin.latency_samples();
+        self.active_tail = clamp_clap_tail(plugin.tail());
         Some(SunmaoClapProcessor {
             plugin,
             params: self.params.clone(),
@@ -728,14 +743,14 @@ impl<P: SunmaoPlugin> Plugin for SunmaoClapWrapper<P> {
         self.plugin
             .as_ref()
             .map(|plugin| plugin.latency_samples())
-            .unwrap_or(0)
+            .unwrap_or(self.active_latency)
     }
 
     fn tail(&self) -> u32 {
         self.plugin
             .as_ref()
             .map(|plugin| clamp_clap_tail(plugin.tail()))
-            .unwrap_or(0)
+            .unwrap_or(self.active_tail)
     }
 
     fn set_audio_port_active(
@@ -2391,6 +2406,41 @@ mod tests {
         let host = unsafe { HostHandle::from_raw(std::ptr::null()) };
         let wrapper = <SunmaoClapWrapper<TailPlugin> as Plugin>::new(host);
 
+        assert_eq!(Plugin::latency(&wrapper), 256);
+        assert_eq!(Plugin::tail(&wrapper), CLAP_INFINITE_TAIL);
+    }
+
+    #[test]
+    fn latency_and_tail_survive_activation() {
+        // `activate` moves the plugin into the processor, so a naive
+        // `self.plugin.as_ref()` reports 0 for the entire time the plugin is
+        // active — which is precisely when a host reads these. A host that
+        // believes latency is 0 misaligns the track.
+        let host = unsafe { HostHandle::from_raw(std::ptr::null()) };
+        let mut wrapper = <SunmaoClapWrapper<TailPlugin> as Plugin>::new(host);
+
+        let processor =
+            <SunmaoClapWrapper<TailPlugin> as Plugin>::activate(&mut wrapper, 48_000.0, 1, 128)
+                .expect("activation succeeds");
+        assert!(
+            wrapper.plugin.is_none(),
+            "precondition: activation takes ownership of the plugin"
+        );
+
+        assert_eq!(
+            Plugin::latency(&wrapper),
+            256,
+            "latency must still be readable while active"
+        );
+        assert_eq!(
+            Plugin::tail(&wrapper),
+            CLAP_INFINITE_TAIL,
+            "tail must still be readable while active"
+        );
+
+        // And after deactivation the plugin itself is authoritative again.
+        <SunmaoClapWrapper<TailPlugin> as Plugin>::deactivate(&mut wrapper, processor);
+        assert!(wrapper.plugin.is_some());
         assert_eq!(Plugin::latency(&wrapper), 256);
         assert_eq!(Plugin::tail(&wrapper), CLAP_INFINITE_TAIL);
     }

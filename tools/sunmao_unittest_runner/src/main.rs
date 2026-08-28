@@ -316,7 +316,7 @@ fn cmd_test(args: &[String]) -> bool {
         let mut results = Vec::new();
 
         // === Test 1: Load ===
-        println!("  [1/16] Loading plugin...");
+        println!("  [1/19] Loading plugin...");
         let t0 = Instant::now();
         let plugin = match load_plugin(plugin_info) {
             Ok(p) => {
@@ -339,7 +339,7 @@ fn cmd_test(args: &[String]) -> bool {
         let mut plugin = plugin;
 
         // === Test 2: Initialize ===
-        println!("  [2/16] Initializing (44100 Hz, 512 frames)...");
+        println!("  [2/19] Initializing (44100 Hz, 512 frames)...");
         let t0 = Instant::now();
         match plugin.initialize(44100.0, 512) {
             Ok(()) => {
@@ -360,7 +360,7 @@ fn cmd_test(args: &[String]) -> bool {
         }
 
         // === Test 3: Parameter enumeration ===
-        println!("  [3/16] Enumerating parameters...");
+        println!("  [3/19] Enumerating parameters...");
         let param_count = plugin.param_count();
         let mut parameter_metadata_ok = true;
         let mut parameter_infos = Vec::with_capacity(param_count as usize);
@@ -431,7 +431,7 @@ fn cmd_test(args: &[String]) -> bool {
             run_synth_processing_tests(plugin.as_mut(), &runtime_info, frames, &mut results);
         } else {
             // === Test 4: Process silence ===
-            println!("  [4/16] Processing silence (512 frames)...");
+            println!("  [4/19] Processing silence (512 frames)...");
             let mut output = vec![0.0f32; frames * output_channels];
             match plugin.process(&input, &mut output) {
                 Ok(()) => {
@@ -446,7 +446,7 @@ fn cmd_test(args: &[String]) -> bool {
             }
 
             // === Test 5: Process impulse ===
-            println!("  [5/16] Processing impulse...");
+            println!("  [5/19] Processing impulse...");
             let mut impulse = vec![0.0f32; frames * input_channels];
             impulse
                 .iter_mut()
@@ -466,7 +466,7 @@ fn cmd_test(args: &[String]) -> bool {
             }
 
             // === Test 6: Process sine wave (440 Hz) ===
-            println!("  [6/16] Processing 440 Hz sine wave...");
+            println!("  [6/19] Processing 440 Hz sine wave...");
             let sine = make_sine(440.0, frames, 44100.0, 0.5, input_channels);
             let mut output3 = vec![0.0f32; frames * output_channels];
             match plugin.process(&sine, &mut output3) {
@@ -492,7 +492,7 @@ fn cmd_test(args: &[String]) -> bool {
             }
 
             // === Test 7: Process sine wave (1000 Hz) ===
-            println!("  [7/16] Processing 1000 Hz sine wave...");
+            println!("  [7/19] Processing 1000 Hz sine wave...");
             let sine1k = make_sine(1000.0, frames, 44100.0, 0.5, input_channels);
             let mut output3b = vec![0.0f32; frames * output_channels];
             match plugin.process(&sine1k, &mut output3b) {
@@ -508,7 +508,7 @@ fn cmd_test(args: &[String]) -> bool {
             }
 
             // === Test 8: DC offset test ===
-            println!("  [8/16] Processing DC offset (value=0.5)...");
+            println!("  [8/19] Processing DC offset (value=0.5)...");
             let dc_input = vec![0.5f32; frames * input_channels];
             let mut output_dc = vec![0.0f32; frames * output_channels];
             match plugin.process(&dc_input, &mut output_dc) {
@@ -525,7 +525,7 @@ fn cmd_test(args: &[String]) -> bool {
         }
 
         // === Test 9: Parameter set/get ===
-        println!("  [9/16] Testing parameter set/get...");
+        println!("  [9/19] Testing parameter set/get...");
         if param_count > 0 {
             let mut param_ok = true;
             for i in 0..param_count {
@@ -565,7 +565,7 @@ fn cmd_test(args: &[String]) -> bool {
         }
 
         // === Test 10: Sample-accurate parameter automation ===
-        println!("  [10/16] Testing sample-accurate parameter automation...");
+        println!("  [10/19] Testing sample-accurate parameter automation...");
         results.push(run_parameter_automation_test(
             plugin.as_mut(),
             &runtime_info,
@@ -573,7 +573,7 @@ fn cmd_test(args: &[String]) -> bool {
         ));
 
         // === Test 11: Reset ===
-        println!("  [11/16] Resetting plugin...");
+        println!("  [11/19] Resetting plugin...");
         match plugin.reset() {
             Ok(()) => {
                 println!("         Reset complete");
@@ -586,7 +586,7 @@ fn cmd_test(args: &[String]) -> bool {
         }
 
         // === Test 12: Process after reset ===
-        println!("  [12/16] Processing after reset...");
+        println!("  [12/19] Processing after reset...");
         let mut output4 = vec![0.0f32; frames * output_channels];
         match plugin.process(&input, &mut output4) {
             Ok(())
@@ -619,7 +619,7 @@ fn cmd_test(args: &[String]) -> bool {
         }
 
         // === Test 13: Continuous processing (stress test) ===
-        println!("  [13/16] Stress test: 100 continuous blocks...");
+        println!("  [13/19] Stress test: 100 continuous blocks...");
         let t0 = Instant::now();
         let mut stress_ok = true;
         let mut stress_peak: f32 = 0.0;
@@ -675,7 +675,7 @@ fn cmd_test(args: &[String]) -> bool {
         }
 
         // === Test 14: Different sample rates ===
-        println!("  [14/16] Testing different sample rates (re-loading plugin)...");
+        println!("  [14/19] Testing different sample rates (re-loading plugin)...");
         let rates = [22050.0, 44100.0, 48000.0, 88200.0, 96000.0];
         let mut sr_results = Vec::new();
         let mut sample_rates_ok = true;
@@ -772,7 +772,7 @@ fn cmd_test(args: &[String]) -> bool {
         }
 
         // === Test 15: State save/roundtrip ===
-        println!("  [15/16] Testing state save/load...");
+        println!("  [15/19] Testing state save/load...");
         match capture_parameter_snapshot(plugin.as_ref()) {
             Ok(snapshot) => match plugin.save_state() {
                 Ok(state) => {
@@ -815,7 +815,19 @@ fn cmd_test(args: &[String]) -> bool {
         }
 
         // === Test 16: Shutdown ===
-        println!("  [16/16] Shutting down...");
+        // === Test 16: Latency and tail queried through the format API ===
+        println!("  [16/19] Querying reported latency and tail...");
+        results.push(run_latency_tail_test(plugin.as_mut(), 44100.0));
+
+        // === Test 17: Audio bus topology enumeration ===
+        println!("  [17/19] Enumerating audio bus topology...");
+        results.push(run_bus_topology_test(plugin.as_mut()));
+
+        // === Test 18: Sidechain routing ===
+        println!("  [18/19] Verifying sidechain routing...");
+        results.push(run_sidechain_routing_test(plugin.as_mut(), frames));
+
+        println!("  [19/19] Shutting down...");
         plugin.shutdown();
         println!("         Shutdown complete");
         results.push(TestResult::pass("shutdown"));
@@ -855,6 +867,244 @@ fn validate_reference_parameter_kinds(parameters: &[ParamInfo]) -> bool {
         }
     }
     valid
+}
+
+/// Queries latency and tail the way a real host does, and checks the values are
+/// usable rather than merely present.
+///
+/// A host uses latency to align the plugin's output with the rest of the
+/// session, so a nonsensical value is worse than no value: it silently shifts
+/// audio. The bounds here are deliberately loose — this runs against every
+/// fixture — but they catch uninitialised reads and negative-cast-to-huge
+/// mistakes.
+fn run_latency_tail_test(plugin: &mut dyn HostPlugin, sample_rate: f64) -> TestResult {
+    let format = plugin.info().format;
+    let latency = plugin.reported_latency();
+    let tail = plugin.reported_tail();
+
+    if latency.is_none() && tail.is_none() {
+        println!("         {format} host exposes neither latency nor tail for this plugin");
+        return TestResult::pass("latency_tail (not exposed)");
+    }
+
+    // A plugin claiming more than ten seconds of latency is reporting garbage,
+    // not lookahead.
+    let latency_ceiling = (sample_rate * 10.0) as u32;
+    if let Some(latency) = latency {
+        if latency > latency_ceiling {
+            return TestResult::fail(
+                "latency_tail",
+                format!("reported latency {latency} samples exceeds the {latency_ceiling} sanity ceiling"),
+            );
+        }
+        println!("         latency: {latency} samples");
+    }
+
+    if let Some(tail) = tail {
+        // Each format encodes "unbounded" with its own magic value; anything
+        // below it must be a plausible finite tail. This is the host-side half
+        // of the clamping the backends do.
+        let (infinite, label) = match format {
+            PluginFormat::CLAP => (i32::MAX as u32, "i32::MAX"),
+            _ => (u32::MAX, "u32::MAX"),
+        };
+        if tail == infinite {
+            println!("         tail: unbounded ({label})");
+        } else if tail > infinite {
+            return TestResult::fail(
+                "latency_tail",
+                format!("reported tail {tail} exceeds the {label} unbounded encoding"),
+            );
+        } else {
+            println!("         tail: {tail} samples");
+        }
+    }
+
+    // The tempo delay declares a 5 ms lookahead and a feedback tail, so for
+    // that fixture the contract is not merely "queryable" but "non-zero".
+    // Without this the whole test would pass on a plugin that reports zero for
+    // everything, which is exactly the bug it should catch.
+    if plugin.info().name.contains("Tempo Delay") {
+        match latency {
+            Some(0) | None => {
+                return TestResult::fail(
+                    "latency_tail",
+                    "Tempo Delay declares a lookahead but the host read no latency",
+                );
+            }
+            Some(_) => {}
+        }
+        match tail {
+            Some(0) | None => {
+                return TestResult::fail(
+                    "latency_tail",
+                    "Tempo Delay declares a feedback tail but the host read none",
+                );
+            }
+            Some(_) => {}
+        }
+    }
+
+    TestResult::pass(format!(
+        "latency_tail (latency={:?}, tail={:?})",
+        latency, tail
+    ))
+}
+
+/// Enumerates the bus topology and cross-checks it against the flat channel
+/// counts the host processes with.
+///
+/// These come from different format calls, and nothing but a test keeps them
+/// consistent — a plugin that declares a sidechain but forgets to include it in
+/// its channel total would deadlock a real host's buffer setup.
+fn run_bus_topology_test(plugin: &mut dyn HostPlugin) -> TestResult {
+    let info = plugin.info().clone();
+    let Some(buses) = plugin.audio_buses() else {
+        println!("         {} host exposes no bus topology", info.format);
+        return TestResult::pass("bus_topology (not exposed)");
+    };
+
+    let inputs: Vec<&HostBusInfo> = buses.iter().filter(|bus| bus.is_input).collect();
+    let outputs: Vec<&HostBusInfo> = buses.iter().filter(|bus| !bus.is_input).collect();
+    let input_total: u32 = inputs.iter().map(|bus| bus.channels).sum();
+    let output_total: u32 = outputs.iter().map(|bus| bus.channels).sum();
+
+    for bus in &buses {
+        let direction = if bus.is_input { "input" } else { "output" };
+        println!(
+            "         {direction} bus \"{}\": {} channels, main={}",
+            bus.name, bus.channels, bus.is_main
+        );
+    }
+
+    if input_total != info.input_channels {
+        return TestResult::fail(
+            "bus_topology",
+            format!(
+                "input buses sum to {input_total} channels but the plugin processes {}",
+                info.input_channels
+            ),
+        );
+    }
+    if output_total != info.output_channels {
+        return TestResult::fail(
+            "bus_topology",
+            format!(
+                "output buses sum to {output_total} channels but the plugin processes {}",
+                info.output_channels
+            ),
+        );
+    }
+    // A plugin with any output must have a main one; a host routes to it by
+    // definition.
+    if !outputs.is_empty() && !outputs.iter().any(|bus| bus.is_main) {
+        return TestResult::fail(
+            "bus_topology",
+            "plugin declares output buses but none is the main bus",
+        );
+    }
+
+    TestResult::pass(format!(
+        "bus_topology ({} in / {} out buses)",
+        inputs.len(),
+        outputs.len()
+    ))
+}
+
+/// Feeds a signal to the sidechain bus only, and checks it actually reaches the
+/// plugin's detector.
+///
+/// The point is routing, not compression: if the backend mapped the key bus to
+/// the wrong channel offset, the plugin would key off silence and the output
+/// would be identical to the no-key case. Comparing the two runs catches that,
+/// where processing either one alone would not.
+fn run_sidechain_routing_test(plugin: &mut dyn HostPlugin, frames: usize) -> TestResult {
+    let info = plugin.info().clone();
+    let Some(buses) = plugin.audio_buses() else {
+        return TestResult::pass("sidechain_routing (no topology)");
+    };
+    let inputs: Vec<&HostBusInfo> = buses.iter().filter(|bus| bus.is_input).collect();
+    if inputs.len() < 2 {
+        println!("         Plugin has a single input bus; nothing to route");
+        return TestResult::pass("sidechain_routing (single bus)");
+    }
+
+    let main_channels = inputs[0].channels as usize;
+    let key_channels = inputs[1].channels as usize;
+    let input_channels = info.input_channels as usize;
+    let output_channels = info.output_channels as usize;
+    if main_channels + key_channels > input_channels {
+        return TestResult::fail(
+            "sidechain_routing",
+            "declared bus channels exceed the flat input channel count",
+        );
+    }
+
+    // A quiet main signal, so any ducking is unmistakable.
+    let quiet = 0.05f32;
+    let build_input = |key_level: f32| {
+        let mut samples = vec![0.0f32; frames * input_channels];
+        for frame in 0..frames {
+            let base = frame * input_channels;
+            for channel in 0..main_channels {
+                samples[base + channel] = quiet;
+            }
+            for channel in 0..key_channels {
+                samples[base + main_channels + channel] = key_level;
+            }
+        }
+        samples
+    };
+
+    let mut silent_key_out = vec![0.0f32; frames * output_channels];
+    if let Err(error) = plugin.process(&build_input(0.0), &mut silent_key_out) {
+        return TestResult::fail("sidechain_routing", format!("silent-key pass: {error}"));
+    }
+    if let Err(error) = plugin.reset() {
+        return TestResult::fail("sidechain_routing", format!("reset: {error}"));
+    }
+
+    let mut loud_key_out = vec![0.0f32; frames * output_channels];
+    if let Err(error) = plugin.process(&build_input(1.0), &mut loud_key_out) {
+        return TestResult::fail("sidechain_routing", format!("loud-key pass: {error}"));
+    }
+    if let Err(error) = plugin.reset() {
+        return TestResult::fail("sidechain_routing", format!("reset: {error}"));
+    }
+
+    if !samples_are_finite(&silent_key_out) || !samples_are_finite(&loud_key_out) {
+        return TestResult::fail("sidechain_routing", "non-finite output");
+    }
+
+    let silent_peak = output_peak(&silent_key_out);
+    let loud_peak = output_peak(&loud_key_out);
+    println!(
+        "         key silent -> peak {:.6}, key loud -> peak {:.6}",
+        silent_peak, loud_peak
+    );
+
+    // Only assert a difference for a plugin that is actually key-driven. Other
+    // multi-bus plugins legitimately ignore the second bus, so requiring a
+    // change would fail them for behaving correctly.
+    let keys_off_sidechain = info.name.contains("Sidechain");
+    if keys_off_sidechain && (silent_peak - loud_peak).abs() <= 1e-6 {
+        return TestResult::fail(
+            "sidechain_routing",
+            format!(
+                "signal on the key bus did not reach the detector: both passes peaked at {silent_peak:.6}"
+            ),
+        );
+    }
+    if keys_off_sidechain && loud_peak >= silent_peak {
+        return TestResult::fail(
+            "sidechain_routing",
+            format!("a loud key must duck the output: {loud_peak:.6} >= {silent_peak:.6}"),
+        );
+    }
+
+    TestResult::pass(format!(
+        "sidechain_routing (silent={silent_peak:.4}, loud={loud_peak:.4})"
+    ))
 }
 
 fn run_parameter_automation_test(
@@ -1101,7 +1351,7 @@ fn run_synth_processing_tests(
     frames: usize,
     results: &mut Vec<TestResult>,
 ) {
-    println!("  [4/16] Verifying synth bus layout and idle processing...");
+    println!("  [4/19] Verifying synth bus layout and idle processing...");
     let input = Vec::<f32>::new();
     let output_samples = frames * info.output_channels as usize;
     if info.input_channels != 0 || info.output_channels == 0 {
@@ -1129,7 +1379,7 @@ fn run_synth_processing_tests(
         }
     }
 
-    println!("  [5/16] Sending note-on at sample offset 17...");
+    println!("  [5/19] Sending note-on at sample offset 17...");
     let note_on = [HostEvent::NoteOn {
         sample_offset: 17,
         channel: 0,
@@ -1167,7 +1417,7 @@ fn run_synth_processing_tests(
         Err(error) => results.push(TestResult::fail("synth_note_on", error)),
     }
 
-    println!("  [6/16] Sending note-off and processing release blocks...");
+    println!("  [6/19] Sending note-off and processing release blocks...");
     let note_off = [HostEvent::NoteOff {
         sample_offset: 31,
         channel: 0,
@@ -1223,7 +1473,7 @@ fn run_synth_processing_tests(
         results.push(TestResult::fail("synth_note_off_release", release_error));
     }
 
-    println!("  [7/16] Re-triggering synth after release...");
+    println!("  [7/19] Re-triggering synth after release...");
     let retrigger = [HostEvent::NoteOn {
         sample_offset: 0,
         channel: 0,
@@ -1244,7 +1494,7 @@ fn run_synth_processing_tests(
         Err(error) => results.push(TestResult::fail("synth_retrigger", error)),
     }
 
-    println!("  [8/16] Releasing re-triggered note...");
+    println!("  [8/19] Releasing re-triggered note...");
     let final_off = [HostEvent::NoteOff {
         sample_offset: (frames - 1) as u32,
         channel: 0,

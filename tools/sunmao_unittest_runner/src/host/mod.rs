@@ -64,6 +64,20 @@ pub struct PluginInfo {
     pub is_synth: bool,
 }
 
+/// One audio bus as the host sees it, read back through the format's own API.
+///
+/// This exists so the runner can cross-check the topology a plugin advertises
+/// against the flat channel counts it processes with — the two come from
+/// different calls and nothing but a test keeps them consistent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostBusInfo {
+    pub name: String,
+    pub channels: u32,
+    pub is_input: bool,
+    /// VST3 `kMain` vs `kAux`; CLAP's `CLAP_AUDIO_PORT_IS_MAIN` flag.
+    pub is_main: bool,
+}
+
 /// A timestamped event delivered to a plugin during one process block.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum HostEvent {
@@ -193,6 +207,28 @@ pub trait HostPlugin: Send {
                 self.info().format
             ))
         }
+    }
+
+    /// Latency in samples the plugin reports, read back through the format's
+    /// own API (`IAudioProcessor::getLatencySamples` / `clap.latency`).
+    ///
+    /// `None` means the plugin does not expose the capability at all, which is
+    /// different from exposing it and reporting zero.
+    fn reported_latency(&self) -> Option<u32> {
+        None
+    }
+
+    /// Tail length in samples the plugin reports
+    /// (`IAudioProcessor::getTailSamples` / `clap.tail`), in that format's own
+    /// encoding — the magic values for "unbounded" differ between formats.
+    fn reported_tail(&self) -> Option<u32> {
+        None
+    }
+
+    /// The plugin's audio bus topology as the host sees it
+    /// (`getBusCount`/`getBusInfo` / `clap.audio-ports`).
+    fn audio_buses(&self) -> Option<Vec<HostBusInfo>> {
+        None
     }
 
     /// Reset the plugin state.

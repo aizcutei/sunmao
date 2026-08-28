@@ -1,6 +1,6 @@
 use super::{
-    process_frame_count, validate_host_events, GuiGestureEvidence, HostEvent, HostPlugin,
-    ParamInfo, PluginFormat, PluginInfo,
+    process_frame_count, validate_host_events, GuiGestureEvidence, HostBusInfo, HostEvent,
+    HostPlugin, ParamInfo, PluginFormat, PluginInfo,
 };
 use crate::gui_window::PluginGuiWindow;
 use clap_sys::audio_buffer::clap_audio_buffer_t;
@@ -8,9 +8,11 @@ use clap_sys::entry::clap_plugin_entry_t;
 use clap_sys::events::*;
 use clap_sys::ext::audio_ports::*;
 use clap_sys::ext::gui::*;
+use clap_sys::ext::latency::{clap_plugin_latency_t, CLAP_EXT_LATENCY};
 use clap_sys::ext::note_ports::*;
 use clap_sys::ext::params::*;
 use clap_sys::ext::state::*;
+use clap_sys::ext::tail::{clap_plugin_tail_t, CLAP_EXT_TAIL};
 use clap_sys::host::clap_host_t;
 use clap_sys::plugin::{clap_plugin_descriptor_t, clap_plugin_t};
 use clap_sys::process::clap_process_t;
@@ -845,6 +847,65 @@ impl HostPlugin for ClapHostPlugin {
         self._host_state
             .gui_window
             .store(ptr::null_mut(), Ordering::Release);
+    }
+
+    fn reported_latency(&self) -> Option<u32> {
+        unsafe {
+            let get_extension = (*self.plugin).get_extension?;
+            let extension = get_extension(self.plugin, CLAP_EXT_LATENCY.as_ptr().cast());
+            if extension.is_null() {
+                return None;
+            }
+            let latency = &*(extension as *const clap_plugin_latency_t);
+            latency.get.map(|get| get(self.plugin))
+        }
+    }
+
+    fn reported_tail(&self) -> Option<u32> {
+        unsafe {
+            let get_extension = (*self.plugin).get_extension?;
+            let extension = get_extension(self.plugin, CLAP_EXT_TAIL.as_ptr().cast());
+            if extension.is_null() {
+                return None;
+            }
+            let tail = &*(extension as *const clap_plugin_tail_t);
+            tail.get.map(|get| get(self.plugin))
+        }
+    }
+
+    fn audio_buses(&self) -> Option<Vec<HostBusInfo>> {
+        unsafe {
+            let get_extension = (*self.plugin).get_extension?;
+            let extension = get_extension(self.plugin, CLAP_EXT_AUDIO_PORTS.as_ptr().cast());
+            if extension.is_null() {
+                return None;
+            }
+            let ports = &*(extension as *const clap_plugin_audio_ports_t);
+            let (count, get) = (ports.count?, ports.get?);
+            let mut buses = Vec::new();
+            for is_input in [true, false] {
+                for index in 0..count(self.plugin, is_input) {
+                    let mut info = std::mem::zeroed::<clap_audio_port_info_t>();
+                    if !get(self.plugin, index, is_input, &mut info) {
+                        return None;
+                    }
+                    let name_len = info
+                        .name
+                        .iter()
+                        .position(|&byte| byte == 0)
+                        .unwrap_or(info.name.len());
+                    let name_bytes: Vec<u8> =
+                        info.name[..name_len].iter().map(|&b| b as u8).collect();
+                    buses.push(HostBusInfo {
+                        name: String::from_utf8_lossy(&name_bytes).into_owned(),
+                        channels: info.channel_count,
+                        is_input,
+                        is_main: info.flags & CLAP_AUDIO_PORT_IS_MAIN != 0,
+                    });
+                }
+            }
+            Some(buses)
+        }
     }
 
     fn plugin_library(&self) -> Option<&libloading::Library> {

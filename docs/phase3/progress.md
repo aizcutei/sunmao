@@ -164,3 +164,50 @@
 - Unresolved: phase2/status.md 遗留表第 2 项已改为"已实现"（2/7 关闭）。下一个
   瓶颈是第 3 项 runner 宿主侧断言：latency/tail 查询、多 bus 拓扑枚举、向
   sidechain 送信号验证路由。
+
+### 2026-08-28 — M1 第 3 项：runner 宿主侧断言（并修复一个真实缺陷）
+
+- Command/platform: macOS ARM64，分支 `phase3/framework-dsp-library`。
+- Change:
+  - runner host 层：`HostPlugin` 新增 `reported_latency()`/`reported_tail()`/
+    `audio_buses()`（均返回 `Option`，用以区分"格式未暴露该能力"与"暴露了但值为 0"），
+    新增 `HostBusInfo{name,channels,is_input,is_main}`。VST3 侧走
+    `getLatencySamples`/`getTailSamples`/`getBusCount`+`getBusInfo`（含 UTF-16 名称解码）；
+    CLAP 侧走 `clap.latency`/`clap.tail`/`clap.audio-ports`（含 `CLAP_AUDIO_PORT_IS_MAIN`）。
+  - runner 测试：套件从 16 项扩到 19 项——`latency_tail`（查询 + 合理性上界 + 各格式
+    无限尾音魔数校验；对 Tempo Delay 额外断言**非零**）、`bus_topology`（枚举并与
+    `info()` 的扁平通道总数**交叉校验**，两者来自不同调用，此前无任何东西保证一致；
+    另断言有输出必有 main bus）、`sidechain_routing`（只往 key bus 送信号，比较
+    silent-key 与 loud-key 两趟输出——若 backend 把 key bus 映射到错误通道偏移，
+    插件会 key 到静音、两趟输出相同，单跑任一趟都发现不了）。
+  - 打包与 CI：`sunmao_fx_tempo_delay` 与 `sunmao_fx_sidechain_comp` 并入
+    `tools/package_examples.sh` 的 EXAMPLES 与 workflow 的 packager/runner 调用
+    （matrix 加 `delay-binary`/`sidechain-binary` 三平台路径）。**必要性**：全部
+    Phase 1 示例都是零 latency、无 tail、单输入 bus，不加这两个 fixture 的话三个新
+    断言在 CI 里永远只走 skip 分支，等于没测。打包 bundle id 用连字符
+    （packager 拒绝 bundle identifier 中的下划线），与 fixture 自身的 CLAP id 无关。
+  - **修复真实缺陷（由新断言发现）**：`sunmao_backend_clap::activate` 会把插件
+    `take()` 进 audio processor，而 `latency()`/`tail()` 只看 `self.plugin.as_ref()`
+    并 `unwrap_or(0)`——**插件激活期间（正是宿主查询的时刻）一律上报 0**。宿主会因此
+    不做延迟补偿、并可能切掉尾音。VST3 backend 直接持有插件故无此问题，两格式行为分叉。
+    现于 `activate` 移交所有权前缓存（`initialize` 已跑完，值反映激活采样率），
+    激活期间回落缓存值；`deactivate` 后插件重新成为权威。既有单测
+    `latency_and_infinite_tail_reach_the_clap_contract` 只覆盖未激活状态，故未能发现。
+- Result:
+  - runner 本地 24 套件（原 20，新增 2 fixture × 2 格式）各 19/19、exit 0。关键读数：
+    Tempo Delay CLAP `latency=221, tail=2147483647`（i32::MAX）、VST3
+    `latency=221, tail=4294967295`（u32::MAX）——两格式 latency 一致（44.1kHz 下
+    5ms lookahead）且各用本格式魔数；Sidechain Comp 两格式均 `bus_topology (2 in / 1 out)`
+    与 `sidechain_routing (silent=0.0500, loud=0.0063)`。
+  - 新增 backend 回归测试 `latency_and_tail_survive_activation`（激活期间可读 + 去激活后恢复）。
+  - `RUSTFLAGS=-Awarnings cargo test --locked` 115 套件全绿、exit 0。
+  - `cargo metadata --locked`、`cargo fmt --all -- --check`、`git diff --check`、
+    workflow YAML 解析、`bash -n tools/package_examples.sh` 通过。
+  - `cargo check --locked --target x86_64-pc-windows-msvc -p sunmao_unittest_runner
+    -p sunmao_backend_clap` 通过。
+  - `nm -gU` 复查两个新打包 fixture cdylib：无 AU 符号。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/m1c_test.log`、`/tmp/m1c_pkg3.log`、
+  `/tmp/m1c_win.log`）——本地证据等级。
+- Unresolved: 待三平台 hosted 全绿方可把遗留表第 3 项改为"已实现"。M1 余下 4 项未开始，
+  下一个瓶颈是第 4 项 backend 层 expression/mod 端到端映射测试。注意 CI 时长因新增
+  4 个 runner 套件而增加。

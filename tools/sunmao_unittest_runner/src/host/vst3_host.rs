@@ -1,6 +1,6 @@
 use super::{
-    process_frame_count, validate_host_events, GuiGestureEvidence, HostEvent, HostPlugin,
-    ParamInfo, PluginFormat, PluginInfo,
+    process_frame_count, validate_host_events, GuiGestureEvidence, HostBusInfo, HostEvent,
+    HostPlugin, ParamInfo, PluginFormat, PluginInfo,
 };
 use crate::gui_window::PluginGuiWindow;
 use std::ffi::c_void;
@@ -1097,9 +1097,72 @@ impl HostPlugin for Vst3HostPlugin {
         }
     }
 
+    fn reported_latency(&self) -> Option<u32> {
+        if self.processor.is_null() {
+            return None;
+        }
+        unsafe { Some(((*self.processor_vtbl).get_latency_samples)(self.processor)) }
+    }
+
+    fn reported_tail(&self) -> Option<u32> {
+        if self.processor.is_null() {
+            return None;
+        }
+        unsafe { Some(((*self.processor_vtbl).get_tail_samples)(self.processor)) }
+    }
+
+    fn audio_buses(&self) -> Option<Vec<HostBusInfo>> {
+        if self.component.is_null() {
+            return None;
+        }
+        let mut buses = Vec::new();
+        for (direction, is_input) in [
+            (BusDirections::kInput as BusDirection, true),
+            (BusDirections::kOutput as BusDirection, false),
+        ] {
+            unsafe {
+                let count = ((*self.component_vtbl).get_bus_count)(
+                    self.component,
+                    MediaTypes::kAudio as MediaType,
+                    direction,
+                )
+                .max(0);
+                for index in 0..count {
+                    let mut info = BusInfo::default();
+                    if ((*self.component_vtbl).get_bus_info)(
+                        self.component,
+                        MediaTypes::kAudio as MediaType,
+                        direction,
+                        index,
+                        &mut info,
+                    ) != kResultOk
+                    {
+                        return None;
+                    }
+                    buses.push(HostBusInfo {
+                        name: utf16_to_string(&info.name),
+                        channels: info.channel_count.max(0) as u32,
+                        is_input,
+                        is_main: info.bus_type == BusTypes::kMain as i32,
+                    });
+                }
+            }
+        }
+        Some(buses)
+    }
+
     fn plugin_library(&self) -> Option<&libloading::Library> {
         Some(&self._lib)
     }
+}
+
+/// Decodes a VST3 UTF-16 fixed-size string field.
+fn utf16_to_string(field: &[u16]) -> String {
+    let len = field
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(field.len());
+    String::from_utf16_lossy(&field[..len])
 }
 
 unsafe fn query_bus_channels(
