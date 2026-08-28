@@ -49,3 +49,10 @@
   - 过程中发现并修复：两个 backend 的 transport 观测测试共用进程级 static，并行执行时互相抢结果（VST3 侧因此假失败），已加序列化锁。
 - Evidence/artifact: macOS ARM64 本地日志（`/tmp/phase2_m1_test.log`、`/tmp/phase2_m1_pkg.log`）——本地证据等级。
 - Unresolved: 三平台 hosted 验证本 commit 后 M1 才算完成；runner 侧尚未加 transport 宿主注入测试，随 M2 的 latency/tail 断言一并设计。
+
+### 2026-08-28 — M1 完成：hosted run #29 三平台全绿
+
+- Command/platform: push `66ec5d3` 触发 GitHub Actions #29：https://github.com/aizcutei/sunmao/actions/runs/33157482389
+- Result: macOS ARM64、Windows x86_64、Ubuntu x86_64 三个 job 同一 commit 全部 success。transport 模型在两种格式、三个平台上通过；Phase 1 既有 gate 与 M0 的 Phase 2 fixture 步骤保持绿色。
+- Evidence/artifact: run #29 上传 `phase1-macOS-ARM64`（50.7MB）、`phase1-Windows-X64`（76.7MB）、`phase1-Linux-X64`（954.7MB）。
+- Unresolved: M1 完成，进入 M2。M2 盘点：`clap_rs::Plugin` 已有 `latency()`/`tail()`/`set_render_mode()` 与 `ext/{latency,tail,render}.rs`，`vst3_rs::Plugin` 已有 `latency()`/`tail()`；缺口在 `sunmao_core::SunmaoPlugin`（无对应方法）、两个 backend（未桥接）、VST3 的 `ProcessSetup.process_mode`（未向上暴露）、runner（无 latency/tail 断言）。
