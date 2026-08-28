@@ -74,3 +74,21 @@
 - Unresolved: 待三平台 hosted 全绿方可把遗留表第 1 项改为"已实现"；M1 余下 6 项
   未开始，下一个瓶颈是第 2 项 speaker layout 动态协商（`setBusArrangements` 真实
   协商 ↔ CLAP `clap.audio-ports-config`，`clap_rs` 尚未暴露该扩展）。
+
+### 2026-08-28 — M1 第 1 项验收：hosted run #42 三平台全绿
+
+- Command/platform: push `b78aca6` 触发 GitHub Actions #42：https://github.com/aizcutei/sunmao/actions/runs/33171119003
+- Result: macOS ARM64、Windows x86_64、Ubuntu x86_64 三个 job 同一 commit 全部
+  success，且**逐步骤复查零非成功步骤**（不只看 job 级汇总）：Phase 1+2 既有
+  gate（"Test format adapters and host"、standalone/facade、"Test Phase 2
+  acceptance fixtures"、packager、GUI backends）与 "Test Phase 3 acceptance
+  fixtures" 三平台均 success。新增的 bus 激活链路（`_rs` 两侧 + backend +
+  fixture + 2 proptest）在三平台原生构建下全部通过。#37 的 Windows WGPU 收尾
+  段错误未复现。
+- Evidence/artifact: run #42 上传 `phase1-macOS-ARM64`（48.8MB）、
+  `phase1-Windows-X64`（73.4MB）、`phase1-Linux-X64`（912.1MB），
+  `expired=false` 均可下载。
+- Unresolved: phase2/status.md 遗留表第 1 项已改为"已实现"。M1 余下 6 项未开始；
+  下一个瓶颈是第 2 项 speaker layout 动态协商——`setBusArrangements` 目前按声明
+  固定接受而非真实协商，且 `clap_rs` 尚未暴露 `clap.audio-ports-config`（该扩展
+  的 `clap_sys` 绑定已齐全，缺口同样在 `_rs` 层）。
