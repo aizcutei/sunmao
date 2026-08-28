@@ -251,3 +251,19 @@
 - Unresolved: 本机为 macOS，无法在 Windows 上直接复现以定位控件丢弃首次按下的确切
   层次（baseview 命中测试 / D3D 首帧 / SendInput 时序），故这是**竞态加固而非根因修复**；
   已在日志中留下可区分证据。第 3 项仍待三平台 hosted 同 commit 全绿方可验收。
+
+### 2026-08-28 — M1 第 3 项验收：hosted run #47 三平台全绿
+
+- Command/platform: push `0e79bd2` 触发 GitHub Actions #47：https://github.com/aizcutei/sunmao/actions/runs/33177884493
+- Result: macOS ARM64、Windows x86_64、Ubuntu x86_64 三个 job 同一 commit 全部
+  success，逐步骤复查零非成功步骤。#46 的 Windows GUI 输入失败未复现；新增的 4 个
+  runner 套件（Tempo Delay 与 Sidechain Comp 各 ×2 格式）与 3 个新断言在三平台
+  原生构建下全部通过。
+- Evidence/artifact: run #47 上传 `phase1-macOS-ARM64`（49.3MB）、
+  `phase1-Windows-X64`（73.7MB）、`phase1-Linux-X64`（914.5MB），均可下载。
+- Unresolved: phase2/status.md 遗留表第 3 项已改为"已实现"（3/7 关闭）。
+  **诚实标注**：日志下载需 admin 权限（403），故无法从 API 判定 Windows 这次是
+  "重试第 2/3 次才命中"还是"首次即命中"——即无法区分"加固生效"与"竞态未复现"。
+  若后续运行出现 `took n attempts` 日志，即为加固确实在吸收竞态的证据；若再出现
+  三次全失败，则为真实回归，需深入 baseview 命中测试 / D3D 首帧 / SendInput 时序。
+  下一个瓶颈是第 4 项 backend 层 expression/mod 端到端映射测试。
