@@ -60,6 +60,10 @@ members = [
     "examples/sunmao_fx_sidechain_comp",
     "examples/sunmao_syn_poly_expr",
     "examples/sunmao_state_migration",
+    "examples/sunmao_syn_grouped_params",
+    "examples/sunmao_fx_svf",
+    "examples/sunmao_fx_os_dist",
+    "examples/sunmao_fx_meter",
 ]
 resolver = "2"
 

@@ -1,0 +1,12 @@
+[package]
+name = "sunmao_fx_svf"
+version = "0.1.0"
+edition = "2021"
+description = "State-variable filter — Phase 3 acceptance fixture (sunmao/dsp filter components)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sunmao = { path = "../../sunmao" }

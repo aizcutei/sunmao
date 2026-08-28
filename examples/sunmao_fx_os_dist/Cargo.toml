@@ -1,0 +1,12 @@
+[package]
+name = "sunmao_fx_os_dist"
+version = "0.1.0"
+edition = "2021"
+description = "Oversampled distortion — Phase 3 acceptance fixture (oversampling, latency contract)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sunmao = { path = "../../sunmao" }

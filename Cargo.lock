@@ -4719,7 +4719,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "sunmao_fx_meter"
+version = "0.1.0"
+dependencies = [
+ "sunmao",
+]
+
+[[package]]
+name = "sunmao_fx_os_dist"
+version = "0.1.0"
+dependencies = [
+ "sunmao",
+]
+
+[[package]]
 name = "sunmao_fx_sidechain_comp"
+version = "0.1.0"
+dependencies = [
+ "sunmao",
+]
+
+[[package]]
+name = "sunmao_fx_svf"
 version = "0.1.0"
 dependencies = [
  "sunmao",
@@ -4812,6 +4833,13 @@ dependencies = [
 
 [[package]]
 name = "sunmao_state_migration"
+version = "0.1.0"
+dependencies = [
+ "sunmao",
+]
+
+[[package]]
+name = "sunmao_syn_grouped_params"
 version = "0.1.0"
 dependencies = [
  "sunmao",

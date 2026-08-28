@@ -259,6 +259,35 @@ jobs:
           done
           cargo build --locked "${fixtures[@]/#/--package=}"
 
+      - name: Test Phase 3 acceptance fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The Phase 3 fixtures carry the framework/DSP-library milestones
+          # (M2-M4): parameter groups + smoothing, the sunmao/dsp components,
+          # and oversampling/metering. Blocking from M0 on, same shape as the
+          # Phase 2 step above.
+          fixtures=(
+            sunmao_syn_grouped_params
+            sunmao_fx_svf
+            sunmao_fx_os_dist
+            sunmao_fx_meter
+          )
+          for fixture in "${fixtures[@]}"; do
+            echo "::group::cargo test -p $fixture"
+            set +e
+            cargo test --locked -p "$fixture" 2>&1 | tee -a target/phase1-artifacts/phase3-fixture-tests.log
+            status=${PIPESTATUS[0]}
+            set -e
+            if [ "$status" -ne 0 ]; then
+              summary="$(tail -n 25 target/phase1-artifacts/phase3-fixture-tests.log | tr '\n' ' ' | cut -c1-1200)"
+              echo "::error title=Phase 3 fixture test failed::cargo test -p $fixture exited with status $status: $summary"
+              exit "$status"
+            fi
+            echo "::endgroup::"
+          done
+          cargo build --locked "${fixtures[@]/#/--package=}"
+
       - name: Test macOS system-capture linkage (non-blocking follow-up)
         if: runner.os == 'macOS'
         continue-on-error: true
