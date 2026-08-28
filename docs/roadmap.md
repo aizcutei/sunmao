@@ -8,9 +8,11 @@
 
 Phase 1 已完成：扩展后的 VST3 + CLAP + standalone gate 由 run #25（commit `c8401e6`，https://github.com/aizcutei/sunmao/actions/runs/33152642714 ）在三平台 hosted native jobs 上验收，artifacts 已上传；历史 VST3/CLAP baseline 为 run #21（commit `885d2a5`）。任何后续 ABI、生命周期、GUI、standalone、packager 或 runner 变更仍必须在新 commit 上重新通过三平台 hosted jobs 并重新上传证据；本地或历史 run 不能替代该 revalidation gate。Phase 2 实现目标自此可以创建。
 
-## Phase 2：高级插件契约与实时性
+## Phase 2：高级插件契约与实时性（核心已完成）
 
 增加多 audio bus/sidechain、动态 routing 与 speaker layout、modulation/per-note expression、transport/timing 完整模型、latency/tail/offline render、voice-info、plugin-owned state、preset 与 migration；继续以无分配、无阻塞 audio thread 为约束，并加入 fuzz/property tests。standalone 先保持 Phase 1 的基础设备/窗口契约，不在本阶段扩展为完整 DAW host。
+
+进展：transport/timing、latency/tail/offline render、多 bus/sidechain、modulation/per-note expression/voice-info、版本化 state 与迁移已落地，六个里程碑各自在独立 commit 上取得三平台 hosted 绿（run #27/#29/#31/#33/#35/#38），property tests 已进 gate；验收状态与证据见 `docs/phase2/status.md`，两格式语义差异与降级见 `docs/phase2/semantics.md`。**尚未覆盖**：bus 激活/去激活回调、speaker layout 动态协商、runner 宿主侧断言、`migrate_state` 的 backend 接线、`clap.preset-load`/VST3 program list、无界 fuzz——见 status.md 的"M6 遗留项"表，需在 Phase 3 之前单独立项或并入 Phase 3。
 
 ## Phase 3：框架、DSP 与组件库
 

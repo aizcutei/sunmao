@@ -150,3 +150,10 @@
 - 判断：本 commit 只改了两个 `_rs` 的 state 解码与 core 的迁移钩子，未触及 GUI/WGPU 路径；同一步骤在 run #27/29/31/33/35 连续五轮通过。倾向于 Windows WGPU 收尾期的偶发崩溃（与 run #24 的 UIA 超时 flake 类似），但**不以"flake"为由跳过**：下一次 push 会在新 commit 上重跑同一 gate 作为第二个数据点；若复现，则深入 WGPU/D3D 析构路径而非重试。
 - Evidence/artifact: check-run annotations（job 全量日志需 admin 权限）。
 - Unresolved: M5 尚未取得三平台 hosted 证据。
+
+### 2026-08-28 — M5 + M6 完成：hosted run #38 三平台全绿
+
+- Command/platform: push `77f788c` 触发 GitHub Actions #38：https://github.com/aizcutei/sunmao/actions/runs/33164763166
+- Result: macOS ARM64、Windows x86_64、Ubuntu x86_64 三个 job 同一 commit 全部 success。本 run 同时验证了 M5 的版本化 state 改动与 M6 的 property tests；`Test Phase 2 acceptance fixtures` 与含 proptest 的 `Test format adapters and host` 三平台均 success，Phase 1 既有 gate 保持绿色。#37 的 Windows WGPU 收尾段错误未复现，确认为偶发 flake（同一路径已六轮通过）。
+- Evidence/artifact: run #38 上传 `phase1-macOS-ARM64`（51.1MB）、`phase1-Windows-X64`（76.9MB）、`phase1-Linux-X64`（956.1MB）。
+- Unresolved: Phase 2 按 `docs/phase2/status.md` 的完成规则达成，但**未覆盖 roadmap Phase 2 的全部条目**——7 项延后工作已列入 status.md 的"M6 遗留项"表，需在 Phase 3 前单独立项或并入 Phase 3。
