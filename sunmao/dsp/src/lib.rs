@@ -11,7 +11,9 @@
 //! poisons its state forever — so out-of-range input is bounded at the edge
 //! rather than propagated.
 
+pub mod envelopes;
 pub mod filters;
+pub mod oscillators;
 
 /// Snaps values that have decayed to inaudibility down to zero.
 ///
@@ -40,6 +42,8 @@ pub fn flush_denormal_f64(value: f64) -> f64 {
 
 /// Common imports for using this crate.
 pub mod prelude {
+    pub use crate::envelopes::{Adsr, AdsrStage, EnvelopeFollower};
     pub use crate::filters::{Biquad, BiquadKind, OnePole, OnePoleKind, Svf, SvfOutput};
     pub use crate::flush_denormal;
+    pub use crate::oscillators::{Oscillator, Waveform};
 }

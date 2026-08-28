@@ -6,7 +6,9 @@
 //! few points a unit test picks.
 
 use proptest::prelude::*;
+use sunmao_dsp::envelopes::{Adsr, AdsrStage, EnvelopeFollower};
 use sunmao_dsp::filters::{Biquad, BiquadKind, OnePole, OnePoleKind, Svf};
+use sunmao_dsp::oscillators::{Oscillator, Waveform};
 
 /// Sample rates a host may actually use.
 fn sample_rates() -> impl Strategy<Value = f64> {
@@ -161,6 +163,95 @@ proptest! {
         for index in 0..256 {
             let input = (index as f32 * 0.01).sin();
             prop_assert_eq!(used.tick(input).lowpass, fresh.tick(input).lowpass);
+        }
+    }
+
+    /// No oscillator setting may produce a non-finite or runaway sample.
+    ///
+    /// PolyBLEP divides by the phase increment, so a frequency of zero or one
+    /// pushed past Nyquist is exactly where a naive implementation produces
+    /// infinities.
+    #[test]
+    fn no_oscillator_setting_produces_a_bad_sample(
+        frequency in -1_000.0f64..100_000.0,
+        pulse_width in -1.0f32..2.0,
+        sample_rate in sample_rates(),
+        waveform_index in 0usize..3,
+    ) {
+        let waveform = [Waveform::Sine, Waveform::Saw, Waveform::Pulse][waveform_index];
+        let mut osc = Oscillator::new(waveform);
+        osc.set_frequency(frequency, sample_rate);
+        osc.set_pulse_width(pulse_width);
+        for _ in 0..4_096 {
+            let value = osc.next();
+            prop_assert!(value.is_finite(), "{waveform:?} produced {value}");
+            // PolyBLEP overshoots a little; anything beyond this is a bug.
+            prop_assert!(value.abs() <= 2.0, "{waveform:?} produced {value}");
+        }
+    }
+
+    /// An ADSR must stay in `0.0..=1.0` and always terminate after gate-off.
+    ///
+    /// A voice is freed when the envelope goes idle, so an envelope that never
+    /// arrives leaks a voice for the lifetime of the session.
+    #[test]
+    fn an_adsr_stays_bounded_and_always_finishes(
+        attack in 0.0f32..0.5,
+        decay in 0.0f32..0.5,
+        sustain in -0.5f32..1.5,
+        release in 0.0f32..0.5,
+        sample_rate in sample_rates(),
+    ) {
+        let mut env = Adsr::new();
+        env.set_params(attack, decay, sustain, release, sample_rate);
+        env.gate_on();
+
+        // Hold long enough to pass attack and decay at the longest settings.
+        let hold = (sample_rate * 1.5) as usize;
+        for _ in 0..hold {
+            let value = env.next();
+            prop_assert!(value.is_finite(), "produced {value}");
+            prop_assert!((0.0..=1.0).contains(&value), "escaped 0..=1: {value}");
+        }
+
+        env.gate_off();
+        let limit = (sample_rate * 1.5) as usize;
+        let mut finished = false;
+        for _ in 0..limit {
+            let value = env.next();
+            prop_assert!((0.0..=1.0).contains(&value), "escaped 0..=1: {value}");
+            if !env.is_active() {
+                finished = true;
+                break;
+            }
+        }
+        prop_assert!(finished, "envelope never went idle, leaking the voice");
+        prop_assert_eq!(env.stage(), AdsrStage::Idle);
+        prop_assert_eq!(env.level(), 0.0);
+    }
+
+    /// A follower's level never exceeds the largest magnitude it has seen, and
+    /// never goes negative — it tracks amplitude, not signal.
+    #[test]
+    fn a_follower_tracks_magnitude_within_the_signal_it_saw(
+        attack in 0.0f32..0.1,
+        release in 0.0f32..0.5,
+        amplitude in 0.0f32..4.0,
+        sample_rate in sample_rates(),
+    ) {
+        let mut follower = EnvelopeFollower::new();
+        follower.set_params(attack, release, sample_rate);
+        for index in 0..8_192 {
+            // Alternating polarity: a follower keyed on the raw signal rather
+            // than its magnitude would oscillate instead of settling.
+            let input = if index % 2 == 0 { amplitude } else { -amplitude };
+            let level = follower.process(input);
+            prop_assert!(level.is_finite(), "produced {level}");
+            prop_assert!(level >= 0.0, "went negative: {level}");
+            prop_assert!(
+                level <= amplitude + 1.0e-3,
+                "exceeded the input magnitude: {level} > {amplitude}"
+            );
         }
     }
 }

@@ -1,8 +1,9 @@
 //! Starting point for a new SunMao instrument: copy this crate and rename the
-//! types. `input_channels` of zero plus `accepts_midi` is what makes a host
-//! treat this as an instrument; ids are derived from `VENDOR::NAME`.
+//! types. Zero `input_channels` plus `accepts_midi` is what makes a host treat
+//! this as an instrument; ids derive from `VENDOR::NAME`.
 
 use sunmao::prelude::*;
+use sunmao_dsp::prelude::*;
 
 #[derive(Params)]
 pub struct TemplateInstrumentParams {
@@ -22,8 +23,8 @@ impl Default for TemplateInstrumentParams {
 pub struct TemplateInstrument {
     params: Arc<TemplateInstrumentParams>,
     sample_rate: f64,
-    phase: f64,
-    note: Option<u8>,
+    osc: Oscillator,
+    env: Adsr,
 }
 
 impl SunmaoPlugin for TemplateInstrument {
@@ -46,6 +47,7 @@ impl SunmaoPlugin for TemplateInstrument {
 
     fn initialize(&mut self, sample_rate: f64, _max_block_size: u32) {
         self.sample_rate = sample_rate;
+        self.env.set_params(0.005, 0.100, 0.7, 0.200, sample_rate);
     }
 
     fn process(
@@ -57,24 +59,17 @@ impl SunmaoPlugin for TemplateInstrument {
         for event in events.iter() {
             if let Event::Midi(message) = event {
                 if message.is_note_on() {
-                    self.note = Some(message.note());
-                } else if message.is_note_off() && self.note == Some(message.note()) {
-                    self.note = None;
+                    let hz = 440.0 * 2.0_f64.powf((f64::from(message.note()) - 69.0) / 12.0);
+                    self.osc.set_frequency(hz, self.sample_rate);
+                    self.env.gate_on();
+                } else if message.is_note_off() {
+                    self.env.gate_off();
                 }
             }
         }
         let level = self.params.level.get();
-        let increment = self
-            .note
-            .map(|note| 440.0 * 2.0_f64.powf((f64::from(note) - 69.0) / 12.0) / self.sample_rate)
-            .unwrap_or(0.0);
         for index in 0..buffer.num_samples() {
-            let sample = if self.note.is_some() {
-                (self.phase * std::f64::consts::TAU).sin() as f32 * level
-            } else {
-                0.0
-            };
-            self.phase = (self.phase + increment).fract();
+            let sample = self.osc.next() * self.env.next() * level;
             for channel in 0..buffer.num_output_channels() {
                 buffer.output(channel)[index] = sample;
             }

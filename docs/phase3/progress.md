@@ -680,3 +680,40 @@
 - Evidence/artifact: run #63 上传三平台 artifacts（50.0MB / 74.2MB / 918.2MB），均可下载。
 - Unresolved: M3 余下 envelopes（ADSR/follower）与 band-limited oscillators
   （sine/saw/pulse），随后用它们把 instrument 模板压进 ≤50 行。
+
+### 2026-08-29 — M3 第二步：envelopes 与 band-limited oscillators
+
+- Command/platform: macOS ARM64，分支 `phase3/framework-dsp-library`。
+- Change:
+  - `sunmao_dsp::oscillators`：`Oscillator` 支持 `Waveform::{Sine,Saw,Pulse}`，
+    saw/pulse 用 **PolyBLEP** 抑制混叠（朴素方波/锯齿的阶跃会把 Nyquist 之上的
+    全部谐波折回可听频段，音高越高越明显）。频率夹在 Nyquist 之下——除了无意义，
+    还因为相位增量 ≥0.5 会破坏 PolyBLEP"任一样本附近至多一个不连续点"的前提；
+    pulse width 夹 `[0.01,0.99]` 避免退化成常量。
+  - `sunmao_dsp::envelopes`：`Adsr`（线性段，`gate_on/gate_off/is_active/stage`）
+    与 `EnvelopeFollower`（attack/release 分离的幅度跟踪器）。
+    **线性而非指数**段：线性 attack 精确到达峰值，指数只能逼近——正是 M2 smoothing
+    踩过的渐近线问题，不重复引入。retrigger 从当前电平继续（跳到 0 会咔哒）；
+    时间为 0/负/NaN 退化为"立即"而不是除零。
+  - `Oscillator` 加 `Default`（静音 sine），使其能放进 `#[derive(Default)]` 的插件结构。
+  - instrument 模板换用 `Oscillator` + `Adsr`。
+- Result:
+  - `sunmao_dsp`：23 单测（含 sine 周期数、PolyBLEP 相对朴素锯齿的高频能量下降、
+    duty cycle、极端频率有限、退化 pulse width 不静音、reset 可复现；
+    ADSR 走完各段并回到 Idle、attack 时长约等于设定、retrigger 不跳变、
+    follower 攻击快于释放且只跟幅度）+ **7 proptest**（新增 3：任意振荡器设置不产生
+    坏样本；ADSR 在任意参数下恒在 `0..=1` 且 gate_off 后**必定回到 Idle**——
+    否则合成器会永久泄漏一个 voice；follower 电平非负且不超过输入幅度）+ 6 doc-test。
+  - `RUSTFLAGS=-Awarnings cargo test --locked` 123 套件全绿、exit 0；
+    metadata/fmt/diff-check、Windows 交叉 check、
+    `tools/package_examples.sh --debug --test`（24 套件各 19/19）通过；
+    instrument 模板 cdylib 仅预期导出、无 AU 符号。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/m3b_test.log`、`/tmp/m3b_pkg.log`、
+  `/tmp/m3b_win.log`）——本地证据等级。
+- Unresolved（**再次诚实标注同一未达标项**）：instrument 模板由 86 行降到 **81 行**，
+  **仍未达 ≤50**。用上组件后剩下的体积**不是 DSP**，而是 trait 仪式
+  （params 的 `Default`、`input_channels`/`accepts_midi`/`params`/`initialize`、
+  `process` 签名）加 MIDI 处理与逐样本写入循环。要进 50 行需要一层更高的
+  voice/synth 抽象（或由宏生成 process 循环），那是超出 DSP crate 的设计决定，
+  我没有在 M3 里顺手引入。`template_size.rs` 的钉子已从 90 收紧到 85 以锁住这次改进。
+  M3 三个家族（filters/envelopes/oscillators）至此齐备，待 hosted 后进 M4。
