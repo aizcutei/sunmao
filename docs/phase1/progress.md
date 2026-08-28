@@ -388,6 +388,14 @@
 - Evidence/artifact: local re-run of the full step body (packager × 6, four runner `test` suites, raw + packaged `--smoke` for gain/sine, missing-plugin negative test) exits 0 on macOS ARM64; fmt/diff/YAML gates pass. Workflow-only change; no Rust code touched.
 - Unresolved: hosted revalidation of the fixed workflow on all three platforms.
 
+### 2026-08-28 — hosted CI #24 Windows WebView2 UIA helper timeout hardened
+
+- Command/platform: push `d660597` triggered GitHub Actions Phase 1 #24: https://github.com/aizcutei/sunmao/actions/runs/33151528184
+- Result: macOS is green with the packaged-standalone path fix, Linux stayed green. Windows failed in "Package and exercise native GUI backends" at `SunMao Gain WebView (VST3)`: pixels, resize, and focus all passed, but the synthesized drag left `Gain` at 0.5 and the external UI Automation fallback timed out after its hardcoded 5000 ms (the helper had already resolved the requested HWND, so it died mid UIA tree walk). The identical fixture passed on the same runner image in run #23 ~40 minutes earlier, so this is cold-runner latency, not a code regression.
+- Fix: the UIA helper deadline in `tools/sunmao_unittest_runner/src/gui_window.rs` is now tunable via `SUNMAO_UIA_HELPER_TIMEOUT_MS` (default 15000 ms, following the `env_duration_ms` convention), and the workflow's GUI step pins it to 20000 ms.
+- Evidence/artifact: check-run annotations for run #24; local macOS ARM64 `cargo fmt`/`git diff --check`, full `cargo test --locked` rerun (all suites green), `cargo check --locked --target x86_64-pc-windows-msvc -p sunmao_unittest_runner`, workflow YAML parse. The changed code path is `#[cfg(windows)]`-only.
+- Unresolved: hosted revalidation on all three platforms.
+
 ## 待记录
 
 后续每次执行按以下格式追加：

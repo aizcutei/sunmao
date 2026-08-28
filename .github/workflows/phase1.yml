@@ -415,6 +415,7 @@ jobs:
         env:
           SUNMAO_GUI_RENDER_MS: "1500"
           SUNMAO_GUI_PIXEL_TIMEOUT_MS: "10000"
+          SUNMAO_UIA_HELPER_TIMEOUT_MS: "20000"
           SUNMAO_GUI_PIXEL_PROBE: "1"
         run: |
           set -euo pipefail

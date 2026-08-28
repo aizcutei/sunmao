@@ -1374,7 +1374,17 @@ mod windows {
 
     const UIA_HELPER_COMMAND: &str = "__windows-uia-range-drag";
     const UIA_HELPER_TARGET_PREFIX: &str = "SUNMAO_UIA_TARGET=";
-    const UIA_HELPER_TIMEOUT: Duration = Duration::from_secs(5);
+    // WebView2's UIA tree can take well over five seconds to materialize on a
+    // cold hosted runner, so the helper deadline is generous and tunable.
+    const UIA_HELPER_DEFAULT_TIMEOUT_MS: u64 = 15_000;
+
+    fn uia_helper_timeout() -> Duration {
+        std::env::var("SUNMAO_UIA_HELPER_TIMEOUT_MS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .map(Duration::from_millis)
+            .unwrap_or_else(|| Duration::from_millis(UIA_HELPER_DEFAULT_TIMEOUT_MS))
+    }
 
     fn collect_uia_helper_output(child: &mut std::process::Child) -> (String, String) {
         const MAX_OUTPUT: u64 = 16 * 1024;
@@ -1411,7 +1421,8 @@ mod windows {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|error| format!("starting UI Automation helper failed: {error}"))?;
-        let deadline = Instant::now() + UIA_HELPER_TIMEOUT;
+        let helper_timeout = uia_helper_timeout();
+        let deadline = Instant::now() + helper_timeout;
         let status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break status,
@@ -1423,12 +1434,12 @@ mod windows {
                     return Err(if detail.is_empty() {
                         format!(
                             "external UI Automation helper timed out after {} ms",
-                            UIA_HELPER_TIMEOUT.as_millis()
+                            helper_timeout.as_millis()
                         )
                     } else {
                         format!(
                             "external UI Automation helper timed out after {} ms: {detail}",
-                            UIA_HELPER_TIMEOUT.as_millis()
+                            helper_timeout.as_millis()
                         )
                     });
                 }
