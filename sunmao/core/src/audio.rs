@@ -7,6 +7,9 @@ pub struct AudioBuffer<'a> {
     inputs: InputStorage<'a>,
     outputs: OutputStorage<'a>,
     num_samples: usize,
+    /// First channel index of each declared input bus, plus a trailing end
+    /// marker. Empty when the host only exposes a flat channel list.
+    input_bus_bounds: &'a [usize],
 }
 
 enum InputStorage<'a> {
@@ -30,6 +33,7 @@ impl<'a> AudioBuffer<'a> {
             inputs: InputStorage::Slices(inputs),
             outputs: OutputStorage::Slices(outputs),
             num_samples,
+            input_bus_bounds: &[],
         }
     }
 
@@ -44,6 +48,44 @@ impl<'a> AudioBuffer<'a> {
             inputs: InputStorage::Planar(inputs),
             outputs: OutputStorage::Planar(outputs),
             num_samples,
+            input_bus_bounds: &[],
+        }
+    }
+
+    /// Attaches the input bus layout produced by the format adapter.
+    ///
+    /// `bounds` holds the first channel index of every declared input bus plus
+    /// a trailing end marker, so bus `i` owns channels
+    /// `bounds[i]..bounds[i + 1]`.
+    pub fn with_input_bus_bounds(mut self, bounds: &'a [usize]) -> Self {
+        self.input_bus_bounds = bounds;
+        self
+    }
+
+    /// Number of input buses the host connected, or 0 when the adapter did not
+    /// provide a bus layout.
+    pub fn num_input_buses(&self) -> usize {
+        self.input_bus_bounds.len().saturating_sub(1)
+    }
+
+    /// Channel range owned by one input bus.
+    ///
+    /// Returns `None` for an unknown bus, so a plugin whose sidechain the host
+    /// left unconnected takes the same path as one running without a
+    /// sidechain at all.
+    pub fn input_bus_channels(&self, bus: usize) -> Option<std::ops::Range<usize>> {
+        let start = *self.input_bus_bounds.get(bus)?;
+        let end = *self.input_bus_bounds.get(bus + 1)?;
+        let available = self.num_input_channels();
+        (start < end && end <= available).then_some(start..end)
+    }
+
+    /// One channel of an input bus, or an empty slice when either the bus or
+    /// the channel is absent.
+    pub fn input_bus(&self, bus: usize, channel: usize) -> &[f32] {
+        match self.input_bus_channels(bus) {
+            Some(range) if channel < range.len() => self.input(range.start + channel),
+            _ => &[],
         }
     }
 
@@ -225,5 +267,57 @@ mod tests {
         // Samples outside the active block are owned by the caller and must
         // remain untouched by the framework's channel accessors.
         assert_eq!(output, [3.0, 3.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn input_bus_bounds_split_the_flat_channel_list() {
+        let main_left = [1.0_f32, 1.0];
+        let main_right = [2.0_f32, 2.0];
+        let key_left = [3.0_f32, 3.0];
+        let key_right = [4.0_f32, 4.0];
+        let inputs: [&[f32]; 4] = [&main_left, &main_right, &key_left, &key_right];
+        let mut out_left = [0.0_f32; 2];
+        let mut out_right = [0.0_f32; 2];
+        let mut outputs: [&mut [f32]; 2] = [&mut out_left, &mut out_right];
+        // Two stereo input buses: main is channels 0..2, sidechain is 2..4.
+        let bounds = [0_usize, 2, 4];
+        let buffer = AudioBuffer::new(&inputs, &mut outputs, 2).with_input_bus_bounds(&bounds);
+
+        assert_eq!(buffer.num_input_buses(), 2);
+        assert_eq!(buffer.input_bus_channels(0), Some(0..2));
+        assert_eq!(buffer.input_bus_channels(1), Some(2..4));
+        assert_eq!(buffer.input_bus(1, 0), &[3.0, 3.0]);
+        assert_eq!(buffer.input_bus(1, 1), &[4.0, 4.0]);
+    }
+
+    #[test]
+    fn an_absent_bus_reads_as_empty_rather_than_panicking() {
+        let left = [1.0_f32, 1.0];
+        let right = [2.0_f32, 2.0];
+        let inputs: [&[f32]; 2] = [&left, &right];
+        let mut out_left = [0.0_f32; 2];
+        let mut outputs: [&mut [f32]; 1] = [&mut out_left];
+        // The host connected the main bus only, so the sidechain bounds run
+        // past the channels actually provided.
+        let bounds = [0_usize, 2, 4];
+        let buffer = AudioBuffer::new(&inputs, &mut outputs, 2).with_input_bus_bounds(&bounds);
+
+        assert_eq!(buffer.input_bus_channels(0), Some(0..2));
+        assert_eq!(buffer.input_bus_channels(1), None, "not connected");
+        assert!(buffer.input_bus(1, 0).is_empty());
+        assert!(buffer.input_bus(9, 0).is_empty(), "unknown bus");
+    }
+
+    #[test]
+    fn a_buffer_without_a_bus_layout_reports_no_buses() {
+        let left = [1.0_f32, 1.0];
+        let inputs: [&[f32]; 1] = [&left];
+        let mut out_left = [0.0_f32; 2];
+        let mut outputs: [&mut [f32]; 1] = [&mut out_left];
+        let buffer = AudioBuffer::new(&inputs, &mut outputs, 2);
+
+        assert_eq!(buffer.num_input_buses(), 0);
+        assert_eq!(buffer.input_bus_channels(0), None);
+        assert!(buffer.input_bus(0, 0).is_empty());
     }
 }

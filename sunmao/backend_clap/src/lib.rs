@@ -20,8 +20,8 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 use sunmao_core::events::MidiMessage;
 use sunmao_core::plugin::{
-    ProcessContext as SunmaoProcessContext, RenderMode as SunmaoRenderMode,
-    TailLength as SunmaoTailLength,
+    BusInfo as SunmaoBusInfo, BusRole as SunmaoBusRole, ProcessContext as SunmaoProcessContext,
+    RenderMode as SunmaoRenderMode, TailLength as SunmaoTailLength,
 };
 use sunmao_core::view::ViewContext;
 use sunmao_core::{
@@ -31,6 +31,27 @@ use sunmao_core::{
 use sunmao_core::{ParentWindow, SunmaoView, ViewHandle};
 
 pub use clap_rs::{export_clap_plugin, export_clap_plugin_with_gui, PluginInfo};
+
+/// Total channel count carried by a set of declared buses.
+fn total_bus_channels(buses: &[SunmaoBusInfo]) -> u32 {
+    buses.iter().map(|bus| bus.channels).sum()
+}
+
+/// First channel index of each bus, plus a trailing end marker, for
+/// `AudioBuffer::with_input_bus_bounds`.
+fn bus_bounds(buses: &[SunmaoBusInfo]) -> Vec<usize> {
+    if buses.is_empty() {
+        return Vec::new();
+    }
+    let mut bounds = Vec::with_capacity(buses.len() + 1);
+    let mut offset = 0usize;
+    bounds.push(offset);
+    for bus in buses {
+        offset += bus.channels as usize;
+        bounds.push(offset);
+    }
+    bounds
+}
 
 /// CLAP treats any tail at or above `i32::MAX` samples as unbounded.
 const CLAP_INFINITE_TAIL: u32 = i32::MAX as u32;
@@ -434,6 +455,8 @@ pub struct SunmaoClapWrapper<P: SunmaoPlugin> {
     view: Option<Box<dyn SunmaoView>>,
     input_channels: u32,
     output_channels: u32,
+    input_buses: Vec<SunmaoBusInfo>,
+    output_buses: Vec<SunmaoBusInfo>,
     accepts_midi: bool,
     // GUI State
     view_handle: Option<MainThreadViewHandle>,
@@ -506,6 +529,8 @@ pub struct SunmaoClapProcessor<P: SunmaoPlugin> {
     accepts_midi: bool,
     input_buffers: Vec<Vec<f32>>,
     output_buffers: Vec<Vec<f32>>,
+    /// Precomputed at activation so the audio thread never rebuilds it.
+    input_bus_bounds: Vec<usize>,
     event_queue: EventQueue,
 }
 
@@ -518,8 +543,13 @@ impl<P: SunmaoPlugin> Plugin for SunmaoClapWrapper<P> {
         let param_descriptors = params
             .validated_descriptors()
             .unwrap_or_else(|error| panic!("invalid SunMao parameter layout: {error}"));
-        let input_channels = plugin.input_channels();
-        let output_channels = plugin.output_channels();
+        // The declared buses are authoritative: the channel totals used for
+        // scratch allocation are their sum, so a plugin that adds a sidechain
+        // only has to override `input_buses`.
+        let input_buses = plugin.input_buses();
+        let output_buses = plugin.output_buses();
+        let input_channels = total_bus_channels(&input_buses);
+        let output_channels = total_bus_channels(&output_buses);
         let accepts_midi = plugin.accepts_midi();
         let view = plugin.view();
 
@@ -529,6 +559,8 @@ impl<P: SunmaoPlugin> Plugin for SunmaoClapWrapper<P> {
             view,
             input_channels,
             output_channels,
+            input_buses,
+            output_buses,
             accepts_midi,
             view_handle: None,
             gui_api: None,
@@ -584,6 +616,7 @@ impl<P: SunmaoPlugin> Plugin for SunmaoClapWrapper<P> {
             params: self.params.clone(),
             param_descriptors: self.param_descriptors.clone(),
             sample_rate,
+            input_bus_bounds: bus_bounds(&self.input_buses),
             is_synth: self.input_channels == 0,
             accepts_midi: self.accepts_midi,
             input_buffers,
@@ -634,28 +667,22 @@ impl<P: SunmaoPlugin> Plugin for SunmaoClapWrapper<P> {
     }
 
     fn audio_ports_config(&self) -> Vec<AudioPortInfo> {
-        let in_ch = self.input_channels;
-        let out_ch = self.output_channels;
-
-        let mut ports = vec![];
-        if in_ch > 0 {
-            ports.push(AudioPortInfo {
-                id: 0,
-                name: "Input".to_string(),
-                channel_count: in_ch,
-                is_main: true,
-                is_input: true,
-            });
-        }
-        if out_ch > 0 {
-            ports.push(AudioPortInfo {
-                id: 1,
-                name: "Output".to_string(),
-                channel_count: out_ch,
-                is_main: true,
-                is_input: false,
-            });
-        }
+        // CLAP has no aux port type: a sidechain is an ordinary port that is
+        // simply not flagged as main, so `BusRole` maps onto `is_main`.
+        let mut ports = Vec::new();
+        let mut push = |buses: &[SunmaoBusInfo], is_input: bool, ports: &mut Vec<AudioPortInfo>| {
+            for bus in buses.iter().filter(|bus| bus.channels > 0) {
+                ports.push(AudioPortInfo {
+                    id: ports.len() as u32,
+                    name: bus.name.to_string(),
+                    channel_count: bus.channels,
+                    is_main: bus.role == SunmaoBusRole::Main,
+                    is_input,
+                });
+            }
+        };
+        push(&self.input_buses, true, &mut ports);
+        push(&self.output_buses, false, &mut ports);
         ports
     }
 
@@ -815,7 +842,8 @@ impl<P: SunmaoPlugin> AudioProcessor for SunmaoClapProcessor<P> {
         );
 
         let mut audio_buffer =
-            AudioBuffer::from_planar(&self.input_buffers, &mut self.output_buffers, frames);
+            AudioBuffer::from_planar(&self.input_buffers, &mut self.output_buffers, frames)
+                .with_input_bus_bounds(&self.input_bus_bounds);
 
         // Create process context. A host may omit the transport entirely, in
         // which case every musical field stays absent and the plugin sees a

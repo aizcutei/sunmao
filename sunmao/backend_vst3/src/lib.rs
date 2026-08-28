@@ -9,8 +9,8 @@ use std::ffi::c_void;
 use std::sync::Arc;
 use sunmao_core::events::MidiMessage;
 use sunmao_core::plugin::{
-    ProcessContext as SunmaoProcessContext, RenderMode as SunmaoRenderMode,
-    TailLength as SunmaoTailLength,
+    BusRole as SunmaoBusRole, ProcessContext as SunmaoProcessContext,
+    RenderMode as SunmaoRenderMode, TailLength as SunmaoTailLength,
 };
 use sunmao_core::view::ViewContext;
 use sunmao_core::{
@@ -36,6 +36,22 @@ const fn vst3_no_tail() -> u32 {
 /// VST3's "unbounded tail" encoding (`kInfiniteTail`).
 const fn vst3_infinite_tail() -> u32 {
     vst3_rs::vst3_sys::vst::types::kInfiniteTail
+}
+
+/// First channel index of each bus, plus a trailing end marker, for
+/// `AudioBuffer::with_input_bus_bounds`.
+fn bus_bounds(buses: &[sunmao_core::plugin::BusInfo]) -> Vec<usize> {
+    if buses.is_empty() {
+        return Vec::new();
+    }
+    let mut bounds = Vec::with_capacity(buses.len() + 1);
+    let mut offset = 0usize;
+    bounds.push(offset);
+    for bus in buses {
+        offset += bus.channels as usize;
+        bounds.push(offset);
+    }
+    bounds
 }
 
 /// Encodes a unified tail length for VST3.
@@ -76,6 +92,8 @@ pub struct SunmaoVst3Wrapper<P: SunmaoPlugin> {
     shared_params: Arc<ParameterBridge>,
     host: HostHandle,
     param_descriptors: Vec<ParamDescriptor>,
+    /// Precomputed at construction so the audio thread never rebuilds it.
+    input_bus_bounds: Vec<usize>,
 }
 
 #[derive(Clone, Copy)]
@@ -319,8 +337,19 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
             .validated_descriptors()
             .unwrap_or_else(|error| panic!("invalid SunMao parameter layout: {error}"));
         let shared_params = host.parameter_bridge();
-        let input_channels = plugin.input_channels() as usize;
-        let output_channels = plugin.output_channels() as usize;
+        // The declared buses are authoritative for the flattened channel
+        // topology, matching what `audio_config` reports to the host.
+        let input_buses = plugin.input_buses();
+        let input_bus_bounds = bus_bounds(&input_buses);
+        let input_channels = input_buses
+            .iter()
+            .map(|bus| bus.channels as usize)
+            .sum::<usize>();
+        let output_channels = plugin
+            .output_buses()
+            .iter()
+            .map(|bus| bus.channels as usize)
+            .sum::<usize>();
         let mut pending_midi = Vec::new();
         let pending_midi_capacity_available = P::MAX_EVENTS_PER_BLOCK <= MAX_PROCESS_EVENTS
             && pending_midi
@@ -360,6 +389,7 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
             shared_params,
             host,
             param_descriptors,
+            input_bus_bounds,
         }
     }
 
@@ -423,27 +453,38 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
         let input_channels = plugin.input_channels();
         let output_channels = plugin.output_channels();
         let vst3_info = P::vst3_info();
+        // VST3 has an explicit aux bus type, so a declared sidechain becomes a
+        // `kAux` bus rather than an extra main bus. The plugin-declared layout
+        // only applies to the main bus; aux buses infer their arrangement from
+        // the channel count.
+        let to_ports =
+            |buses: Vec<sunmao_core::plugin::BusInfo>,
+             main_layout: Option<sunmao_core::metadata::Vst3SpeakerLayout>| {
+                buses
+                    .into_iter()
+                    .filter(|bus| bus.channels > 0)
+                    .map(|bus| {
+                        let is_main = bus.role == SunmaoBusRole::Main;
+                        PortConfig {
+                            name: bus.name,
+                            channels: bus.channels,
+                            port_type: if is_main {
+                                PortType::Main
+                            } else {
+                                PortType::Aux
+                            },
+                            speaker_arrangement: if is_main {
+                                main_layout.map(|layout| layout.mask())
+                            } else {
+                                None
+                            },
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            };
         AudioConfig {
-            inputs: if input_channels == 0 {
-                Vec::new()
-            } else {
-                vec![PortConfig {
-                    name: "Input",
-                    channels: input_channels,
-                    port_type: PortType::Main,
-                    speaker_arrangement: vst3_info.input_layout.map(|layout| layout.mask()),
-                }]
-            },
-            outputs: if output_channels == 0 {
-                Vec::new()
-            } else {
-                vec![PortConfig {
-                    name: "Output",
-                    channels: output_channels,
-                    port_type: PortType::Main,
-                    speaker_arrangement: vst3_info.output_layout.map(|layout| layout.mask()),
-                }]
-            },
+            inputs: to_ports(plugin.input_buses(), vst3_info.input_layout),
+            outputs: to_ports(plugin.output_buses(), vst3_info.output_layout),
             accepts_midi: plugin.accepts_midi(),
         }
     }
@@ -555,7 +596,8 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
         );
 
         let mut audio_buffer =
-            AudioBuffer::from_planar(&self.input_buffers, &mut self.output_buffers, num_samples);
+            AudioBuffer::from_planar(&self.input_buffers, &mut self.output_buffers, num_samples)
+                .with_input_bus_bounds(&self.input_bus_bounds);
 
         // Create process context
         let sunmao_ctx = SunmaoProcessContext {

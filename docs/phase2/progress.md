@@ -79,3 +79,19 @@
 - Result: macOS ARM64、Windows x86_64、Ubuntu x86_64 三个 job 同一 commit 全部 success；latency/tail/render 契约在两种格式、三个平台通过，Phase 1 既有 gate 与 Phase 2 fixture 步骤保持绿色。
 - Evidence/artifact: run #31 上传 `phase1-macOS-ARM64`（50.8MB）、`phase1-Windows-X64`（76.7MB）、`phase1-Linux-X64`（954.8MB）。
 - Unresolved: M2 完成，进入 M3。M3 盘点：`clap_rs::AudioPortInfo`（`ext/audio_ports.rs:14`）与 `vst3_rs` wrapper 的 `get_bus_info`/`activate_bus`/`set_bus_arrangements`、`PortType::Aux → BusTypes::kAux` 均已存在；缺口在 `sunmao_core`——`SunmaoPlugin` 只有 `input_channels()`/`output_channels()` 两个标量、无 bus 模型，`AudioBuffer` 只有扁平通道索引、无 per-bus 视图，两个 backend 的端口表也都由这两个标量推导。M2 收尾项（runner 的 latency/tail 宿主断言）一并留待 M3/M6。
+
+### 2026-08-28 — M3 多 bus/sidechain 实现（待 hosted 验证）
+
+- Command/platform: macOS ARM64，分支 `phase2/advanced-plugin-contract`。
+- Change（自底向上）：
+  - `_rs`：无需改动，两侧 bus 能力已存在（`clap_rs::AudioPortInfo`、`vst3_rs` 的 `get_bus_info`/`activate_bus`/`set_bus_arrangements` 与 `PortType::Aux`）。
+  - core：新增 `BusRole{Main,Sidechain}` 与 `BusInfo{name,channels,role}`（含 `main`/`sidechain` 构造器与 doc-test）；`SunmaoPlugin` 新增 `input_buses()`/`output_buses()`，默认实现由 `input_channels()`/`output_channels()` 推导单 main bus，**Phase 1 插件行为不变**；`AudioBuffer` 新增 `with_input_bus_bounds`/`num_input_buses`/`input_bus_channels`/`input_bus`，扁平通道索引保持不变。`BusInfo`/`BusRole` 进 prelude。
+  - backend：两侧同时桥接，且**以 bus 声明为通道拓扑的唯一真相**——扁平通道总数取自 bus 声明之和，因此加 sidechain 只需覆写 `input_buses()`。VST3 把 `BusRole::Sidechain` 映射为 `PortType::Aux`（speaker layout 只应用于 main bus）；CLAP 无 aux 概念，映射为 `is_main=false` 的普通端口。bus bounds 在构造/激活时预计算，音频线程不重建。
+  - fixture：sidechain 压缩器声明 main+sidechain 两条 stereo 输入总线，检测器改用 key 信号；宿主未连接 sidechain 时回落到主路径。
+  - `docs/phase2/semantics.md`：多 bus/sidechain 行填入落地 API 与两格式差异，注明全部测试名。
+- Result:
+  - 新增测试：core 3（25/25，覆盖 bus 切分、未连接 bus 读空、无 bus 布局）、fixture 3（4/4，覆盖 bus 声明、loud key 触发压缩、silent key 不压缩）。
+  - 完整 `cargo test --locked`：104 套件全绿、0 失败；fmt/diff 通过。
+  - Windows target check（两 backend + fixture）通过；`tools/package_examples.sh --debug --test` 退出 0，Phase 1 的 20 个 runner 套件仍各 16/16——本轮改了两个 backend 的通道拓扑推导，这条回归是关键证据。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/phase2_m3_test.log`、`/tmp/phase2_m3_pkg.log`）——本地证据等级。
+- Unresolved: 三平台 hosted 验证本 commit 后 M3 才算完成。仍未做：bus 激活/去激活回调、speaker layout 动态协商（`setBusArrangements` 目前仍按声明固定接受）、runner 侧多 bus 宿主测试——这三项列为 M3 收尾或 M6 收口项。

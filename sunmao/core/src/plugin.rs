@@ -18,6 +18,58 @@ pub enum ProcessStatus {
     Error,
 }
 
+/// What a host-visible audio bus is used for.
+///
+/// The formats express this differently — VST3 has an explicit `kAux` bus
+/// type, CLAP relies on the `is_main` flag and port order — so the unified API
+/// names the role and lets each backend encode it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BusRole {
+    /// The plugin's primary audio path.
+    #[default]
+    Main,
+    /// A key/control input that is not part of the main signal path.
+    Sidechain,
+}
+
+/// One declared audio bus.
+///
+/// ```
+/// # use sunmao_core::plugin::{BusInfo, BusRole};
+/// let key = BusInfo::sidechain("Sidechain", 2);
+/// assert_eq!(key.role, BusRole::Sidechain);
+/// assert_eq!(BusInfo::main("Input", 2).channels, 2);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BusInfo {
+    /// Host-visible bus name.
+    pub name: &'static str,
+    /// Channel count carried by this bus.
+    pub channels: u32,
+    /// What the bus is used for.
+    pub role: BusRole,
+}
+
+impl BusInfo {
+    /// Declares a main-path bus.
+    pub const fn main(name: &'static str, channels: u32) -> Self {
+        Self {
+            name,
+            channels,
+            role: BusRole::Main,
+        }
+    }
+
+    /// Declares a sidechain/key bus.
+    pub const fn sidechain(name: &'static str, channels: u32) -> Self {
+        Self {
+            name,
+            channels,
+            role: BusRole::Sidechain,
+        }
+    }
+}
+
 /// How long a plugin keeps producing output after its input goes silent.
 ///
 /// Both formats encode "infinite" with a magic number — VST3 uses
@@ -139,6 +191,27 @@ pub trait SunmaoPlugin: Default + Send + 'static {
 
     /// Get the plugin's parameters.
     fn params(&self) -> Arc<Self::Params>;
+
+    /// Declares the plugin's input buses.
+    ///
+    /// The default derives a single main bus from
+    /// [`SunmaoPlugin::input_channels`], so a plugin only overrides this when
+    /// it needs a sidechain or several buses. Channel indices handed to
+    /// [`AudioBuffer`] are the buses concatenated in declaration order.
+    fn input_buses(&self) -> Vec<BusInfo> {
+        match self.input_channels() {
+            0 => Vec::new(),
+            channels => vec![BusInfo::main("Input", channels)],
+        }
+    }
+
+    /// Declares the plugin's output buses.
+    fn output_buses(&self) -> Vec<BusInfo> {
+        match self.output_channels() {
+            0 => Vec::new(),
+            channels => vec![BusInfo::main("Output", channels)],
+        }
+    }
 
     /// Called before processing starts. Use for initialization.
     fn initialize(&mut self, _sample_rate: f64, _max_block_size: u32) {}

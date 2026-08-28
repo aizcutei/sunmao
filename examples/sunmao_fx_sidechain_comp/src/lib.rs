@@ -1,10 +1,13 @@
 //! SunMao Sidechain Compressor — Phase 2 acceptance fixture.
 //!
-//! M0 skeleton: a feed-forward compressor keyed on its own input, built only
-//! on the Phase 1 contract. M3 adds the sidechain input bus and switches the
-//! detector to the external key signal.
+//! A feed-forward compressor whose detector keys off a declared sidechain
+//! bus (M3). When the host leaves the sidechain unconnected the detector
+//! falls back to the main signal path.
 
 use sunmao::prelude::*;
+
+/// Index of the declared sidechain bus within `input_buses`.
+const SIDECHAIN_BUS: usize = 1;
 
 /// Compressor parameters.
 #[derive(Params)]
@@ -63,6 +66,13 @@ impl SunmaoPlugin for SidechainCompPlugin {
         self.params.clone()
     }
 
+    fn input_buses(&self) -> Vec<BusInfo> {
+        vec![
+            BusInfo::main("Input", 2),
+            BusInfo::sidechain("Sidechain", 2),
+        ]
+    }
+
     fn initialize(&mut self, sample_rate: f64, _max_block_size: u32) {
         // ~50 ms release regardless of sample rate.
         let release_samples = (sample_rate * 0.05).max(1.0);
@@ -102,11 +112,26 @@ impl SunmaoPlugin for SidechainCompPlugin {
         let makeup = db_to_linear(makeup_db);
 
         let channels = buffer.num_output_channels();
+        // The detector keys off the sidechain bus when the host connected one,
+        // and falls back to the main path otherwise so the plugin still works
+        // in a host that leaves the key input unpatched.
+        let key_channels = buffer
+            .input_bus_channels(SIDECHAIN_BUS)
+            .map(|range| range.len())
+            .unwrap_or(0);
         for sample_index in 0..buffer.num_samples() {
-            // M3 replaces this self-keyed detector with the sidechain bus.
             let mut key_peak = 0.0f32;
-            for channel in 0..channels {
-                key_peak = key_peak.max(buffer.output(channel)[sample_index].abs());
+            if key_channels > 0 {
+                for channel in 0..key_channels {
+                    let key = buffer.input_bus(SIDECHAIN_BUS, channel);
+                    if let Some(sample) = key.get(sample_index) {
+                        key_peak = key_peak.max(sample.abs());
+                    }
+                }
+            } else {
+                for channel in 0..channels {
+                    key_peak = key_peak.max(buffer.output(channel)[sample_index].abs());
+                }
             }
             self.envelope = if key_peak > self.envelope {
                 key_peak
@@ -169,6 +194,83 @@ mod tests {
         );
         assert_eq!(status, ProcessStatus::Normal);
         output_left
+    }
+
+    /// Runs a block with an explicitly connected sidechain bus: the main path
+    /// carries `main_level`, the key bus carries `key_level`.
+    fn process_with_key(
+        plugin: &mut SidechainCompPlugin,
+        main_level: f32,
+        key_level: f32,
+        samples: usize,
+    ) -> Vec<f32> {
+        let main_left = vec![main_level; samples];
+        let main_right = vec![main_level; samples];
+        let key_left = vec![key_level; samples];
+        let key_right = vec![key_level; samples];
+        let inputs: [&[f32]; 4] = [&main_left, &main_right, &key_left, &key_right];
+        let mut output_left = vec![0.0; samples];
+        let mut output_right = vec![0.0; samples];
+        let mut outputs: [&mut [f32]; 2] = [&mut output_left, &mut output_right];
+        // Two stereo input buses, exactly what `input_buses` declares.
+        let bounds = [0_usize, 2, 4];
+        let mut buffer =
+            AudioBuffer::new(&inputs, &mut outputs, samples).with_input_bus_bounds(&bounds);
+        let events = EventQueue::new();
+        let status = plugin.process(
+            &mut buffer,
+            &events,
+            &ProcessContext {
+                sample_rate: 48_000.0,
+                is_playing: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(status, ProcessStatus::Normal);
+        output_left
+    }
+
+    #[test]
+    fn the_plugin_declares_a_stereo_sidechain_bus() {
+        let plugin = SidechainCompPlugin::default();
+        let buses = plugin.input_buses();
+
+        assert_eq!(buses.len(), 2);
+        assert_eq!(buses[0].role, BusRole::Main);
+        assert_eq!(buses[SIDECHAIN_BUS].role, BusRole::Sidechain);
+        assert_eq!(buses[SIDECHAIN_BUS].channels, 2);
+    }
+
+    #[test]
+    fn a_loud_key_ducks_a_quiet_main_signal() {
+        let mut plugin = SidechainCompPlugin::default();
+        plugin.initialize(48_000.0, 64);
+
+        // Main is far below the threshold, so only the key can trigger
+        // gain reduction. Without the sidechain path this block would pass
+        // through untouched.
+        let ducked = process_with_key(&mut plugin, 0.05, 1.0, 64);
+        assert!(
+            ducked[63] < 0.05 * 0.6,
+            "a 0 dBFS key must duck the quiet main path, got {}",
+            ducked[63]
+        );
+    }
+
+    #[test]
+    fn a_silent_key_leaves_a_loud_main_signal_alone() {
+        let mut plugin = SidechainCompPlugin::default();
+        plugin.initialize(48_000.0, 64);
+
+        // The detector must ignore the main path entirely once a key bus is
+        // connected, so a loud main signal with a silent key is untouched
+        // apart from makeup gain.
+        let passed = process_with_key(&mut plugin, 0.5, 0.0, 64);
+        assert!(
+            (passed[63] - 0.5).abs() < 1e-3,
+            "a silent key must not trigger gain reduction, got {}",
+            passed[63]
+        );
     }
 
     #[test]
