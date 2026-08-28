@@ -454,3 +454,30 @@
   只是随时可用的基线；深扫仍应用 `cargo +nightly fuzz run`。
   本项无需 hosted 验证其功能（非 blocking），但仍需三平台 hosted 确认它
   **没有拖累既有 gate**。M1 七项落地完毕，下一步进 M2。
+
+### 2026-08-28 — M1 完成：7/7 遗留项全部三平台 hosted 验收
+
+- Command/platform: 第 7 项 push `f0c2f2e` 触发 GitHub Actions #55：https://github.com/aizcutei/sunmao/actions/runs/33186447997
+- Result: 三平台三个 job 同一 commit 全部 success、逐步骤零非成功步骤。fuzz crate
+  排除出 workspace 后**未对既有 gate 产生任何影响**（这正是本项需要 hosted 确认的点）。
+  M1 七项各自在独立 commit 上取得三平台 hosted 绿：
+  run #42（bus 激活）、#44（layout 协商）、#47（runner 宿主断言）、
+  #49（backend expression 端到端）、#51（`migrate_state` 接线）、
+  #53（preset 载入）、#55（无界 fuzz 脚手架）。
+- 收口过程中发现并修复的、原本"标记完成但实际失效"的缺陷（均非本轮新引入）：
+  1. **VST3 note expression 从未真正到达插件**——backend 在宿主回调之后
+     `event_queue.clear()`，每个 expression 都被静默丢弃（Phase 2 M4 标记完成时即失效）。
+  2. **CLAP 在插件激活期间 latency/tail 上报 0**——`activate` 把插件 `take()` 进
+     processor 后回落 `unwrap_or(0)`，而这正是宿主查询的时刻；VST3 无此问题，两格式分叉。
+  3. `clap_rs` 对所有端口固定上报 `port_type=stereo`（mono 布局出现后即为错报）。
+  4. 两个 `_rs` 层把 state 版本硬编码为 1，插件声明的 `STATE_VERSION` 从未写入或比对，
+     `migrate_state` 因此永远不可能触发。
+  共同教训：**Phase 2 的测试覆盖了 `_rs` 与 core/fixture 两端，缺口都在中间的 backend
+  适配层**；M1 第 3、4 项要求的"宿主侧断言"与"backend 端到端映射测试"正是补这个位置，
+  且一落地就各自抓出一个真实缺陷。后续 milestone 的新能力应默认补 backend 层端到端测试。
+- Evidence/artifact: run #55 上传三平台 artifacts（49.5MB / 73.9MB / 915.8MB），均可下载。
+- Unresolved: M1 完成。下一个瓶颈是 M2：参数分组/嵌套（VST3 `IUnitInfo` ↔ CLAP module
+  路径）、零分配参数 smoothing、effect/instrument template（新插件样板 ≤50 行），
+  由 `examples/sunmao_syn_grouped_params` fixture 消费验证。
+  **注意**：VST3 侧参数分组需要 `IUnitInfo`，而 `vst3_sys` **尚无该绑定**
+  （做 preset program list 时已确认），M2 将需要自 `_sys` 层补起。
