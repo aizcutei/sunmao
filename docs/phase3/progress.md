@@ -149,3 +149,18 @@
   未开始，下一个瓶颈是第 3 项 runner 宿主侧断言（latency/tail 查询、多 bus 拓扑
   枚举、向 sidechain 送信号验证路由）。已知边界：本项只协商通道数，bus 数量变化
   与 surround 位图仍未支持（semantics.md 已记）。
+
+### 2026-08-28 — M1 第 2 项验收：hosted run #44 三平台全绿
+
+- Command/platform: push `1478189` 触发 GitHub Actions #44：https://github.com/aizcutei/sunmao/actions/runs/33174187893
+- Result: macOS ARM64、Windows x86_64、Ubuntu x86_64 三个 job 同一 commit 全部
+  success，逐步骤复查零非成功步骤；"Test Phase 3 acceptance fixtures"（现含新增
+  的 `sunmao_fx_layout_gain`）三平台均 success，Phase 1+2 既有 gate 保持绿色。
+  layout 协商链路（core `BusConfig`、`clap_rs` audio-ports-config/config-info、
+  `vst3_rs` setBusArrangements 真实协商、两 backend、跨格式可达性 proptest）在
+  三平台原生构建下全部通过。#37 的 Windows WGPU 收尾段错误未复现。
+- Evidence/artifact: run #44 上传 `phase1-macOS-ARM64`（49.3MB）、
+  `phase1-Windows-X64`（73.7MB）、`phase1-Linux-X64`（914.5MB），均可下载。
+- Unresolved: phase2/status.md 遗留表第 2 项已改为"已实现"（2/7 关闭）。下一个
+  瓶颈是第 3 项 runner 宿主侧断言：latency/tail 查询、多 bus 拓扑枚举、向
+  sidechain 送信号验证路由。

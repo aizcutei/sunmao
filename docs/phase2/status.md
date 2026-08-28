@@ -58,7 +58,7 @@ Wayland、完整 GUI toolkit、外部 preset 格式的具体解析（只留 API 
 | 项 | 来源 | 状态 |
 |---|---|---|
 | bus 激活/去激活回调 | M3 | **已实现**（Phase 3 M1，三平台 hosted 全绿：[run #42](https://github.com/aizcutei/sunmao/actions/runs/33171119003)，commit `b78aca6`，artifacts 齐备）：`SunmaoPlugin::set_bus_active` ↔ VST3 `IComponent::activateBus` / CLAP `clap.audio-ports-activation/2`，两侧按声明校验索引，插件拒绝如实上报，见 semantics.md 的"bus 激活/去激活"行 |
-| speaker layout 动态协商 | M3 | **已落地，待 hosted 验收**（Phase 3 M1）：`SunmaoPlugin::bus_configs()`/`current_bus_config()`/`select_bus_config()` ↔ VST3 `setBusArrangements` 真实协商（按提议通道数在已发布布局中查找）/ CLAP `clap.audio-ports-config` + `audio-ports-config-info/1`，见 semantics.md 的"speaker layout 动态协商"行。fixture `sunmao_fx_layout_gain`；macOS 本地 12 测试（含跨格式可达性 proptest）绿 |
+| speaker layout 动态协商 | M3 | **已实现**（Phase 3 M1，三平台 hosted 全绿：[run #44](https://github.com/aizcutei/sunmao/actions/runs/33174187893)，commit `1478189`，artifacts 齐备）：`SunmaoPlugin::bus_configs()`/`current_bus_config()`/`select_bus_config()` ↔ VST3 `setBusArrangements` 真实协商（按提议通道数在已发布布局中查找）/ CLAP `clap.audio-ports-config` + `audio-ports-config-info/1`，见 semantics.md 的"speaker layout 动态协商"行。fixture `sunmao_fx_layout_gain`；12 测试（含跨格式可达性 proptest）三平台绿 |
 | runner 宿主侧 latency/tail/多 bus 断言 | M2/M3 | 未实现 |
 | backend 层 expression/mod 端到端映射测试 | M4 | 未实现（覆盖在 `_rs` 与 core/fixture 两端） |
 | backend 在 state load 后回调 `migrate_state` | M5 | 未接线（钩子与解码器已就绪） |
