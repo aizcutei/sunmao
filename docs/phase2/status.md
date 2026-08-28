@@ -57,7 +57,7 @@ Wayland、完整 GUI toolkit、外部 preset 格式的具体解析（只留 API 
 
 | 项 | 来源 | 状态 |
 |---|---|---|
-| bus 激活/去激活回调 | M3 | 未实现（`setBusArrangements` 目前按声明固定接受） |
+| bus 激活/去激活回调 | M3 | **已落地，待 hosted 验收**（Phase 3 M1）：`SunmaoPlugin::set_bus_active` ↔ VST3 `IComponent::activateBus` / CLAP `clap.audio-ports-activation/2`，两侧按声明校验索引，见 semantics.md 的"bus 激活/去激活"行。macOS 本地 11 测试（含 2 proptest）绿；三平台 hosted 全绿后改为"已实现" |
 | speaker layout 动态协商 | M3 | 未实现（只承诺 mono/stereo 静态声明） |
 | runner 宿主侧 latency/tail/多 bus 断言 | M2/M3 | 未实现 |
 | backend 层 expression/mod 端到端映射测试 | M4 | 未实现（覆盖在 `_rs` 与 core/fixture 两端） |

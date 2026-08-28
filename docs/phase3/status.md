@@ -48,8 +48,8 @@ M2 的验收方式是 grouped synth 换用分组 + smoothing + template 后测�
 
 | Milestone | 范围 | 当前判断 | 权威证据 | 下一步 |
 |---|---|---|---|---|
-| M0 脚手架 | 文档、4 fixtures、workspace/CI 骨架 | 本地就绪，待 hosted 验证 | macOS 本地：4 fixture 22 单测通过，完整 gate 见 progress.md | push 后三平台 hosted 全绿则完成 |
-| M1 Phase 2 收口 | 7 项遗留（见 phase2/status.md 遗留表），每项完成即更新该表 | 未开始 | — | bus 激活回调与 layout 协商先行（同为 bus 域，_rs 层入手） |
+| M0 脚手架 | 文档、4 fixtures、workspace/CI 骨架 | **完成**（三平台 hosted 全绿） | [run #41](https://github.com/aizcutei/sunmao/actions/runs/33167456623)（commit `9f65af5`）三 job success，"Test Phase 3 acceptance fixtures" 三平台均 success，artifacts 齐备 | — |
+| M1 Phase 2 收口 | 7 项遗留（见 phase2/status.md 遗留表），每项完成即更新该表 | 进行中：**1/7 项本地就绪**（第 1 项 bus 激活/去激活回调，全层落地 + 11 测试，macOS 本地绿，待 hosted）。原盘点（2026-08-28）已确认 `_sys` 层无缺口（`clap_sys::clap_plugin_audio_ports_activation_t`、`audio_ports_config` 全家族、`vst3_sys::IComponent::activate_bus`），缺口在 `_rs`/core，本轮已补齐 activation 侧；`audio_ports_config`（layout 协商）仍未暴露 | 本地证据见 progress.md 2026-08-28 第 3 条 | 第 2 项 speaker layout 动态协商（`setBusArrangements` 真实协商 ↔ CLAP `audio-ports-config`） |
 | M2 参数系统与构造 API | 分组/嵌套、smoothing、effect/instrument template | 未开始 | — | 读 vst3_sys `IUnitInfo` 与 clap_sys params module 路径约定 |
 | M3 DSP 基础组件 | `sunmao/dsp`：filters/envelopes/oscillators | 未开始 | — | 新 crate + SVF fixture 换组件实现 |
 | M4 oversampling/mixing/metering | 2x/4x oversampling、dry-wet/增益、peak/RMS metering | 未开始 | — | oversampler latency 接 Phase 2 契约并被 runner 断言 |
@@ -65,6 +65,10 @@ artifacts 可下载后，才把本文件状态改为 "Phase 3 完成"。任何�
 
 ## 当前状态
 
-- M0 进行中：4 个 fixture 骨架与 CI 步骤已就绪（macOS 本地证据），待 push 后
-  hosted 三平台验证。
+- M0 完成：hosted run #41（commit `9f65af5`）三平台 native job 全绿，Phase 1+2
+  既有 gate 与新增的 "Test Phase 3 acceptance fixtures" 步骤同时 success，
+  artifacts `phase1-macOS-ARM64`（48.7MB）、`phase1-Windows-X64`（73.3MB）、
+  `phase1-Linux-X64`（911.8MB）可下载。
+- M1 进行中：Phase 2 遗留表第 1 项（bus 激活/去激活回调）本地就绪，等待 hosted
+  三平台验证；其余 6 项未开始。
 - 分支：`phase3/framework-dsp-library`（自 main `2df01ce` 切出）。

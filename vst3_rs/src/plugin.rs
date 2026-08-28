@@ -508,6 +508,16 @@ pub trait Plugin: Sized + 'static {
         AudioConfig::stereo_effect()
     }
 
+    /// Called from `IComponent::activateBus` when the host activates or
+    /// deactivates one audio bus. The wrapper validates the bus index against
+    /// [`Plugin::audio_config`] before forwarding, so implementations only
+    /// see declared buses. Returning `false` rejects the change.
+    ///
+    /// Event buses are handled by the wrapper and never reach this callback.
+    fn activate_bus(&mut self, _is_input: bool, _bus_index: u32, _active: bool) -> bool {
+        true
+    }
+
     /// Latency in samples (processing delay)
     fn latency(&self) -> u32 {
         0

@@ -241,6 +241,34 @@ pub trait SunmaoPlugin: Default + Send + 'static {
         }
     }
 
+    /// Called when the host activates or deactivates one declared audio bus.
+    ///
+    /// `bus_index` indexes [`SunmaoPlugin::input_buses`] or
+    /// [`SunmaoPlugin::output_buses`], the same numbering
+    /// [`AudioBuffer::input_bus`] uses. Both backends validate the index
+    /// against those declarations before calling, so it always names a real
+    /// bus. Returning `false` rejects the request.
+    ///
+    /// Both backends only call this while the plugin is inactive, so it is a
+    /// valid place to reconfigure processing state. A deactivated input bus
+    /// still occupies its buffer slot rather than disappearing, so a plugin
+    /// that ignores this callback keeps working; use it to skip work — and to
+    /// stop reading a key bus the host has switched off.
+    ///
+    /// Format notes: VST3 delivers this through `IComponent::activateBus`,
+    /// CLAP through `clap.audio-ports-activation/2`. See
+    /// `docs/phase2/semantics.md` for the exact differences.
+    ///
+    /// ```
+    /// # use sunmao_core::plugin::{BusInfo, BusRole};
+    /// let buses = vec![BusInfo::main("Input", 2), BusInfo::sidechain("Sidechain", 2)];
+    /// // `bus_index` indexes the declaration list, so bus 1 is the sidechain.
+    /// assert_eq!(buses[1].role, BusRole::Sidechain);
+    /// ```
+    fn set_bus_active(&mut self, _is_input: bool, _bus_index: u32, _active: bool) -> bool {
+        true
+    }
+
     /// Called before processing starts. Use for initialization.
     fn initialize(&mut self, _sample_rate: f64, _max_block_size: u32) {}
 

@@ -776,6 +776,7 @@ dependencies = [
  "clap_sys",
  "log",
  "objc",
+ "proptest",
  "raw-window-handle",
  "rtrb",
 ]
@@ -5352,6 +5353,7 @@ name = "vst3_rs"
 version = "0.1.0"
 dependencies = [
  "objc",
+ "proptest",
  "raw-window-handle",
  "vst3_sys",
 ]

@@ -173,6 +173,27 @@ pub trait Plugin: Sized {
         Vec::new()
     }
 
+    // Audio port activation (`clap.audio-ports-activation/2`). The wrapper
+    // validates the port index against `audio_ports_config` before forwarding,
+    // so implementations only see declared ports. `sample_size` is the host's
+    // sample width in bits (32/64) or 0 when unspecified.
+    fn set_audio_port_active(
+        &mut self,
+        _is_input: bool,
+        _port_index: u32,
+        _is_active: bool,
+        _sample_size: u32,
+    ) -> bool {
+        true
+    }
+
+    // Whether ports may be (de)activated while processing. Off by default:
+    // hosts must deactivate the plugin first, which keeps the callback on the
+    // main thread.
+    fn can_activate_ports_while_processing(&self) -> bool {
+        false
+    }
+
     // Latency (samples of processing delay)
     fn latency(&self) -> u32 {
         0

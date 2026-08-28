@@ -435,6 +435,10 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
         clamp_vst3_tail(self.plugin.tail())
     }
 
+    fn activate_bus(&mut self, is_input: bool, bus_index: u32, active: bool) -> bool {
+        self.plugin.set_bus_active(is_input, bus_index, active)
+    }
+
     fn reset(&mut self) {
         // VST3 delivers an in-place reset through IAudioProcessor's
         // setProcessing(false) callback while the processor remains active.
@@ -760,7 +764,8 @@ mod tests {
         BoolParam, FloatParam, IntParam, ParamDescriptor, ParamKind, ProcessStatus, SunmaoView,
     };
     use vst3_rs::vst3_sys::base::{
-        kInvalidArgument, kNoInterface, kNotImplemented, kResultOk, IUnknownVtbl, TUID,
+        kInvalidArgument, kNoInterface, kNotImplemented, kResultFalse, kResultOk, IUnknownVtbl,
+        TUID,
     };
     #[cfg(target_os = "windows")]
     use vst3_rs::vst3_sys::gui::kPlatformTypeHWND;
@@ -2220,6 +2225,88 @@ mod tests {
             assert_eq!(
                 ((*audio_vtbl).get_tail_samples)(audio),
                 vst3_infinite_tail()
+            );
+
+            ((*component_vtbl).base.terminate)(component);
+            ((*component_vtbl).base.unknown.release)(component);
+        }
+    }
+
+    #[derive(Default)]
+    struct BusActivationPlugin {
+        calls: Vec<(bool, u32, bool)>,
+    }
+
+    impl SunmaoPlugin for BusActivationPlugin {
+        const NAME: &'static str = "Bus Activation Test";
+        const VENDOR: &'static str = "SunMao Test";
+        const URL: &'static str = "https://example.invalid";
+        type Params = EmptyParams;
+
+        fn params(&self) -> Arc<Self::Params> {
+            Arc::new(EmptyParams)
+        }
+
+        fn input_buses(&self) -> Vec<sunmao_core::plugin::BusInfo> {
+            vec![
+                sunmao_core::plugin::BusInfo::main("Input", 2),
+                sunmao_core::plugin::BusInfo::sidechain("Sidechain", 2),
+            ]
+        }
+
+        fn set_bus_active(&mut self, is_input: bool, bus_index: u32, active: bool) -> bool {
+            self.calls.push((is_input, bus_index, active));
+            !(is_input && bus_index == 1 && active)
+        }
+
+        fn process(
+            &mut self,
+            _buffer: &mut AudioBuffer,
+            _events: &EventQueue,
+            _context: &SunmaoProcessContext,
+        ) -> ProcessStatus {
+            ProcessStatus::Normal
+        }
+    }
+
+    #[test]
+    fn vst3_activate_bus_maps_onto_the_sunmao_bus_callback() {
+        use vst3_rs::vst3_sys::vst::{BusDirections, MediaTypes};
+
+        unsafe {
+            let processor =
+                ProcessorWrapper::<SunmaoVst3Wrapper<BusActivationPlugin>>::new([0; 16]);
+            let component = processor.cast::<c_void>();
+            let component_vtbl = *(component as *const *const IComponentVtbl);
+            assert_eq!(
+                ((*component_vtbl).base.initialize)(component, std::ptr::null_mut()),
+                kResultOk
+            );
+
+            let activate_bus = (*component_vtbl).activate_bus;
+            // The VST3 bus index is the SunMao bus index, in declaration order.
+            assert_eq!(
+                activate_bus(component, MediaTypes::kAudio, BusDirections::kInput, 0, 1),
+                kResultOk
+            );
+            assert_eq!(
+                activate_bus(component, MediaTypes::kAudio, BusDirections::kOutput, 0, 0),
+                kResultOk
+            );
+            // A plugin-side refusal reaches the host as kResultFalse.
+            assert_eq!(
+                activate_bus(component, MediaTypes::kAudio, BusDirections::kInput, 1, 1),
+                kResultFalse
+            );
+            assert_eq!(
+                activate_bus(component, MediaTypes::kAudio, BusDirections::kInput, 1, 0),
+                kResultOk
+            );
+
+            // Undeclared buses never reach the plugin.
+            assert_eq!(
+                activate_bus(component, MediaTypes::kAudio, BusDirections::kInput, 2, 1),
+                kInvalidArgument
             );
 
             ((*component_vtbl).base.terminate)(component);

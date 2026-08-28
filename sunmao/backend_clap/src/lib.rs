@@ -714,6 +714,22 @@ impl<P: SunmaoPlugin> Plugin for SunmaoClapWrapper<P> {
             .unwrap_or(0)
     }
 
+    fn set_audio_port_active(
+        &mut self,
+        is_input: bool,
+        port_index: u32,
+        is_active: bool,
+        _sample_size: u32,
+    ) -> bool {
+        // CLAP declares one port per SunMao bus in declaration order, so the
+        // port index is the bus index. `sample_size` is dropped: SunMao is
+        // f32-only, and clap_rs already rejects other widths at activation.
+        self.plugin
+            .as_mut()
+            .map(|plugin| plugin.set_bus_active(is_input, port_index, is_active))
+            .unwrap_or(false)
+    }
+
     fn voice_info(&self) -> Option<ClapVoiceInfo> {
         let info = self.plugin.as_ref()?.voice_info()?;
         Some(ClapVoiceInfo {
@@ -2326,6 +2342,109 @@ mod tests {
 
         assert_eq!(Plugin::latency(&wrapper), 256);
         assert_eq!(Plugin::tail(&wrapper), CLAP_INFINITE_TAIL);
+    }
+
+    #[derive(Default)]
+    struct BusActivationPlugin {
+        /// Activation states recorded in call order.
+        calls: Vec<(bool, u32, bool)>,
+    }
+
+    impl SunmaoPlugin for BusActivationPlugin {
+        const NAME: &'static str = "Bus Activation Test";
+        const VENDOR: &'static str = "SunMao Test";
+        const URL: &'static str = "https://example.invalid";
+        type Params = RealtimeParams;
+
+        fn params(&self) -> Arc<Self::Params> {
+            Arc::new(RealtimeParams)
+        }
+
+        fn input_buses(&self) -> Vec<SunmaoBusInfo> {
+            vec![
+                SunmaoBusInfo::main("Input", 2),
+                SunmaoBusInfo::sidechain("Sidechain", 2),
+            ]
+        }
+
+        fn set_bus_active(&mut self, is_input: bool, bus_index: u32, active: bool) -> bool {
+            self.calls.push((is_input, bus_index, active));
+            // Refuse exactly one configuration so the rejection path is
+            // observable through the CLAP contract too.
+            !(is_input && bus_index == 1 && active)
+        }
+
+        fn process(
+            &mut self,
+            _buffer: &mut AudioBuffer,
+            _events: &EventQueue,
+            _context: &SunmaoProcessContext,
+        ) -> ProcessStatus {
+            ProcessStatus::Normal
+        }
+    }
+
+    #[test]
+    fn clap_port_activation_maps_onto_the_sunmao_bus_callback() {
+        let host = unsafe { HostHandle::from_raw(std::ptr::null()) };
+        let mut wrapper = <SunmaoClapWrapper<BusActivationPlugin> as Plugin>::new(host);
+
+        // The CLAP port index is the SunMao bus index, in declaration order.
+        assert!(Plugin::set_audio_port_active(
+            &mut wrapper,
+            true,
+            0,
+            true,
+            32
+        ));
+        assert!(Plugin::set_audio_port_active(
+            &mut wrapper,
+            false,
+            0,
+            false,
+            32
+        ));
+        // A plugin-side refusal must surface as `false`, not be swallowed.
+        assert!(!Plugin::set_audio_port_active(
+            &mut wrapper,
+            true,
+            1,
+            true,
+            32
+        ));
+        assert!(Plugin::set_audio_port_active(
+            &mut wrapper,
+            true,
+            1,
+            false,
+            32
+        ));
+
+        let plugin = wrapper.plugin.as_ref().expect("plugin present when idle");
+        assert_eq!(
+            plugin.calls.as_slice(),
+            &[
+                (true, 0, true),
+                (false, 0, false),
+                (true, 1, true),
+                (true, 1, false)
+            ],
+            "every host request reaches the plugin, in order and unaltered"
+        );
+    }
+
+    #[test]
+    fn clap_declares_one_audio_port_per_sunmao_bus() {
+        // The activation bridge relies on port index == bus index, so pin it.
+        let host = unsafe { HostHandle::from_raw(std::ptr::null()) };
+        let wrapper = <SunmaoClapWrapper<BusActivationPlugin> as Plugin>::new(host);
+        let ports = Plugin::audio_ports_config(&wrapper);
+        let inputs: Vec<_> = ports.iter().filter(|port| port.is_input).collect();
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[0].name, "Input");
+        assert!(inputs[0].is_main);
+        assert_eq!(inputs[1].name, "Sidechain");
+        assert!(!inputs[1].is_main);
     }
 
     #[test]

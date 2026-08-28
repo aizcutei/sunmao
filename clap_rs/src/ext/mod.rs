@@ -1,4 +1,5 @@
 pub mod audio_ports;
+pub mod audio_ports_activation;
 pub mod gui;
 pub mod latency;
 pub mod note_ports;

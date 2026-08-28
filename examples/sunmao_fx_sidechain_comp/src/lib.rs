@@ -35,6 +35,10 @@ pub struct SidechainCompPlugin {
     params: Arc<SidechainCompParams>,
     envelope: f32,
     release_coefficient: f32,
+    /// Whether the host has the key bus switched on. Hosts that never call
+    /// the activation callback leave this at its default of `true`, which
+    /// keeps the buffer-driven fallback in charge.
+    sidechain_active: bool,
 }
 
 impl Default for SidechainCompPlugin {
@@ -43,6 +47,7 @@ impl Default for SidechainCompPlugin {
             params: Arc::new(SidechainCompParams::default()),
             envelope: 0.0,
             release_coefficient: 0.999,
+            sidechain_active: true,
         }
     }
 }
@@ -71,6 +76,16 @@ impl SunmaoPlugin for SidechainCompPlugin {
             BusInfo::main("Input", 2),
             BusInfo::sidechain("Sidechain", 2),
         ]
+    }
+
+    fn set_bus_active(&mut self, is_input: bool, bus_index: u32, active: bool) -> bool {
+        // A host that switches the key bus off gets the main-path detector
+        // instead. The main buses are always accepted; there is no
+        // configuration this plugin cannot run in.
+        if is_input && bus_index as usize == SIDECHAIN_BUS {
+            self.sidechain_active = active;
+        }
+        true
     }
 
     fn initialize(&mut self, sample_rate: f64, _max_block_size: u32) {
@@ -115,10 +130,16 @@ impl SunmaoPlugin for SidechainCompPlugin {
         // The detector keys off the sidechain bus when the host connected one,
         // and falls back to the main path otherwise so the plugin still works
         // in a host that leaves the key input unpatched.
-        let key_channels = buffer
-            .input_bus_channels(SIDECHAIN_BUS)
-            .map(|range| range.len())
-            .unwrap_or(0);
+        let key_channels = if self.sidechain_active {
+            buffer
+                .input_bus_channels(SIDECHAIN_BUS)
+                .map(|range| range.len())
+                .unwrap_or(0)
+        } else {
+            // The host deactivated the key bus; its samples are meaningless
+            // even though the bus still occupies its buffer slot.
+            0
+        };
         for sample_index in 0..buffer.num_samples() {
             let mut key_peak = 0.0f32;
             if key_channels > 0 {
@@ -255,6 +276,48 @@ mod tests {
             "a 0 dBFS key must duck the quiet main path, got {}",
             ducked[63]
         );
+    }
+
+    #[test]
+    fn deactivating_the_key_bus_returns_the_detector_to_the_main_path() {
+        let mut plugin = SidechainCompPlugin::default();
+        plugin.initialize(48_000.0, 64);
+
+        // With the key bus live, a loud key ducks the quiet main path.
+        assert!(plugin.set_bus_active(true, SIDECHAIN_BUS as u32, true));
+        let keyed = process_with_key(&mut plugin, 0.05, 1.0, 64);
+        assert!(keyed[63] < 0.05 * 0.6, "baseline: the key must duck");
+
+        // Once the host switches the key bus off, the same buffer layout must
+        // be detected from the main path instead — which is far below the
+        // threshold, so nothing is ducked.
+        plugin.reset();
+        assert!(plugin.set_bus_active(true, SIDECHAIN_BUS as u32, false));
+        let unkeyed = process_with_key(&mut plugin, 0.05, 1.0, 64);
+        assert!(
+            (unkeyed[63] - 0.05).abs() < 1e-3,
+            "a deactivated key bus must not drive the detector, got {}",
+            unkeyed[63]
+        );
+
+        // Reactivating restores the keyed behaviour.
+        plugin.reset();
+        assert!(plugin.set_bus_active(true, SIDECHAIN_BUS as u32, true));
+        let rekeyed = process_with_key(&mut plugin, 0.05, 1.0, 64);
+        assert!(
+            rekeyed[63] < 0.05 * 0.6,
+            "reactivation must restore ducking"
+        );
+    }
+
+    #[test]
+    fn activating_the_main_buses_is_always_accepted() {
+        let mut plugin = SidechainCompPlugin::default();
+        // Main in, main out: neither may be refused, and neither disturbs the
+        // sidechain state.
+        assert!(plugin.set_bus_active(true, 0, false));
+        assert!(plugin.set_bus_active(false, 0, false));
+        assert!(plugin.sidechain_active, "only bus 1 tracks the key state");
     }
 
     #[test]

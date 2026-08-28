@@ -1053,4 +1053,277 @@ mod tests {
         assert_eq!(POST_ACTIVATION_DEACTIVATIONS.load(Ordering::SeqCst), 2);
         unsafe { ((*plugin).destroy.unwrap())(plugin) };
     }
+
+    // ======= Audio ports activation =======
+
+    use crate::ext::audio_ports::AudioPortInfo;
+    use clap_sys::ext::audio_ports_activation::{
+        CLAP_EXT_AUDIO_PORTS_ACTIVATION, CLAP_EXT_AUDIO_PORTS_ACTIVATION_COMPAT,
+        clap_plugin_audio_ports_activation_t,
+    };
+
+    static ACTIVATION_CALLS: Mutex<Vec<(bool, u32, bool, u32)>> = Mutex::new(Vec::new());
+
+    struct ActivationPlugin;
+
+    impl Plugin for ActivationPlugin {
+        type AudioProcessor = ();
+
+        fn new(_host: crate::plugin::HostHandle) -> Self {
+            Self
+        }
+
+        fn audio_ports_config(&self) -> Vec<AudioPortInfo> {
+            vec![
+                AudioPortInfo {
+                    id: 0,
+                    name: "Main In".to_string(),
+                    channel_count: 2,
+                    is_main: true,
+                    is_input: true,
+                },
+                AudioPortInfo {
+                    id: 1,
+                    name: "Sidechain".to_string(),
+                    channel_count: 2,
+                    is_main: false,
+                    is_input: true,
+                },
+                AudioPortInfo {
+                    id: 2,
+                    name: "Main Out".to_string(),
+                    channel_count: 2,
+                    is_main: true,
+                    is_input: false,
+                },
+            ]
+        }
+
+        fn set_audio_port_active(
+            &mut self,
+            is_input: bool,
+            port_index: u32,
+            is_active: bool,
+            sample_size: u32,
+        ) -> bool {
+            ACTIVATION_CALLS
+                .lock()
+                .unwrap()
+                .push((is_input, port_index, is_active, sample_size));
+            true
+        }
+
+        fn activate(
+            &mut self,
+            _sample_rate: f64,
+            _min_frames: u32,
+            _max_frames: u32,
+        ) -> Option<Self::AudioProcessor> {
+            Some(())
+        }
+
+        fn get_parameter(&self, _id: u32) -> f64 {
+            0.0
+        }
+
+        fn set_parameter(&mut self, _id: u32, _value: f64) {}
+    }
+
+    #[test]
+    fn audio_ports_activation_validates_the_index_and_forwards_to_the_plugin() {
+        ACTIVATION_CALLS.lock().unwrap().clear();
+
+        let plugin =
+            unsafe { PluginEntry::create_plugin::<ActivationPlugin>(ptr::null(), ptr::null()) };
+        assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
+
+        let ext = unsafe {
+            ((*plugin).get_extension.unwrap())(
+                plugin,
+                CLAP_EXT_AUDIO_PORTS_ACTIVATION.as_ptr().cast(),
+            )
+        } as *const clap_plugin_audio_ports_activation_t;
+        assert!(
+            !ext.is_null(),
+            "plugins with audio ports must expose clap.audio-ports-activation/2"
+        );
+
+        // Hosts may still probe the draft id; both must resolve.
+        let compat = unsafe {
+            ((*plugin).get_extension.unwrap())(
+                plugin,
+                CLAP_EXT_AUDIO_PORTS_ACTIVATION_COMPAT.as_ptr().cast(),
+            )
+        };
+        assert_eq!(compat, ext as *const c_void);
+
+        let set_active = unsafe { (*ext).set_active.unwrap() };
+        // Both declared input ports and the output port are addressable.
+        assert!(unsafe { set_active(plugin, true, 1, false, 32) });
+        assert!(unsafe { set_active(plugin, false, 0, true, 0) });
+        // Out-of-range indices are rejected before the plugin sees them.
+        assert!(!unsafe { set_active(plugin, true, 2, false, 32) });
+        assert!(!unsafe { set_active(plugin, false, 1, false, 32) });
+
+        assert_eq!(
+            ACTIVATION_CALLS.lock().unwrap().as_slice(),
+            &[(true, 1, false, 32), (false, 0, true, 0)],
+            "only in-range requests reach the plugin callback"
+        );
+
+        let can_activate = unsafe { (*ext).can_activate_while_processing.unwrap() };
+        assert!(
+            !unsafe { can_activate(plugin) },
+            "activation while processing is off by default"
+        );
+
+        unsafe { ((*plugin).destroy.unwrap())(plugin) };
+    }
+
+    #[test]
+    fn plugins_without_audio_ports_do_not_expose_the_activation_extension() {
+        let _lock = TEST_PLUGIN_LIFECYCLE_LOCK.lock().unwrap();
+        let plugin = unsafe { PluginEntry::create_plugin::<TestPlugin>(ptr::null(), ptr::null()) };
+        assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
+        let ext = unsafe {
+            ((*plugin).get_extension.unwrap())(
+                plugin,
+                CLAP_EXT_AUDIO_PORTS_ACTIVATION.as_ptr().cast(),
+            )
+        };
+        assert!(ext.is_null());
+        unsafe { ((*plugin).destroy.unwrap())(plugin) };
+    }
+
+    /// Port declarations the next `PropActivationPlugin` will report, as
+    /// (inputs, outputs). Read once per instance at `init`.
+    static PROP_PORT_COUNTS: Mutex<(u32, u32)> = Mutex::new((0, 0));
+    /// Indices the plugin callback actually saw, per direction.
+    static PROP_FORWARDED: Mutex<Vec<(bool, u32)>> = Mutex::new(Vec::new());
+    /// `PROP_PORT_COUNTS`/`PROP_FORWARDED` are process-global.
+    static PROP_ACTIVATION_LOCK: Mutex<()> = Mutex::new(());
+
+    struct PropActivationPlugin;
+
+    impl Plugin for PropActivationPlugin {
+        type AudioProcessor = ();
+
+        fn new(_host: crate::plugin::HostHandle) -> Self {
+            Self
+        }
+
+        fn audio_ports_config(&self) -> Vec<AudioPortInfo> {
+            let (inputs, outputs) = *PROP_PORT_COUNTS.lock().unwrap();
+            let mut ports = Vec::new();
+            for direction_is_input in [true, false] {
+                let count = if direction_is_input { inputs } else { outputs };
+                for index in 0..count {
+                    ports.push(AudioPortInfo {
+                        id: index,
+                        name: format!("Port {index}"),
+                        channel_count: 2,
+                        is_main: index == 0,
+                        is_input: direction_is_input,
+                    });
+                }
+            }
+            ports
+        }
+
+        fn set_audio_port_active(
+            &mut self,
+            is_input: bool,
+            port_index: u32,
+            _is_active: bool,
+            _sample_size: u32,
+        ) -> bool {
+            PROP_FORWARDED.lock().unwrap().push((is_input, port_index));
+            true
+        }
+
+        fn activate(
+            &mut self,
+            _sample_rate: f64,
+            _min_frames: u32,
+            _max_frames: u32,
+        ) -> Option<Self::AudioProcessor> {
+            Some(())
+        }
+
+        fn get_parameter(&self, _id: u32) -> f64 {
+            0.0
+        }
+
+        fn set_parameter(&mut self, _id: u32, _value: f64) {}
+    }
+
+    proptest::proptest! {
+        /// For any declared port topology and any index a host may pass —
+        /// including wildly out-of-range ones — the guard must forward exactly
+        /// the in-range requests and reject the rest. An out-of-range index
+        /// must never reach the plugin, and an in-range one must never be
+        /// silently dropped.
+        #[test]
+        fn port_activation_forwards_exactly_the_declared_indices(
+            inputs in 0u32..4,
+            outputs in 0u32..4,
+            probe_is_input in proptest::prelude::any::<bool>(),
+            probe_index in 0u32..8,
+            probe_active in proptest::prelude::any::<bool>(),
+            sample_size in proptest::sample::select(vec![0u32, 32u32, 64u32]),
+        ) {
+            let _serialize = PROP_ACTIVATION_LOCK.lock().unwrap();
+            *PROP_PORT_COUNTS.lock().unwrap() = (inputs, outputs);
+            PROP_FORWARDED.lock().unwrap().clear();
+
+            let plugin = unsafe {
+                PluginEntry::create_plugin::<PropActivationPlugin>(ptr::null(), ptr::null())
+            };
+            let initialized = unsafe { ((*plugin).init.unwrap())(plugin) };
+            proptest::prop_assert!(initialized, "init must succeed");
+
+            let ext = unsafe {
+                ((*plugin).get_extension.unwrap())(
+                    plugin,
+                    CLAP_EXT_AUDIO_PORTS_ACTIVATION.as_ptr().cast(),
+                )
+            } as *const clap_plugin_audio_ports_activation_t;
+
+            let declared = if probe_is_input { inputs } else { outputs };
+            let in_range = probe_index < declared;
+
+            if ext.is_null() {
+                // Only a plugin with no ports at all may hide the extension,
+                // and then no index can be in range.
+                proptest::prop_assert_eq!(inputs + outputs, 0);
+                proptest::prop_assert!(!in_range);
+            } else {
+                let set_active = unsafe { (*ext).set_active.unwrap() };
+                let accepted = unsafe {
+                    set_active(plugin, probe_is_input, probe_index, probe_active, sample_size)
+                };
+                proptest::prop_assert_eq!(
+                    accepted,
+                    in_range,
+                    "index {} with {} declared port(s) in that direction",
+                    probe_index,
+                    declared
+                );
+                let forwarded = PROP_FORWARDED.lock().unwrap().clone();
+                if in_range {
+                    proptest::prop_assert_eq!(
+                        forwarded.as_slice(),
+                        &[(probe_is_input, probe_index)]
+                    );
+                } else {
+                    proptest::prop_assert!(
+                        forwarded.is_empty(),
+                        "an out-of-range index must not reach the plugin"
+                    );
+                }
+            }
+
+            unsafe { ((*plugin).destroy.unwrap())(plugin) };
+        }
+    }
 }

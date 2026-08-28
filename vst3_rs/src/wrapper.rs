@@ -835,13 +835,62 @@ impl<P: Plugin> ProcessorWrapper<P> {
         kNotImplemented
     }
     unsafe extern "system" fn processor_activate_bus(
-        _this: *mut c_void,
-        _media_type: MediaType,
-        _dir: BusDirection,
-        _index: int32,
-        _state: TBool,
+        this: *mut c_void,
+        media_type: MediaType,
+        dir: BusDirection,
+        index: int32,
+        state: TBool,
     ) -> tresult {
-        kResultOk
+        ffi_guard(kInternalError, || unsafe {
+            Self::processor_activate_bus_unchecked(this, media_type, dir, index, state)
+        })
+    }
+
+    unsafe fn processor_activate_bus_unchecked(
+        this: *mut c_void,
+        media_type: MediaType,
+        dir: BusDirection,
+        index: int32,
+        state: TBool,
+    ) -> tresult {
+        if this.is_null() || index < 0 {
+            return kInvalidArgument;
+        }
+        let config = P::audio_config();
+        if media_type == MediaTypes::kAudio {
+            let (is_input, bus_count) = if dir == BusDirections::kInput {
+                (true, config.inputs.len())
+            } else if dir == BusDirections::kOutput {
+                (false, config.outputs.len())
+            } else {
+                return kInvalidArgument;
+            };
+            if index as usize >= bus_count {
+                return kInvalidArgument;
+            }
+            let obj = Self::from_component(this);
+            if !(*obj).initialized {
+                return kNotInitialized;
+            }
+            let Some(plugin) = (*obj).plugin.as_mut() else {
+                return kNotInitialized;
+            };
+            return if plugin.activate_bus(is_input, index as u32, state != 0) {
+                kResultOk
+            } else {
+                kResultFalse
+            };
+        }
+        // The single event bus has no plugin-side state to toggle; accept the
+        // request so hosts that deactivate MIDI while idle keep working.
+        if media_type == MediaTypes::kEvent
+            && config.accepts_midi
+            && dir == BusDirections::kInput
+            && index == 0
+        {
+            return kResultOk;
+        }
+        kInvalidArgument
     }
 
     unsafe extern "system" fn processor_set_active(this: *mut c_void, state: TBool) -> tresult {
@@ -6038,6 +6087,282 @@ mod tests {
             );
             assert_eq!((*controller).parameter_bridge.get(92), 1.0);
             GuiControllerWrapper::<SanitizingGuiParamPlugin>::release(controller.cast());
+        }
+    }
+
+    // ======= Bus activation =======
+
+    static BUS_ACTIVATIONS: Mutex<Vec<(bool, u32, bool)>> = Mutex::new(Vec::new());
+    /// `BUS_ACTIVATIONS` is process-global, so the tests that inspect it must
+    /// not run concurrently with each other.
+    static BUS_ACTIVATION_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    struct BusActivationPlugin;
+
+    impl Plugin for BusActivationPlugin {
+        fn info() -> PluginInfo {
+            PluginInfo::default()
+        }
+
+        fn new(_host: HostHandle) -> Self {
+            Self
+        }
+
+        fn audio_config() -> AudioConfig {
+            AudioConfig {
+                inputs: vec![
+                    crate::PortConfig::stereo("Main In"),
+                    crate::PortConfig {
+                        name: "Sidechain",
+                        channels: 2,
+                        port_type: crate::PortType::Aux,
+                        speaker_arrangement: Some(SpeakerArr::kStereo),
+                    },
+                ],
+                outputs: vec![crate::PortConfig::stereo("Main Out")],
+                accepts_midi: true,
+            }
+        }
+
+        fn activate_bus(&mut self, is_input: bool, bus_index: u32, active: bool) -> bool {
+            BUS_ACTIVATIONS
+                .lock()
+                .unwrap()
+                .push((is_input, bus_index, active));
+            // The sidechain may be refused; the main buses may not.
+            !(is_input && bus_index == 1 && active)
+        }
+
+        fn get_param(&self, _id: u32) -> f64 {
+            0.0
+        }
+
+        fn set_param(&mut self, _id: u32, _value: f64) {}
+
+        fn process(&mut self, _ctx: &mut ProcessContext) -> ProcessResult {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn activate_bus_validates_the_index_and_forwards_to_the_plugin() {
+        let _serialize = BUS_ACTIVATION_TEST_LOCK.lock().unwrap();
+        unsafe {
+            BUS_ACTIVATIONS.lock().unwrap().clear();
+            let processor = ProcessorWrapper::<BusActivationPlugin>::new([0; 16]);
+            let component = processor.cast::<c_void>();
+            assert_eq!(
+                ProcessorWrapper::<BusActivationPlugin>::processor_initialize(
+                    component,
+                    std::ptr::null_mut()
+                ),
+                kResultOk
+            );
+
+            let activate_bus = ProcessorWrapper::<BusActivationPlugin>::processor_activate_bus;
+
+            // Declared audio buses reach the plugin.
+            assert_eq!(
+                activate_bus(component, MediaTypes::kAudio, BusDirections::kInput, 0, 1),
+                kResultOk
+            );
+            assert_eq!(
+                activate_bus(component, MediaTypes::kAudio, BusDirections::kOutput, 0, 0),
+                kResultOk
+            );
+            // A refusal from the plugin surfaces as kResultFalse, not a silent
+            // acceptance.
+            assert_eq!(
+                activate_bus(component, MediaTypes::kAudio, BusDirections::kInput, 1, 1),
+                kResultFalse
+            );
+            // Deactivating the same sidechain is allowed.
+            assert_eq!(
+                activate_bus(component, MediaTypes::kAudio, BusDirections::kInput, 1, 0),
+                kResultOk
+            );
+
+            assert_eq!(
+                BUS_ACTIVATIONS.lock().unwrap().as_slice(),
+                &[
+                    (true, 0, true),
+                    (false, 0, false),
+                    (true, 1, true),
+                    (true, 1, false)
+                ]
+            );
+
+            // Out-of-range and undeclared buses are rejected before the
+            // callback runs.
+            let before = BUS_ACTIVATIONS.lock().unwrap().len();
+            assert_eq!(
+                activate_bus(component, MediaTypes::kAudio, BusDirections::kInput, 2, 1),
+                kInvalidArgument
+            );
+            assert_eq!(
+                activate_bus(component, MediaTypes::kAudio, BusDirections::kOutput, 1, 1),
+                kInvalidArgument
+            );
+            assert_eq!(
+                activate_bus(component, MediaTypes::kAudio, BusDirections::kInput, -1, 1),
+                kInvalidArgument
+            );
+            assert_eq!(BUS_ACTIVATIONS.lock().unwrap().len(), before);
+
+            // The single event bus is handled by the wrapper itself.
+            assert_eq!(
+                activate_bus(component, MediaTypes::kEvent, BusDirections::kInput, 0, 1),
+                kResultOk
+            );
+            assert_eq!(
+                activate_bus(component, MediaTypes::kEvent, BusDirections::kInput, 1, 1),
+                kInvalidArgument
+            );
+            assert_eq!(BUS_ACTIVATIONS.lock().unwrap().len(), before);
+
+            ProcessorWrapper::<BusActivationPlugin>::component_release(component);
+        }
+    }
+
+    #[test]
+    fn activate_bus_before_initialize_reports_not_initialized() {
+        let _serialize = BUS_ACTIVATION_TEST_LOCK.lock().unwrap();
+        unsafe {
+            BUS_ACTIVATIONS.lock().unwrap().clear();
+            let processor = ProcessorWrapper::<BusActivationPlugin>::new([0; 16]);
+            let component = processor.cast::<c_void>();
+            assert_eq!(
+                ProcessorWrapper::<BusActivationPlugin>::processor_activate_bus(
+                    component,
+                    MediaTypes::kAudio,
+                    BusDirections::kInput,
+                    0,
+                    1,
+                ),
+                kNotInitialized
+            );
+            assert!(BUS_ACTIVATIONS.lock().unwrap().is_empty());
+            ProcessorWrapper::<BusActivationPlugin>::component_release(component);
+        }
+    }
+
+    /// Bus counts the next `PropBusPlugin::audio_config` will report, as
+    /// (inputs, outputs).
+    static PROP_BUS_COUNTS: Mutex<(usize, usize)> = Mutex::new((0, 0));
+    /// Bus indices the plugin callback actually saw.
+    static PROP_BUS_FORWARDED: Mutex<Vec<(bool, u32)>> = Mutex::new(Vec::new());
+    /// The two statics above are process-global.
+    static PROP_BUS_LOCK: Mutex<()> = Mutex::new(());
+
+    struct PropBusPlugin;
+
+    impl Plugin for PropBusPlugin {
+        fn info() -> PluginInfo {
+            PluginInfo::default()
+        }
+
+        fn new(_host: HostHandle) -> Self {
+            Self
+        }
+
+        fn audio_config() -> AudioConfig {
+            let (inputs, outputs) = *PROP_BUS_COUNTS.lock().unwrap();
+            AudioConfig {
+                inputs: (0..inputs)
+                    .map(|_| crate::PortConfig::stereo("In"))
+                    .collect(),
+                outputs: (0..outputs)
+                    .map(|_| crate::PortConfig::stereo("Out"))
+                    .collect(),
+                accepts_midi: true,
+            }
+        }
+
+        fn activate_bus(&mut self, is_input: bool, bus_index: u32, _active: bool) -> bool {
+            PROP_BUS_FORWARDED
+                .lock()
+                .unwrap()
+                .push((is_input, bus_index));
+            true
+        }
+
+        fn get_param(&self, _id: u32) -> f64 {
+            0.0
+        }
+
+        fn set_param(&mut self, _id: u32, _value: f64) {}
+
+        fn process(&mut self, _ctx: &mut ProcessContext) -> ProcessResult {
+            Ok(())
+        }
+    }
+
+    proptest::proptest! {
+        /// For any declared bus topology and any index a host may pass —
+        /// including negative and out-of-range ones — `activateBus` must
+        /// forward exactly the in-range audio buses and reject the rest. An
+        /// undeclared bus must never reach the plugin, and a declared one must
+        /// never be silently accepted without the plugin being told.
+        #[test]
+        fn activate_bus_forwards_exactly_the_declared_indices(
+            inputs in 0usize..4,
+            outputs in 0usize..4,
+            probe_is_input in proptest::prelude::any::<bool>(),
+            probe_index in -2i32..8,
+            probe_active in proptest::prelude::any::<bool>(),
+        ) {
+            let _serialize = PROP_BUS_LOCK.lock().unwrap();
+            *PROP_BUS_COUNTS.lock().unwrap() = (inputs, outputs);
+            PROP_BUS_FORWARDED.lock().unwrap().clear();
+
+            unsafe {
+                let processor = ProcessorWrapper::<PropBusPlugin>::new([0; 16]);
+                let component = processor.cast::<c_void>();
+                let init = ProcessorWrapper::<PropBusPlugin>::processor_initialize(
+                    component,
+                    std::ptr::null_mut(),
+                );
+                proptest::prop_assert_eq!(init, kResultOk);
+
+                let dir = if probe_is_input {
+                    BusDirections::kInput
+                } else {
+                    BusDirections::kOutput
+                };
+                let result = ProcessorWrapper::<PropBusPlugin>::processor_activate_bus(
+                    component,
+                    MediaTypes::kAudio,
+                    dir,
+                    probe_index,
+                    probe_active as TBool,
+                );
+
+                let declared = if probe_is_input { inputs } else { outputs };
+                let in_range = probe_index >= 0 && (probe_index as usize) < declared;
+                let forwarded = PROP_BUS_FORWARDED.lock().unwrap().clone();
+
+                if in_range {
+                    proptest::prop_assert_eq!(result, kResultOk);
+                    proptest::prop_assert_eq!(
+                        forwarded.as_slice(),
+                        &[(probe_is_input, probe_index as u32)]
+                    );
+                } else {
+                    proptest::prop_assert_eq!(
+                        result,
+                        kInvalidArgument,
+                        "index {} with {} declared bus(es) in that direction",
+                        probe_index,
+                        declared
+                    );
+                    proptest::prop_assert!(
+                        forwarded.is_empty(),
+                        "an undeclared bus must not reach the plugin"
+                    );
+                }
+
+                ProcessorWrapper::<PropBusPlugin>::component_release(component);
+            }
         }
     }
 }
