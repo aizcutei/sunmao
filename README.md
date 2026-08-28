@@ -131,6 +131,19 @@ cargo fmt --all -- --check
 ./tools/package_examples.sh --debug --test
 ```
 
+### Fuzzing (local only)
+
+Unbounded fuzzing of the state-decoding paths lives in [`fuzz/`](fuzz/README.md)
+and is **deliberately outside the workspace**, so the blocking gate never builds
+or runs it:
+
+```bash
+cd fuzz
+cargo run --release                          # runs until Ctrl-C
+cargo run --release -- --iterations 100000   # bounded sweep
+cargo +nightly fuzz run clap_state_load      # coverage-guided, needs cargo-fuzz
+```
+
 The packaging helper builds the reference examples, creates `.vst3`, `.clap`,
 and platform-native standalone outputs, and runs the plug-in host checks plus
 standalone DSP/MIDI smoke tests. Add `--gui-test` to exercise both embedded and

@@ -1,4 +1,7 @@
 [workspace]
+# `fuzz` is intentionally outside the workspace: the blocking gate must never
+# build or run it (unbounded fuzzing is local-only and non-blocking).
+exclude = ["fuzz"]
 members = [
     "au_sys",
     "au_cocoa_stubs",

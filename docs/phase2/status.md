@@ -63,7 +63,7 @@ Wayland、完整 GUI toolkit、外部 preset 格式的具体解析（只留 API 
 | backend 层 expression/mod 端到端映射测试 | M4 | **已实现**（Phase 3 M1，三平台 hosted 全绿：[run #49](https://github.com/aizcutei/sunmao/actions/runs/33180224229)，commit `03a53eb`，artifacts 齐备）：两格式各一个端到端测试（原始宿主事件走真实 `IEventList`/`clap_input_events_t` → core 队列）。**该测试当即发现 VST3 note expression 从未真正到达插件**（backend 在回调后 clear 队列），已修复并记入 semantics.md |
 | backend 在 state load 后回调 `migrate_state` | M5 | **已实现**（Phase 3 M1，三平台 hosted 全绿：[run #51](https://github.com/aizcutei/sunmao/actions/runs/33182548781)，commit `7999b73`，artifacts 齐备）：`_rs` 两层改为写入/比对**插件自己的** `STATE_VERSION`（此前硬编码 1，插件即便声明 v2 也写成 1，`migrate_state` 根本不可能触发），载入后经新增的 `Plugin::state_loaded(from_version)` 回调 backend，再转 `SunmaoPlugin::migrate_state`；仅在 `from_version < STATE_VERSION` 时触发，同版本不迁移、更高版本拒绝。两格式各一个走真实 `IBStream`/`clap_istream_t` 的端到端测试 |
 | `clap.preset-load` / VST3 program list | M5 | **已实现**（Phase 3 M1，三平台 hosted 全绿：[run #53](https://github.com/aizcutei/sunmao/actions/runs/33184652119)，commit `e1455dd`，artifacts 齐备）：统一为 `SunmaoPlugin::load_preset(PresetLocation)` + `SUPPORTS_PRESET_LOAD`，CLAP 侧经 `clap.preset-load/2`（含 draft 别名）落地；**VST3 program list 按边界不实现**——`vst3_sys` 无 `IUnitInfo`/`IProgramListData` 绑定，VST3 宿主经 `setState` 走"状态应用"那一半，不存在静默丢事件。见 semantics.md 的"preset 载入"行 |
-| 时间无界 fuzz | M6 | 未实现（边界内明确仅本地/非 blocking） |
+| 时间无界 fuzz | M6 | **已落地，待 hosted 验收**（Phase 3 M1）：`fuzz/` crate（**workspace `exclude`**，gate 永不构建/运行），fuzz body 在 `src/lib.rs` 由稳定版随机 driver 与 `cargo-fuzz` target 共用；目标是两格式的 state 解码（任意字节 → 真实 `clap.state` load / `IComponent::setState`）。入口写入根 README 与 `fuzz/README.md` |
 
 ## 完成规则
 

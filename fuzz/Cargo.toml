@@ -1,0 +1,25 @@
+[package]
+name = "sunmao_fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Unbounded local fuzzing for SunMao's untrusted-input paths (not part of CI)"
+license = "MIT OR Apache-2.0"
+
+# Deliberately excluded from the workspace (see the root Cargo.toml `exclude`).
+# Keeping it out means the blocking gate never builds or runs it, which is the
+# boundary this scaffold is required to respect.
+
+[dependencies]
+sunmao_core = { path = "../sunmao/core" }
+sunmao_backend_clap = { path = "../sunmao/backend_clap" }
+sunmao_backend_vst3 = { path = "../sunmao/backend_vst3" }
+clap_rs = { path = "../clap_rs" }
+vst3_rs = { path = "../vst3_rs" }
+
+[[bin]]
+name = "sunmao_fuzz"
+path = "src/main.rs"
+
+[profile.release]
+debug = true

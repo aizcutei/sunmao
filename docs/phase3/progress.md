@@ -420,3 +420,37 @@
 - Evidence/artifact: run #53 上传三平台 artifacts（49.5MB / 73.9MB / 915.8MB），均可下载。
 - Unresolved: 遗留表第 6 项已改为"已实现"（6/7 关闭）。余下第 7 项：无界 fuzz 脚手架
   （按边界仅本地/非 blocking，入口写入 README）。
+
+### 2026-08-28 — M1 第 7 项：无界 fuzz 脚手架（本地/非 blocking）
+
+- Command/platform: macOS ARM64，分支 `phase3/framework-dsp-library`。
+- Change:
+  - 新建 `fuzz/` crate 并在根 `Cargo.toml` 加 `exclude = ["fuzz"]`——**边界要求"仅本地/
+    非 blocking"，排除出 workspace 是让 gate 连构建都不会碰它的可靠做法**（已用
+    `cargo metadata` 复核：`sunmao_fuzz` 不在 workspace 包列表中）。
+  - 选题依据：值得 fuzz 的是"解析非本插件产生的字节"的路径。state 正是如此——
+    来自工程文件/preset，用户可能编辑或截断，且在 C ABI 后解码（panic 即 UB）。
+    两个目标：任意字节 → 真实 `clap.state` load、任意字节 → 真实
+    `IComponent::setState`（都走真实插件 ABI 而非内部解码函数，连 wrapper 的防御一起测）。
+  - 结构：fuzz body 放 `src/lib.rs`，由两个 driver 共用——`src/main.rs` 是**稳定版、
+    零外部依赖**的无界随机 driver（xorshift64*，打印 seed 可复现），
+    `fuzz_targets/*.rs` 是三行 libfuzzer 包装。共用 body 意味着 coverage-guided
+    目标不会与日常实际跑的代码悄悄分叉。
+  - 入口写入根 `README.md`（Build And Verify 下新增 Fuzzing 小节）与 `fuzz/README.md`。
+    `fuzz/.gitignore` 排除 `target`/`corpus`/`artifacts`（根 `.gitignore` 只有 `/target`，
+    否则 `fuzz/target` 会被提交）。
+- Result:
+  - **实跑验证**：`cargo run --release -- --iterations 3000000` 三百万例、
+    约 486k 例/秒、**无崩溃**，exit 0；格式化后再跑 5 万例复核仍绿。
+  - 主 gate 不受影响：`cargo metadata --locked`、`cargo fmt --all -- --check`、
+    `git diff --check`、`RUSTFLAGS=-Awarnings cargo test --locked` 115 套件全绿、
+    `tools/package_examples.sh --debug --test` 退出 0（24 套件各 19/19）。
+    `fuzz` 目录单独 `cargo fmt --all -- --check` 通过。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/fuzz_long.log`、`/tmp/m1g_test.log`、
+  `/tmp/m1g_pkg.log`）——本地证据等级。
+- Unresolved: **诚实标注**：环境未安装 `cargo-fuzz`，故 `fuzz_targets/` 的 libfuzzer
+  包装本身**未被执行**——被执行的是它们调用的 fuzz body（经稳定版 driver）。
+  已在 `fuzz/README.md` 明示该限制。稳定版 driver **不是 coverage-guided**，
+  只是随时可用的基线；深扫仍应用 `cargo +nightly fuzz run`。
+  本项无需 hosted 验证其功能（非 blocking），但仍需三平台 hosted 确认它
+  **没有拖累既有 gate**。M1 七项落地完毕，下一步进 M2。
