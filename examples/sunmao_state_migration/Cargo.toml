@@ -1,0 +1,12 @@
+[package]
+name = "sunmao_state_migration"
+version = "0.1.0"
+edition = "2021"
+description = "State migration fixture — Phase 2 acceptance fixture (versioned state, presets)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sunmao = { path = "../../sunmao" }

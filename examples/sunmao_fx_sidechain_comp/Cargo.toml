@@ -1,0 +1,12 @@
+[package]
+name = "sunmao_fx_sidechain_comp"
+version = "0.1.0"
+edition = "2021"
+description = "Sidechain compressor — Phase 2 acceptance fixture (multi-bus, sidechain)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sunmao = { path = "../../sunmao" }

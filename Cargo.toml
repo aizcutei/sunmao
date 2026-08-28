@@ -56,6 +56,10 @@ members = [
     "examples/sunmao_fx_gain_gui_wgpu",
     "examples/sunmao_fx_gain_gui_webview",
     "examples/sunmao_daw_info_gui",
+    "examples/sunmao_fx_tempo_delay",
+    "examples/sunmao_fx_sidechain_comp",
+    "examples/sunmao_syn_poly_expr",
+    "examples/sunmao_state_migration",
 ]
 resolver = "2"
 

@@ -1,0 +1,12 @@
+[package]
+name = "sunmao_syn_poly_expr"
+version = "0.1.0"
+edition = "2021"
+description = "Polyphonic expression synth — Phase 2 acceptance fixture (note expression, voice-info)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sunmao = { path = "../../sunmao" }

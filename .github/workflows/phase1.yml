@@ -231,6 +231,34 @@ jobs:
             -p sunmao_syn_sine_gui_wgpu \
             -p sunmao_syn_sine_gui_webview
 
+      - name: Test Phase 2 acceptance fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The Phase 2 fixtures carry the advanced-contract milestones (M1-M5).
+          # Their unit tests and unified VST3+CLAP export path are blocking from
+          # M0 on, so contract work cannot regress them unnoticed.
+          fixtures=(
+            sunmao_fx_tempo_delay
+            sunmao_fx_sidechain_comp
+            sunmao_syn_poly_expr
+            sunmao_state_migration
+          )
+          for fixture in "${fixtures[@]}"; do
+            echo "::group::cargo test -p $fixture"
+            set +e
+            cargo test --locked -p "$fixture" 2>&1 | tee -a target/phase1-artifacts/phase2-fixture-tests.log
+            status=${PIPESTATUS[0]}
+            set -e
+            if [ "$status" -ne 0 ]; then
+              summary="$(tail -n 25 target/phase1-artifacts/phase2-fixture-tests.log | tr '\n' ' ' | cut -c1-1200)"
+              echo "::error title=Phase 2 fixture test failed::cargo test -p $fixture exited with status $status: $summary"
+              exit "$status"
+            fi
+            echo "::endgroup::"
+          done
+          cargo build --locked "${fixtures[@]/#/--package=}"
+
       - name: Test macOS system-capture linkage (non-blocking follow-up)
         if: runner.os == 'macOS'
         continue-on-error: true

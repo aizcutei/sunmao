@@ -1,0 +1,12 @@
+[package]
+name = "sunmao_fx_tempo_delay"
+version = "0.1.0"
+edition = "2021"
+description = "Tempo-synced delay — Phase 2 acceptance fixture (transport, latency, tail)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sunmao = { path = "../../sunmao" }
