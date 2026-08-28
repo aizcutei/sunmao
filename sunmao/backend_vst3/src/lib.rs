@@ -594,6 +594,7 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
             .into_iter()
             .map(|descriptor| {
                 ParamInfo::new(descriptor.numeric_id, descriptor.name)
+                    .group(descriptor.group)
                     .range(0.0, 1.0)
                     .default(descriptor.default_normalized as f64)
                     .step_count(descriptor.step_count.min(i32::MAX as u32) as i32)
@@ -1322,6 +1323,7 @@ mod tests {
                     default_normalized: 0.25,
                     step_count: 0,
                     kind: ParamKind::Float,
+                    group: "",
                 },
                 ParamDescriptor {
                     id: "voices",
@@ -1330,6 +1332,7 @@ mod tests {
                     default_normalized: 0.5,
                     step_count: 4,
                     kind: ParamKind::Int,
+                    group: "",
                 },
                 ParamDescriptor {
                     id: "bypass",
@@ -1338,6 +1341,7 @@ mod tests {
                     default_normalized: 0.0,
                     step_count: 1,
                     kind: ParamKind::Bool,
+                    group: "",
                 },
             ]
         }
@@ -2040,6 +2044,7 @@ mod tests {
             default_normalized: 0.25,
             step_count: 0,
             kind: ParamKind::Float,
+            group: "",
         };
         let parameter_changes = [
             Vst3ParamChange {
@@ -2114,6 +2119,7 @@ mod tests {
             default_normalized: 0.25,
             step_count: 0,
             kind: ParamKind::Float,
+            group: "",
         };
         let parameter_changes = [Vst3ParamChange {
             sample_offset: 3,
@@ -3135,6 +3141,214 @@ mod tests {
 
             ((*component_vtbl).base.terminate)(component);
             ((*component_vtbl).base.unknown.release)(component);
+        }
+    }
+
+    // ======= Parameter grouping =======
+
+    #[derive(Default)]
+    struct GroupedPlugin {
+        params: Arc<GroupedTestParams>,
+    }
+
+    pub struct GroupedTestParams {
+        level: FloatParam,
+        detune: FloatParam,
+        cutoff: FloatParam,
+    }
+
+    impl Default for GroupedTestParams {
+        fn default() -> Self {
+            Self {
+                level: FloatParam::new("level", "Level", 0.5, 0.0, 1.0),
+                detune: FloatParam::new("detune", "Detune", 0.0, -1.0, 1.0),
+                cutoff: FloatParam::new("cutoff", "Cutoff", 0.5, 0.0, 1.0),
+            }
+        }
+    }
+
+    impl Params for GroupedTestParams {
+        fn get_normalized(&self, id: &str) -> Option<f32> {
+            match id {
+                "level" => Some(self.level.get()),
+                "detune" => Some(self.detune.get()),
+                "cutoff" => Some(self.cutoff.get()),
+                _ => None,
+            }
+        }
+
+        fn set_normalized(&self, _id: &str, _value: f32) {}
+
+        fn descriptors(&self) -> Vec<ParamDescriptor> {
+            vec![
+                ParamDescriptor {
+                    id: "level",
+                    numeric_id: sunmao_core::stable_param_id("level"),
+                    name: "Level",
+                    default_normalized: 0.5,
+                    step_count: 0,
+                    kind: ParamKind::Float,
+                    group: "Osc",
+                },
+                ParamDescriptor {
+                    id: "detune",
+                    numeric_id: sunmao_core::stable_param_id("detune"),
+                    name: "Detune",
+                    default_normalized: 0.5,
+                    step_count: 0,
+                    kind: ParamKind::Float,
+                    group: "Osc/Tuning",
+                },
+                ParamDescriptor {
+                    id: "cutoff",
+                    numeric_id: sunmao_core::stable_param_id("cutoff"),
+                    name: "Cutoff",
+                    default_normalized: 0.5,
+                    step_count: 0,
+                    kind: ParamKind::Float,
+                    group: "",
+                },
+            ]
+        }
+    }
+
+    impl SunmaoPlugin for GroupedPlugin {
+        const NAME: &'static str = "Grouped Test";
+        const VENDOR: &'static str = "SunMao Test";
+        const URL: &'static str = "https://example.invalid";
+        type Params = GroupedTestParams;
+
+        fn params(&self) -> Arc<Self::Params> {
+            self.params.clone()
+        }
+
+        fn process(
+            &mut self,
+            _buffer: &mut AudioBuffer,
+            _events: &EventQueue,
+            _context: &SunmaoProcessContext,
+        ) -> ProcessStatus {
+            ProcessStatus::Normal
+        }
+    }
+
+    #[test]
+    fn vst3_exposes_the_group_tree_through_iunitinfo() {
+        use vst3_rs::vst3_sys::vst::ieditcontroller::ParameterInfo as Vst3ParameterInfo;
+        use vst3_rs::vst3_sys::vst::ivstunits::{
+            kNoParentUnitId, kRootUnitId, IUnitInfoVtbl, UnitInfo,
+        };
+        use vst3_rs::vst3_sys::vst::IEditControllerVtbl;
+
+        unsafe fn utf16(field: &[u16]) -> String {
+            let len = field.iter().position(|u| *u == 0).unwrap_or(field.len());
+            String::from_utf16_lossy(&field[..len])
+        }
+
+        unsafe {
+            let controller = GuiControllerWrapper::<SunmaoVst3Wrapper<GroupedPlugin>>::new();
+            let this = controller.cast::<c_void>();
+            let vtbl = *(this as *const *const IEditControllerVtbl);
+
+            // The controller must hand out IUnitInfo, or the unit ids the
+            // parameters carry would mean nothing to the host.
+            let mut unit_iface = std::ptr::null_mut();
+            assert_eq!(
+                ((*vtbl).base.unknown.query_interface)(
+                    this,
+                    &vst3_rs::vst3_sys::vst::iid::IUnitInfo,
+                    &mut unit_iface,
+                ),
+                kResultOk,
+                "a plugin declaring groups must expose IUnitInfo"
+            );
+            assert!(!unit_iface.is_null());
+            let unit_vtbl = *(unit_iface as *const *const IUnitInfoVtbl);
+
+            // Root + Osc + Osc/Tuning. "Cutoff" declares no group, so it adds
+            // nothing to the tree.
+            let count = ((*unit_vtbl).get_unit_count)(unit_iface);
+            assert_eq!(count, 3);
+
+            let mut units = Vec::new();
+            for index in 0..count {
+                let mut info = UnitInfo::default();
+                assert_eq!(
+                    ((*unit_vtbl).get_unit_info)(unit_iface, index, &mut info),
+                    kResultOk
+                );
+                units.push((info.id, info.parent_unit_id, utf16(&info.name)));
+            }
+            assert_eq!(units[0], (kRootUnitId, kNoParentUnitId, "Root".to_string()));
+            assert_eq!(units[1].2, "Osc");
+            assert_eq!(units[1].1, kRootUnitId);
+            // The nested level names one segment and parents onto Osc.
+            assert_eq!(units[2].2, "Tuning");
+            assert_eq!(units[2].1, units[1].0);
+
+            // Out-of-range indices are refused rather than read past the end.
+            let mut info = UnitInfo::default();
+            assert_ne!(
+                ((*unit_vtbl).get_unit_info)(unit_iface, count, &mut info),
+                kResultOk
+            );
+
+            // And each parameter points at the right unit.
+            let param_count = ((*vtbl).get_parameter_count)(this);
+            assert_eq!(param_count, 3);
+            let mut by_name = Vec::new();
+            for index in 0..param_count {
+                let mut info: Vst3ParameterInfo = std::mem::zeroed();
+                assert_eq!(
+                    ((*vtbl).get_parameter_info)(this, index, &mut info),
+                    kResultOk
+                );
+                by_name.push((utf16(&info.title), info.unit_id));
+            }
+            let unit_of = |name: &str| {
+                by_name
+                    .iter()
+                    .find(|(title, _)| title == name)
+                    .map(|(_, unit)| *unit)
+                    .expect("declared parameter")
+            };
+            assert_eq!(unit_of("Level"), units[1].0, "Level belongs to Osc");
+            assert_eq!(
+                unit_of("Detune"),
+                units[2].0,
+                "Detune belongs to Osc/Tuning"
+            );
+            assert_eq!(
+                unit_of("Cutoff"),
+                kRootUnitId,
+                "an ungrouped parameter stays at the root"
+            );
+
+            ((*unit_vtbl).unknown.release)(unit_iface);
+            ((*vtbl).base.unknown.release)(this);
+        }
+    }
+
+    #[test]
+    fn a_flat_plugin_does_not_expose_iunitinfo() {
+        use vst3_rs::vst3_sys::vst::IEditControllerVtbl;
+        unsafe {
+            // BusActivationPlugin declares no parameter groups, so advertising
+            // a unit tree would just show the host an empty hierarchy.
+            let controller = GuiControllerWrapper::<SunmaoVst3Wrapper<BusActivationPlugin>>::new();
+            let this = controller.cast::<c_void>();
+            let vtbl = *(this as *const *const IEditControllerVtbl);
+            let mut unit_iface = std::ptr::null_mut();
+            assert_eq!(
+                ((*vtbl).base.unknown.query_interface)(
+                    this,
+                    &vst3_rs::vst3_sys::vst::iid::IUnitInfo,
+                    &mut unit_iface,
+                ),
+                kNoInterface
+            );
+            assert!(unit_iface.is_null());
+            ((*vtbl).base.unknown.release)(this);
         }
     }
 }

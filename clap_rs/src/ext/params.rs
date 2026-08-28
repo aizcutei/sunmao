@@ -93,7 +93,9 @@ pub(crate) unsafe extern "C" fn params_get_info<P: Plugin>(
     info.flags = parameter_flags(param);
     info.cookie = ptr::null_mut();
     write_cstr_to_array(&mut info.name, param.name.as_bytes());
-    info.module = [0; CLAP_PATH_SIZE];
+    // `module` is the parameter's `/`-separated group path. It was previously
+    // zeroed unconditionally, so a declared hierarchy never reached the host.
+    write_cstr_to_array(&mut info.module, param.module.as_bytes());
     info.min_value = param.min_value;
     info.max_value = param.max_value;
     info.default_value = param.default_value;
@@ -292,7 +294,9 @@ pub(crate) unsafe extern "C" fn params_get_info_gui<P: Plugin + GuiHandler>(
     info.flags = parameter_flags(param);
     info.cookie = ptr::null_mut();
     write_cstr_to_array(&mut info.name, param.name.as_bytes());
-    info.module = [0; CLAP_PATH_SIZE];
+    // `module` is the parameter's `/`-separated group path. It was previously
+    // zeroed unconditionally, so a declared hierarchy never reached the host.
+    write_cstr_to_array(&mut info.module, param.module.as_bytes());
     info.min_value = param.min_value;
     info.max_value = param.max_value;
     info.default_value = param.default_value;

@@ -481,3 +481,42 @@
   由 `examples/sunmao_syn_grouped_params` fixture 消费验证。
   **注意**：VST3 侧参数分组需要 `IUnitInfo`，而 `vst3_sys` **尚无该绑定**
   （做 preset program list 时已确认），M2 将需要自 `_sys` 层补起。
+
+### 2026-08-29 — M2 第一项：参数分组/嵌套（自 `_sys` 层补起）
+
+- Command/platform: macOS ARM64，分支 `phase3/framework-dsp-library`。
+- Change:
+  - **自底向上**：`vst3_sys` **完全没有 `IUnitInfo` 绑定**（做 preset 时已确认），
+    故先补 `vst/ivstunits.rs`——`UnitInfo`/`ProgramListInfo` 结构、`kRootUnitId`/
+    `kNoParentUnitId`/`kNoProgramListId`/`kAllProgramInvalid` 常量、12 个方法按
+    上游顺序排列的 vtbl。**IID 自上游 `vst/ivstunits.h` 转录而非凭记忆**：
+    实际值 `0x3D4BD6B5,0x913A4FD2,0xA886E768,0xA5EB92C1` 与我记忆中的后三段不同，
+    若照记忆写会导致宿主永远查不到该接口且**静默无表现**。
+  - core：`ParamDescriptor.group`（`/` 分隔路径，空＝顶层）+ `params::group_segments`
+    规范化辅助（带 doc-test，丢弃空段而非报错——为斜杠这种纯外观问题让插件加载失败不值得）。
+  - macros：`#[group = "..."]` 与 `#[param(group = "...")]`，并把 `group` 注册进
+    derive 的 helper attributes（否则编译期报 "cannot find attribute"）。
+  - `vst3_rs`：新增 `units.rs`——`UnitTable::from_paths` 把路径集合展开为 unit 树，
+    **中间层级即使无参数直接命名也会创建**，且保证父先于子（6 个单测钉住）。
+    `ParamInfo.group` + `.group()` builder；`get_parameter_info` 的 `unit_id`
+    由 `unit_table_for(params).unit_for(group)` 得出（原为硬编码 0）。
+    `IUnitInfo` 经**带回指针的 shim** 暴露：两个 controller wrapper 现有的
+    `from_connection` 等恢复逻辑依赖字段偏移，再插一个指针会平移既有偏移，
+    故改用独立分配 + owner 回指针，风险更低；仅在存在分组时创建，
+    无分组插件对 `IUnitInfo` 仍返回 `kNoInterface`。
+  - `clap_rs` **修正既有缺陷**：`params` 扩展此前把 `info.module` 无条件清零
+    （两条 GUI/非 GUI 路径都是），即插件声明的层级根本到不了宿主；现按 `ParameterInfo.module` 写入。
+  - backend 两侧桥接；fixture `sunmao_syn_grouped_params` 换用真实分组
+    （`Osc`、`Osc/Tuning`、`Filter`、`Amp/Envelope`——含嵌套与共享分组）。
+- Result:
+  - 新增测试 11：`vst3_rs::units` 6、backend_clap 1（走真实 `clap.params` 断言路径逐字送达）、
+    backend_vst3 2（走真实 `IUnitInfo`+`IEditController`：unit 树/单层名/越界拒绝/
+    每参数 `unit_id` 正确/无分组留 root；以及扁平插件不暴露接口）、fixture 2。
+  - `RUSTFLAGS=-Awarnings cargo test --locked` 115 套件全绿、exit 0。
+  - metadata/fmt/diff-check 通过；`cargo check --locked --target x86_64-pc-windows-msvc`
+    覆盖 8 个改动 crate 通过；`tools/package_examples.sh --debug --test` 退出 0、
+    24 套件各 19/19。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/m2a_test.log`、`/tmp/m2a_pkg.log`、
+  `/tmp/m2a_win.log`）——本地证据等级。
+- Unresolved: 待三平台 hosted 全绿。M2 余下两项：零分配参数 smoothing、
+  effect/instrument template（新插件样板 ≤50 行）。

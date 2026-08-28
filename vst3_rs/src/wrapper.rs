@@ -6,6 +6,10 @@
 use crate::plugin::RenderMode;
 use crate::process::{MAX_PROCESS_EVENTS, MAX_PROCESS_FRAMES};
 use crate::state::{load_parameter_state, save_parameter_state};
+use crate::vst3_sys::vst::ivstunits::{
+    IUnitInfoVtbl, ProgramListInfo, UnitInfo, kNoProgramListId, kRootUnitId,
+};
+use crate::vst3_sys::vst::types::ProgramListID;
 use crate::{HostHandle, ParamInfo, ParameterBridge, Plugin, ProcessContext, ProcessError};
 use std::ffi::c_void;
 use std::marker::PhantomData;
@@ -1676,6 +1680,9 @@ pub struct ControllerWrapper<P: Plugin> {
     _marker: PhantomData<P>,
     _vtbl_storage: Box<ControllerVtbl>,
     _connection_vtbl_storage: Box<ConnectionPointVtbl>,
+    /// Present only when the plugin declares parameter groups; a flat plugin
+    /// must not advertise `IUnitInfo` at all.
+    unit_info: Option<Box<UnitInfoShim>>,
 }
 
 #[repr(C)]
@@ -1731,8 +1738,25 @@ impl<P: Plugin> ControllerWrapper<P> {
             _marker: PhantomData,
             _vtbl_storage: vtbl_storage,
             _connection_vtbl_storage: connection_vtbl_storage,
+            unit_info: None,
         });
-        Box::into_raw(wrapper)
+        let raw = Box::into_raw(wrapper);
+        // Built after the wrapper has an address, since the shim holds a
+        // back-pointer to it. Only created when groups exist, so a flat plugin
+        // keeps answering kNoInterface for IUnitInfo.
+        unsafe {
+            let table = unit_table_for(&(*raw).params);
+            if table.has_groups() {
+                (*raw).unit_info = Some(UnitInfoShim::new(
+                    raw as *mut c_void,
+                    Self::add_ref,
+                    Self::release,
+                    Self::query_interface,
+                    table.units().to_vec(),
+                ));
+            }
+        }
+        raw
     }
 
     fn make_vtbl() -> ControllerVtbl {
@@ -1798,6 +1822,13 @@ impl<P: Plugin> ControllerWrapper<P> {
             Self::add_ref(this);
             *obj = &(*(this as *mut Self)).vtbl_connection as *const _ as *mut c_void;
             return kResultOk;
+        }
+        if iid_equal(iid, &vst_iid::IUnitInfo) {
+            if let Some(shim) = (*(this as *mut Self)).unit_info.as_ref() {
+                Self::add_ref(this);
+                *obj = shim.as_interface();
+                return kResultOk;
+            }
         }
         *obj = std::ptr::null_mut();
         kNoInterface
@@ -1987,7 +2018,9 @@ impl<P: Plugin> ControllerWrapper<P> {
             str16cpy_safe(&mut info.units, param.units);
             info.step_count = param.step_count;
             info.default_normalized_value = param.default;
-            info.unit_id = 0;
+            // Points at the unit derived from this parameter's group path;
+            // the root (0) when it declares none.
+            info.unit_id = unit_table_for(&(*obj).params).unit_for(param.group);
             info.flags = param.flags.0 as int32
                 | if param.step_count > 0 {
                     ParameterFlags::kIsList
@@ -2482,6 +2515,9 @@ pub struct GuiControllerWrapper<P: GuiPlugin> {
     plugin: Option<P>,
     _vtbl_storage: Box<ControllerVtbl>,
     _connection_vtbl_storage: Box<ConnectionPointVtbl>,
+    /// Present only when the plugin declares parameter groups; a flat plugin
+    /// must not advertise `IUnitInfo` at all.
+    unit_info: Option<Box<UnitInfoShim>>,
 }
 
 impl<P: GuiPlugin> GuiControllerWrapper<P> {
@@ -2510,8 +2546,25 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
             plugin: Some(plugin),
             _vtbl_storage: vtbl_storage,
             _connection_vtbl_storage: connection_vtbl_storage,
+            unit_info: None,
         });
-        Box::into_raw(wrapper)
+        let raw = Box::into_raw(wrapper);
+        // Built after the wrapper has an address, since the shim holds a
+        // back-pointer to it. Only created when groups exist, so a flat plugin
+        // keeps answering kNoInterface for IUnitInfo.
+        unsafe {
+            let table = unit_table_for(&(*raw).params);
+            if table.has_groups() {
+                (*raw).unit_info = Some(UnitInfoShim::new(
+                    raw as *mut c_void,
+                    Self::add_ref,
+                    Self::release,
+                    Self::query_interface,
+                    table.units().to_vec(),
+                ));
+            }
+        }
+        raw
     }
 
     fn make_vtbl() -> ControllerVtbl {
@@ -2577,6 +2630,13 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
             Self::add_ref(this);
             *obj = &(*(this as *mut Self)).vtbl_connection as *const _ as *mut c_void;
             return kResultOk;
+        }
+        if iid_equal(iid, &vst_iid::IUnitInfo) {
+            if let Some(shim) = (*(this as *mut Self)).unit_info.as_ref() {
+                Self::add_ref(this);
+                *obj = shim.as_interface();
+                return kResultOk;
+            }
         }
         *obj = std::ptr::null_mut();
         kNoInterface
@@ -2779,7 +2839,9 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
             str16cpy_safe(&mut info.units, param.units);
             info.step_count = param.step_count;
             info.default_normalized_value = param.default;
-            info.unit_id = 0;
+            // Points at the unit derived from this parameter's group path;
+            // the root (0) when it declares none.
+            info.unit_id = unit_table_for(&(*obj).params).unit_for(param.group);
             info.flags = param.flags.0 as int32
                 | if param.step_count > 0 {
                     ParameterFlags::kIsList
@@ -3606,6 +3668,230 @@ macro_rules! export_vst3_plugin_with_gui {
             }
         }
     };
+}
+
+// ======= IUnitInfo shim =======
+//
+// The controller wrappers recover `this` from their interface pointers by
+// field-offset arithmetic. Rather than add another pointer to that layout and
+// shift the existing offsets, `IUnitInfo` is exposed through a small shim that
+// carries an explicit back-pointer to its owner. Ref-counting forwards to the
+// owner, so the shim never outlives it.
+
+/// Builds the unit table a controller reports, from its parameters' groups.
+pub(crate) fn unit_table_for(params: &[ParamInfo]) -> crate::units::UnitTable {
+    crate::units::UnitTable::from_paths(params.iter().map(|param| param.group))
+}
+
+#[repr(C)]
+pub(crate) struct UnitInfoShim {
+    vtbl: *const IUnitInfoVtbl,
+    owner: *mut c_void,
+    owner_add_ref: unsafe extern "system" fn(*mut c_void) -> uint32,
+    owner_release: unsafe extern "system" fn(*mut c_void) -> uint32,
+    owner_query: unsafe extern "system" fn(*mut c_void, *const TUID, *mut *mut c_void) -> tresult,
+    /// Snapshot taken when the controller is built; parameters do not change
+    /// after construction, so the tree cannot go stale.
+    units: Vec<crate::units::Unit>,
+    _vtbl_storage: Box<IUnitInfoVtbl>,
+}
+
+impl UnitInfoShim {
+    pub(crate) fn new(
+        owner: *mut c_void,
+        owner_add_ref: unsafe extern "system" fn(*mut c_void) -> uint32,
+        owner_release: unsafe extern "system" fn(*mut c_void) -> uint32,
+        owner_query: unsafe extern "system" fn(
+            *mut c_void,
+            *const TUID,
+            *mut *mut c_void,
+        ) -> tresult,
+        units: Vec<crate::units::Unit>,
+    ) -> Box<Self> {
+        let vtbl_storage = Box::new(IUnitInfoVtbl {
+            unknown: IUnknownVtbl {
+                query_interface: unit_shim_query,
+                add_ref: unit_shim_add_ref,
+                release: unit_shim_release,
+            },
+            get_unit_count: unit_shim_get_unit_count,
+            get_unit_info: unit_shim_get_unit_info,
+            get_program_list_count: unit_shim_program_list_count,
+            get_program_list_info: unit_shim_not_implemented_list_info,
+            get_program_name: unit_shim_not_implemented_name,
+            get_program_info: unit_shim_not_implemented_info,
+            has_program_pitch_names: unit_shim_not_implemented_pitch_names,
+            get_program_pitch_name: unit_shim_not_implemented_pitch_name,
+            get_selected_unit: unit_shim_get_selected_unit,
+            select_unit: unit_shim_select_unit,
+            get_unit_by_bus: unit_shim_get_unit_by_bus,
+            set_unit_program_data: unit_shim_set_unit_program_data,
+        });
+        let vtbl = &*vtbl_storage as *const IUnitInfoVtbl;
+        Box::new(Self {
+            vtbl,
+            owner,
+            owner_add_ref,
+            owner_release,
+            owner_query,
+            units,
+            _vtbl_storage: vtbl_storage,
+        })
+    }
+
+    pub(crate) fn as_interface(&self) -> *mut c_void {
+        self as *const Self as *mut c_void
+    }
+}
+
+unsafe fn shim(this: *mut c_void) -> *mut UnitInfoShim {
+    this as *mut UnitInfoShim
+}
+
+unsafe extern "system" fn unit_shim_query(
+    this: *mut c_void,
+    iid: *const TUID,
+    obj: *mut *mut c_void,
+) -> tresult {
+    if this.is_null() || iid.is_null() || obj.is_null() {
+        return kInvalidArgument;
+    }
+    let object = shim(this);
+    if iid_equal(&*iid, &vst_iid::IUnitInfo) {
+        unit_shim_add_ref(this);
+        *obj = this;
+        return kResultOk;
+    }
+    // Anything else is the owner's business.
+    ((*object).owner_query)((*object).owner, iid, obj)
+}
+
+unsafe extern "system" fn unit_shim_add_ref(this: *mut c_void) -> uint32 {
+    if this.is_null() {
+        return 0;
+    }
+    let object = shim(this);
+    ((*object).owner_add_ref)((*object).owner)
+}
+
+unsafe extern "system" fn unit_shim_release(this: *mut c_void) -> uint32 {
+    if this.is_null() {
+        return 0;
+    }
+    let object = shim(this);
+    ((*object).owner_release)((*object).owner)
+}
+
+unsafe extern "system" fn unit_shim_get_unit_count(this: *mut c_void) -> int32 {
+    if this.is_null() {
+        return 0;
+    }
+    ffi_guard(0, || unsafe { (*shim(this)).units.len() as int32 })
+}
+
+unsafe extern "system" fn unit_shim_get_unit_info(
+    this: *mut c_void,
+    unit_index: int32,
+    info: *mut UnitInfo,
+) -> tresult {
+    if this.is_null() || info.is_null() || unit_index < 0 {
+        return kInvalidArgument;
+    }
+    ffi_guard(kInternalError, || unsafe {
+        let object = shim(this);
+        let units: &Vec<crate::units::Unit> = &(*object).units;
+        let Some(unit) = units.get(unit_index as usize) else {
+            return kInvalidArgument;
+        };
+        let (id, parent_id) = (unit.id, unit.parent_id);
+        let name = unit.name.clone();
+        let info = &mut *info;
+        info.id = id;
+        info.parent_unit_id = parent_id;
+        info.program_list_id = kNoProgramListId;
+        str16cpy_safe(&mut info.name, &name);
+        kResultOk
+    })
+}
+
+unsafe extern "system" fn unit_shim_program_list_count(_this: *mut c_void) -> int32 {
+    // No program lists: presets are handled through state, not program lists.
+    0
+}
+
+unsafe extern "system" fn unit_shim_not_implemented_list_info(
+    _this: *mut c_void,
+    _list_index: int32,
+    _info: *mut ProgramListInfo,
+) -> tresult {
+    kNotImplemented
+}
+
+unsafe extern "system" fn unit_shim_not_implemented_name(
+    _this: *mut c_void,
+    _list_id: ProgramListID,
+    _program_index: int32,
+    _name: *mut u16,
+) -> tresult {
+    kNotImplemented
+}
+
+unsafe extern "system" fn unit_shim_not_implemented_info(
+    _this: *mut c_void,
+    _list_id: ProgramListID,
+    _program_index: int32,
+    _attribute_id: *const std::os::raw::c_char,
+    _attribute_value: *mut u16,
+) -> tresult {
+    kNotImplemented
+}
+
+unsafe extern "system" fn unit_shim_not_implemented_pitch_names(
+    _this: *mut c_void,
+    _list_id: ProgramListID,
+    _program_index: int32,
+) -> tresult {
+    kResultFalse
+}
+
+unsafe extern "system" fn unit_shim_not_implemented_pitch_name(
+    _this: *mut c_void,
+    _list_id: ProgramListID,
+    _program_index: int32,
+    _midi_pitch: i16,
+    _name: *mut u16,
+) -> tresult {
+    kNotImplemented
+}
+
+unsafe extern "system" fn unit_shim_get_selected_unit(_this: *mut c_void) -> UnitID {
+    kRootUnitId
+}
+
+unsafe extern "system" fn unit_shim_select_unit(_this: *mut c_void, _unit_id: UnitID) -> tresult {
+    // Unit selection only matters for program-list editing, which is not
+    // implemented; accepting it would imply state this plugin does not keep.
+    kNotImplemented
+}
+
+unsafe extern "system" fn unit_shim_get_unit_by_bus(
+    _this: *mut c_void,
+    _media_type: MediaType,
+    _dir: BusDirection,
+    _bus_index: int32,
+    _channel: int32,
+    _unit_id: *mut UnitID,
+) -> tresult {
+    kNotImplemented
+}
+
+unsafe extern "system" fn unit_shim_set_unit_program_data(
+    _this: *mut c_void,
+    _list_or_unit_id: int32,
+    _program_index: int32,
+    _data: *mut c_void,
+) -> tresult {
+    kNotImplemented
 }
 
 #[cfg(test)]

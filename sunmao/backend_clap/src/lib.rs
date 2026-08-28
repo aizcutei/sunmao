@@ -885,7 +885,12 @@ impl<P: SunmaoPlugin> Plugin for SunmaoClapWrapper<P> {
             .map(|descriptor| ParameterInfo {
                 id: descriptor.numeric_id,
                 name: descriptor.name.to_string(),
-                module: "".to_string(),
+                // CLAP takes the hierarchy as a `/`-separated path per
+                // parameter. Normalizing through `group_segments` drops empty
+                // segments so a stray slash cannot produce an unnamed level.
+                module: sunmao_core::params::group_segments(descriptor.group)
+                    .collect::<Vec<_>>()
+                    .join("/"),
                 min_value: 0.0,
                 max_value: descriptor.step_count.max(1) as f64,
                 default_value: parameter_to_clap_value(
@@ -1766,6 +1771,7 @@ mod tests {
                 default_normalized: 0.1,
                 step_count: 0,
                 kind: ParamKind::Float,
+                group: "",
             }]
         }
     }
@@ -2132,6 +2138,7 @@ mod tests {
                     default_normalized: 0.25,
                     step_count: 0,
                     kind: ParamKind::Float,
+                    group: "",
                 },
                 ParamDescriptor {
                     id: "voices",
@@ -2140,6 +2147,7 @@ mod tests {
                     default_normalized: 0.5,
                     step_count: 4,
                     kind: ParamKind::Int,
+                    group: "",
                 },
                 ParamDescriptor {
                     id: "bypass",
@@ -2148,6 +2156,7 @@ mod tests {
                     default_normalized: 0.0,
                     step_count: 1,
                     kind: ParamKind::Bool,
+                    group: "",
                 },
             ]
         }
@@ -2951,6 +2960,7 @@ mod tests {
                 default_normalized: 0.5,
                 step_count: 0,
                 kind: ParamKind::Float,
+                group: "",
             }]
         }
     }
@@ -3196,6 +3206,7 @@ mod tests {
                 default_normalized: 0.5,
                 step_count: 0,
                 kind: ParamKind::Float,
+                group: "",
             }]
         }
     }
@@ -3545,6 +3556,151 @@ mod tests {
             ext.is_null(),
             "a host must not be offered a preset loader that always refuses"
         );
+        unsafe { ((*plugin).destroy.unwrap())(plugin) };
+    }
+
+    // ======= Parameter grouping =======
+
+    #[derive(Default)]
+    struct GroupedPlugin {
+        params: Arc<GroupedTestParams>,
+    }
+
+    pub struct GroupedTestParams {
+        level: FloatParam,
+        detune: FloatParam,
+        cutoff: FloatParam,
+    }
+
+    impl Default for GroupedTestParams {
+        fn default() -> Self {
+            Self {
+                level: FloatParam::new("level", "Level", 0.5, 0.0, 1.0),
+                detune: FloatParam::new("detune", "Detune", 0.0, -1.0, 1.0),
+                cutoff: FloatParam::new("cutoff", "Cutoff", 0.5, 0.0, 1.0),
+            }
+        }
+    }
+
+    impl Params for GroupedTestParams {
+        fn get_normalized(&self, id: &str) -> Option<f32> {
+            match id {
+                "level" => Some(self.level.get()),
+                "detune" => Some(self.detune.get()),
+                "cutoff" => Some(self.cutoff.get()),
+                _ => None,
+            }
+        }
+
+        fn set_normalized(&self, _id: &str, _value: f32) {}
+
+        fn descriptors(&self) -> Vec<ParamDescriptor> {
+            vec![
+                ParamDescriptor {
+                    id: "level",
+                    numeric_id: sunmao_core::stable_param_id("level"),
+                    name: "Level",
+                    default_normalized: 0.5,
+                    step_count: 0,
+                    kind: ParamKind::Float,
+                    group: "Osc",
+                },
+                ParamDescriptor {
+                    id: "detune",
+                    numeric_id: sunmao_core::stable_param_id("detune"),
+                    name: "Detune",
+                    default_normalized: 0.5,
+                    step_count: 0,
+                    kind: ParamKind::Float,
+                    group: "Osc/Tuning",
+                },
+                ParamDescriptor {
+                    id: "cutoff",
+                    numeric_id: sunmao_core::stable_param_id("cutoff"),
+                    name: "Cutoff",
+                    default_normalized: 0.5,
+                    step_count: 0,
+                    kind: ParamKind::Float,
+                    group: "",
+                },
+            ]
+        }
+    }
+
+    impl SunmaoPlugin for GroupedPlugin {
+        const NAME: &'static str = "Grouped Test";
+        const VENDOR: &'static str = "SunMao Test";
+        const URL: &'static str = "https://example.invalid";
+        type Params = GroupedTestParams;
+
+        fn params(&self) -> Arc<Self::Params> {
+            self.params.clone()
+        }
+
+        fn process(
+            &mut self,
+            _buffer: &mut AudioBuffer,
+            _events: &EventQueue,
+            _context: &SunmaoProcessContext,
+        ) -> ProcessStatus {
+            ProcessStatus::Normal
+        }
+    }
+
+    #[test]
+    fn clap_reports_each_parameter_group_as_a_module_path() {
+        use clap_rs::clap_sys::ext::params::{clap_param_info_t, CLAP_EXT_PARAMS};
+
+        let plugin = unsafe {
+            clap_rs::entry::PluginEntry::create_plugin::<SunmaoClapWrapper<GroupedPlugin>>(
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        assert!(!plugin.is_null());
+        unsafe { assert!(((*plugin).init.unwrap())(plugin)) };
+
+        let ext =
+            unsafe { ((*plugin).get_extension.unwrap())(plugin, CLAP_EXT_PARAMS.as_ptr().cast()) }
+                as *const clap_rs::clap_sys::ext::params::clap_plugin_params_t;
+        assert!(!ext.is_null());
+
+        let count = unsafe { ((*ext).count.unwrap())(plugin) };
+        assert_eq!(count, 3);
+
+        let mut modules = Vec::new();
+        for index in 0..count {
+            let mut info: clap_param_info_t = unsafe { std::mem::zeroed() };
+            assert!(unsafe { ((*ext).get_info.unwrap())(plugin, index, &mut info) });
+            let len = info
+                .module
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(info.module.len());
+            let bytes: Vec<u8> = info.module[..len].iter().map(|b| *b as u8).collect();
+            let name_len = info
+                .name
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(info.name.len());
+            let name: Vec<u8> = info.name[..name_len].iter().map(|b| *b as u8).collect();
+            modules.push((
+                String::from_utf8_lossy(&name).into_owned(),
+                String::from_utf8_lossy(&bytes).into_owned(),
+            ));
+        }
+
+        // The path reaches the host verbatim, including the nested level. This
+        // field was previously zeroed unconditionally.
+        assert_eq!(
+            modules,
+            vec![
+                ("Level".to_string(), "Osc".to_string()),
+                ("Detune".to_string(), "Osc/Tuning".to_string()),
+                ("Cutoff".to_string(), String::new()),
+            ]
+        );
+
         unsafe { ((*plugin).destroy.unwrap())(plugin) };
     }
 }

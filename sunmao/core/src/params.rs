@@ -49,6 +49,29 @@ pub struct ParamDescriptor {
     /// Number of intervals between discrete values. Zero means continuous.
     pub step_count: u32,
     pub kind: ParamKind,
+    /// Host-visible group path, `/`-separated for nesting; empty means the
+    /// parameter sits at the top level.
+    ///
+    /// The two formats express hierarchy differently — VST3 needs a tree of
+    /// units that parameters point at by id, CLAP takes a path string per
+    /// parameter — so the unified form is the path and each backend encodes it.
+    pub group: &'static str,
+}
+
+/// Splits a group path into its non-empty segments.
+///
+/// Empty segments are dropped rather than rejected, so `"Osc//Tuning"` and a
+/// stray trailing slash still describe a usable hierarchy instead of failing a
+/// plugin at load time over cosmetics.
+///
+/// ```
+/// # use sunmao_core::params::group_segments;
+/// assert_eq!(group_segments("Osc/Tuning").collect::<Vec<_>>(), vec!["Osc", "Tuning"]);
+/// assert_eq!(group_segments("").count(), 0);
+/// assert_eq!(group_segments("/Filter/").collect::<Vec<_>>(), vec!["Filter"]);
+/// ```
+pub fn group_segments(path: &str) -> impl Iterator<Item = &str> {
+    path.split('/').filter(|segment| !segment.is_empty())
 }
 
 /// Why a parameter layout cannot be exposed safely to a plug-in host.
@@ -368,6 +391,7 @@ mod tests {
             default_normalized: 0.5,
             step_count: 0,
             kind: ParamKind::Float,
+            group: "",
         }
     }
 

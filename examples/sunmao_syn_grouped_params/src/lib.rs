@@ -15,14 +15,20 @@ use sunmao::prelude::*;
 #[derive(Params)]
 pub struct GroupedSynthParams {
     /// Oscillator section: output level.
+    #[group = "Osc"]
     pub osc_level: FloatParam,
-    /// Oscillator section: detune in semitones.
+    /// Oscillator section: detune in semitones. Nested one level deeper to
+    /// exercise hierarchy rather than a flat set of sections.
+    #[group = "Osc/Tuning"]
     pub osc_detune: FloatParam,
     /// Filter section: one-pole lowpass cutoff in Hz.
+    #[group = "Filter"]
     pub filter_cutoff: FloatParam,
     /// Amplifier section: attack time in milliseconds.
+    #[group = "Amp/Envelope"]
     pub amp_attack_ms: FloatParam,
     /// Amplifier section: release time in milliseconds.
+    #[group = "Amp/Envelope"]
     pub amp_release_ms: FloatParam,
 }
 
@@ -274,6 +280,41 @@ mod tests {
     fn detune_shifts_the_oscillator_frequency() {
         assert!((note_frequency(69, 0.0) - 440.0).abs() < 1e-9);
         assert!((note_frequency(69, 12.0) - 880.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn every_parameter_declares_its_host_visible_group() {
+        let params = GroupedSynthParams::default();
+        let descriptors = params.descriptors();
+        let group_of = |id: &str| {
+            descriptors
+                .iter()
+                .find(|descriptor| descriptor.id == id)
+                .map(|descriptor| descriptor.group)
+                .expect("declared parameter")
+        };
+
+        assert_eq!(group_of("osc_level"), "Osc");
+        // Nesting is expressed as a path, which is what both formats consume.
+        assert_eq!(group_of("osc_detune"), "Osc/Tuning");
+        assert_eq!(group_of("filter_cutoff"), "Filter");
+        assert_eq!(group_of("amp_attack_ms"), "Amp/Envelope");
+        assert_eq!(group_of("amp_release_ms"), "Amp/Envelope");
+    }
+
+    #[test]
+    fn the_declared_groups_form_one_coherent_tree() {
+        use sunmao::params::group_segments;
+        let params = GroupedSynthParams::default();
+        // Two parameters sharing a group must land in the same place, and every
+        // segment must be non-empty or a host would show an unnamed level.
+        for descriptor in params.descriptors() {
+            for segment in group_segments(descriptor.group) {
+                assert!(!segment.trim().is_empty(), "{}", descriptor.id);
+            }
+        }
+        let attack = group_segments("Amp/Envelope").collect::<Vec<_>>();
+        assert_eq!(attack, vec!["Amp", "Envelope"]);
     }
 }
 

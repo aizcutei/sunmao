@@ -21,6 +21,9 @@ pub struct ParamInfo {
     pub step_count: i32,
     /// Parameter flags
     pub flags: ParamFlags,
+    /// `/`-separated group path; empty means top level. Converted into the
+    /// VST3 unit tree by [`crate::units::UnitTable`].
+    pub group: &'static str,
 }
 
 impl ParamInfo {
@@ -35,8 +38,15 @@ impl ParamInfo {
             max: 1.0,
             default: 0.0,
             step_count: 0,
+            group: "",
             flags: ParamFlags::CAN_AUTOMATE,
         }
+    }
+
+    /// Set the `/`-separated host-visible group path.
+    pub fn group(mut self, group: &'static str) -> Self {
+        self.group = group;
+        self
     }
 
     /// Set the value range (plain units)

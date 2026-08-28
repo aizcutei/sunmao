@@ -8,6 +8,7 @@ pub mod params;
 pub mod plugin;
 pub mod process;
 mod state;
+pub mod units;
 pub mod wrapper;
 
 pub use gui::GuiPlugin;

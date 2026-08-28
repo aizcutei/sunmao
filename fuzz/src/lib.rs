@@ -54,6 +54,7 @@ impl Params for FuzzParams {
             default_normalized: 0.5,
             step_count: 0,
             kind: ParamKind::Float,
+            group: "",
         }]
     }
 }

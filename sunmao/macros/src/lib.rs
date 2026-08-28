@@ -68,7 +68,10 @@ fn facade_crate_path() -> proc_macro2::TokenStream {
 /// constructor. This keeps host automation, DSP event matching, and GUI
 /// binding on one source of truth even when the Rust field is renamed.
 /// `#[unit = "LinearGain"]` sets the optional AU unit (defaults to `Generic`).
-#[proc_macro_derive(Params, attributes(id, unit, param, name, nested, persist, sunmao_au))]
+#[proc_macro_derive(
+    Params,
+    attributes(id, unit, group, param, name, nested, persist, sunmao_au)
+)]
 pub fn derive_params(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
@@ -108,6 +111,7 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
         };
 
         let mut unit_value: Option<String> = None;
+        let mut group_value: Option<String> = None;
 
         for attr in &field.attrs {
             match &attr.meta {
@@ -123,6 +127,13 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                     if let Expr::Lit(expr) = &meta.value {
                         if let Lit::Str(lit) = &expr.lit {
                             unit_value = Some(lit.value());
+                        }
+                    }
+                }
+                Meta::NameValue(meta) if meta.path.is_ident("group") => {
+                    if let Expr::Lit(expr) = &meta.value {
+                        if let Lit::Str(lit) = &expr.lit {
+                            group_value = Some(lit.value());
                         }
                     }
                 }
@@ -147,6 +158,13 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                                         }
                                     }
                                 }
+                                if nv.path.is_ident("group") {
+                                    if let Expr::Lit(expr) = &nv.value {
+                                        if let Lit::Str(lit) = &expr.lit {
+                                            group_value = Some(lit.value());
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -154,6 +172,9 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                 _ => {}
             }
         }
+
+        let group_literal = group_value.clone().unwrap_or_default();
+        let group_literal = quote! { #group_literal };
 
         match type_ident.map(|ident| ident.to_string()).as_deref() {
             Some("FloatParam") => {
@@ -184,6 +205,7 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                         },
                         step_count: 0,
                         kind: #core::params::ParamKind::Float,
+                        group: #group_literal,
                     }
                 });
                 let unit_ident =
@@ -231,6 +253,7 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                         step_count: (self.#ident.max as i64 - self.#ident.min as i64)
                             .clamp(0, u32::MAX as i64) as u32,
                         kind: #core::params::ParamKind::Int,
+                        group: #group_literal,
                     }
                 });
                 let unit_ident =
@@ -267,6 +290,7 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                         default_normalized: if self.#ident.default { 1.0 } else { 0.0 },
                         step_count: 1,
                         kind: #core::params::ParamKind::Bool,
+                        group: #group_literal,
                     }
                 });
                 let unit_ident =

@@ -7,6 +7,7 @@ pub mod ievents;
 pub mod ihostapplication;
 pub mod iparameters;
 pub mod ivstmessage;
+pub mod ivstunits;
 pub mod processcontext;
 pub mod types;
 
@@ -41,4 +42,7 @@ pub mod iid {
     pub const IComponentHandler2: TUID = uid!(0xF040B4B3, 0xA36045EC, 0xABCDC045, 0xB4D5A2CC);
     pub const IHostApplication: TUID = uid!(0x58E595CC, 0xDB2D4969, 0x8B6AAF8C, 0x36A664E5);
     pub const IMidiMapping: TUID = uid!(0xDF0FF9F7, 0x49B74669, 0xB63AB732, 0x7ADBF5E5);
+    /// From upstream `vst/ivstunits.h`. A wrong IID here would make the host
+    /// silently never find the interface, so this is transcribed, not derived.
+    pub const IUnitInfo: TUID = uid!(0x3D4BD6B5, 0x913A4FD2, 0xA886E768, 0xA5EB92C1);
 }
