@@ -72,3 +72,10 @@
   - Windows target check（两 backend + fixture）通过；`tools/package_examples.sh --debug --test` 退出 0，Phase 1 的 20 个 runner 套件仍各 16/16。
 - Evidence/artifact: macOS ARM64 本地日志（`/tmp/phase2_m2_test.log`、`/tmp/phase2_m2_pkg.log`）——本地证据等级。
 - Unresolved: 三平台 hosted 验证本 commit 后 M2 才算完成。runner 的 latency/tail 宿主侧断言仍未加（宿主需查询 `IAudioProcessor::getLatencySamples`/`clap.latency`），列为 M2 收尾项。
+
+### 2026-08-28 — M2 完成：hosted run #31 三平台全绿
+
+- Command/platform: push `52fe11c` 触发 GitHub Actions #31：https://github.com/aizcutei/sunmao/actions/runs/33159235245
+- Result: macOS ARM64、Windows x86_64、Ubuntu x86_64 三个 job 同一 commit 全部 success；latency/tail/render 契约在两种格式、三个平台通过，Phase 1 既有 gate 与 Phase 2 fixture 步骤保持绿色。
+- Evidence/artifact: run #31 上传 `phase1-macOS-ARM64`（50.8MB）、`phase1-Windows-X64`（76.7MB）、`phase1-Linux-X64`（954.8MB）。
+- Unresolved: M2 完成，进入 M3。M3 盘点：`clap_rs::AudioPortInfo`（`ext/audio_ports.rs:14`）与 `vst3_rs` wrapper 的 `get_bus_info`/`activate_bus`/`set_bus_arrangements`、`PortType::Aux → BusTypes::kAux` 均已存在；缺口在 `sunmao_core`——`SunmaoPlugin` 只有 `input_channels()`/`output_channels()` 两个标量、无 bus 模型，`AudioBuffer` 只有扁平通道索引、无 per-bus 视图，两个 backend 的端口表也都由这两个标量推导。M2 收尾项（runner 的 latency/tail 宿主断言）一并留待 M3/M6。
