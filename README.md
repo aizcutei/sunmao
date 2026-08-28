@@ -138,12 +138,14 @@ top-level GUI lifecycles. For direct inspection, build
 `sunmao_packager` and `sunmao_unittest_runner` with Cargo; their command
 reference is in [`tools/sunmao_packager/README.md`](tools/sunmao_packager/README.md).
 
-Hosted run [#21](https://github.com/aizcutei/sunmao/actions/runs/31771576307) on
-commit `885d2a5` accepted the historical VST3/CLAP-only gate on macOS ARM64,
-Windows x86_64, and Ubuntu x86_64. It predates the corrected Phase 1 standalone
-scope and cannot prove the current worktree. The current candidate must be
-committed and pass the expanded three-platform workflow, including raw and
-packaged standalone DSP/MIDI and GUI smoke, before Phase 1 is complete.
+Phase 1 is complete. Hosted run
+[#25](https://github.com/aizcutei/sunmao/actions/runs/33152642714) on commit
+`c8401e6` passed the full expanded gate — VST3, CLAP, and standalone, including
+raw and packaged standalone DSP/MIDI and GUI smoke — on macOS ARM64, Windows
+x86_64, and Ubuntu x86_64, and uploaded the `phase1-*` bundles, logs, and
+reports from all three jobs. The earlier run
+[#21](https://github.com/aizcutei/sunmao/actions/runs/31771576307) (commit
+`885d2a5`) remains the historical VST3/CLAP-only baseline.
 
 Current scope and deferred work are tracked in
 [`docs/phase1/status.md`](docs/phase1/status.md), [`docs/phase1/progress.md`](docs/phase1/progress.md), and [`docs/roadmap.md`](docs/roadmap.md).

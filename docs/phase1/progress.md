@@ -396,6 +396,13 @@
 - Evidence/artifact: check-run annotations for run #24; local macOS ARM64 `cargo fmt`/`git diff --check`, full `cargo test --locked` rerun (all suites green), `cargo check --locked --target x86_64-pc-windows-msvc -p sunmao_unittest_runner`, workflow YAML parse. The changed code path is `#[cfg(windows)]`-only.
 - Unresolved: hosted revalidation on all three platforms.
 
+### 2026-08-28 — hosted CI #25 all platforms green: expanded Phase 1 gate met
+
+- Command/platform: push `c8401e6` triggered GitHub Actions Phase 1 #25: https://github.com/aizcutei/sunmao/actions/runs/33152642714
+- Result: macOS ARM64 (07:45–07:53), Windows x86_64 (07:45–07:56), and Ubuntu x86_64 (07:45–07:56) hosted jobs all succeeded on the same commit — the first fully green run of the expanded VST3 + CLAP + standalone gate. Every blocking step passed: metadata/fmt, format adapter and host tests, standalone runtime/facade/example tests, realtime allocation matrix, packager + runner smoke, raw and packaged standalone DSP/MIDI smoke, the full GL/WGPU/WebView × VST3/CLAP embedded GUI matrix plus the six standalone editors (pixels, input, host gestures, 520x220 resize, close/recreate) on Cocoa/Win32/X11, and the repository packaging helper.
+- Evidence/artifact: run #25 uploaded `phase1-macOS-ARM64` (50.7MB), `phase1-Windows-X64` (76.7MB), `phase1-Linux-X64` (954.4MB) containing VST3/CLAP bundles, standalone applications, runner test/gui-test logs, and packager reports. `docs/phase1/status.md`, `docs/roadmap.md`, and the README now record Phase 1 as complete.
+- Unresolved: none for the Phase 1 gate. Follow-ups move to Phase 2 per the roadmap.
+
 ## 待记录
 
 后续每次执行按以下格式追加：
