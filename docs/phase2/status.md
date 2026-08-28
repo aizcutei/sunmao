@@ -45,8 +45,8 @@ Wayland、完整 GUI toolkit、外部 preset 格式的具体解析（只留 API 
 
 | Milestone | 范围 | 当前判断 | 权威证据 | 下一步 |
 |---|---|---|---|---|
-| M0 脚手架 | 文档、fixtures、workspace/CI 骨架 | 实现完成，待 hosted 验证 | macOS 本地全 workspace tests（104 套件绿）+ Windows target check；CI 新增 blocking 步骤 "Test Phase 2 acceptance fixtures" | 首个 phase2 commit 三平台全绿 |
-| M1 transport/timing | core `ProcessContext` 扩展 ↔ VST3 `ProcessContext`/CLAP `clap_event_transport` | 未开始；底层现状：core 已有 sample_rate/tempo/is_playing/sample_pos，clap_rs `Transport` 包装已存在，vst3 `processcontext.rs` binding 已存在 | — | 设计统一 Transport 结构 |
+| M0 脚手架 | 文档、fixtures、workspace/CI 骨架 | **完成**（三平台 hosted 全绿） | [run #27](https://github.com/aizcutei/sunmao/actions/runs/33155476475)（commit `f351ddb`）三 job success，"Test Phase 2 acceptance fixtures" 三平台均 success，artifacts 齐备 | — |
+| M1 transport/timing | core `ProcessContext` 扩展 ↔ VST3 `ProcessContext`/CLAP `clap_event_transport` | 进行中；**`_sys` 层无缺口**：`clap_sys` 有 tsig_num/denom、bar_start/bar_number、loop_start/end（beats+seconds）与 8 个 `CLAP_TRANSPORT_*` flag；`vst3_sys::ProcessContext` 有 tempo、time_sig、bar_position_music、cycle_start/end_music 与全部 valid 位。缺口在 `_rs` 与 core：`clap_rs::Transport`（`clap_rs/src/process.rs:511`）只暴露 tempo/is_playing/song_pos_seconds/song_pos_beats；`sunmao_core::ProcessContext`（`sunmao/core/src/plugin.rs:22`）只有 sample_rate/tempo/is_playing/sample_pos | 底层盘点见本行 | 扩展 `clap_rs::Transport` 与 vst3_rs 侧读取，设计统一 Transport 结构（字段可缺失 → `Option`，单位在 backend 归一化） |
 | M2 latency/tail/render | 上报 + 变更通知 + render 模式 | 未开始；底层现状：vst3_rs plugin trait 已有 `latency()`/`tail()`，clap_rs 已有 latency/tail/render 扩展包装；sunmao/core 未暴露 | — | core API + backend 桥接 |
 | M3 bus/sidechain/layout | 多 bus 声明/激活/协商 | 未开始；底层现状：clap_sys audio_ports(-config/-activation)、surround 齐全，clap_rs audio_ports 部分包装；vst3 bus arrangement 在 wrapper 内固定 stereo | — | core bus 模型设计 |
 | M4 expression/voice-info | modulation/MPE/voice-info | 未开始；底层现状：clap_rs 已有 `voice_info()`；VST3 INoteExpressionController binding 未确认 | — | 底层 binding 盘点 |

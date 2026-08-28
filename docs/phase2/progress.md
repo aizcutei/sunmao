@@ -24,3 +24,10 @@
   - `cargo metadata --locked`、`cargo fmt --all -- --check`、`git diff --check`、workflow YAML 解析、`bash -n tools/package_examples.sh` 通过。
 - Evidence/artifact: macOS ARM64 本地日志（`/tmp/phase2_m0_test2.log`、`/tmp/phase2_pkg.log`）——本地证据等级。
 - Unresolved: 三平台 hosted 验证本 commit（Phase 1 既有 gate + 新增 Phase 2 fixture 步骤同时全绿）后 M0 才算完成；M1 transport 设计未开始。
+
+### 2026-08-28 — M0 完成：hosted run #27 三平台全绿
+
+- Command/platform: push `f351ddb` 触发 GitHub Actions #27：https://github.com/aizcutei/sunmao/actions/runs/33155476475
+- Result: macOS ARM64、Windows x86_64、Ubuntu x86_64 三个 job 同一 commit 全部 success。新增的 blocking 步骤 "Test Phase 2 acceptance fixtures" 在三平台均 success；Phase 1 既有全部 gate（格式适配、standalone、GUI matrix、packager、runner、打包 helper）保持绿色，无回归。
+- Evidence/artifact: run #27 上传 `phase1-macOS-ARM64`（50.7MB）、`phase1-Windows-X64`（76.7MB）、`phase1-Linux-X64`（954.4MB）。
+- Unresolved: M0 完成，进入 M1。M1 底层盘点结论：`_sys` 两侧 transport 绑定已完整（`clap_sys` tsig/bar/loop + 8 flags；`vst3_sys::ProcessContext` tempo/tsig/bar/cycle + valid 位），工作从 `_rs` 层开始——`clap_rs::Transport` 需补 tsig/bar/loop/recording 访问器，vst3_rs 需向上暴露 ProcessContext，再设计 core 统一结构。
