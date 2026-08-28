@@ -1644,6 +1644,14 @@ fn env_duration_ms(name: &str, default_ms: u64) -> std::time::Duration {
         .unwrap_or_else(|| std::time::Duration::from_millis(default_ms))
 }
 
+fn env_count(name: &str, default: u32) -> u32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|count| *count > 0)
+        .unwrap_or(default)
+}
+
 fn gui_test_render_delay(plugin: &mut dyn HostPlugin) -> Result<(), String> {
     let deadline = std::time::Instant::now() + env_duration_ms("SUNMAO_GUI_RENDER_MS", 500);
     while std::time::Instant::now() < deadline {
@@ -2033,31 +2041,54 @@ fn cmd_gui_test(args: &[String]) -> bool {
         let before = plugin.param_get(parameter.id).unwrap_or(parameter.default);
         let gesture_before = plugin.gui_gesture_evidence();
         let format = plugin.info().format;
-        let delivery = match window.drag_slider(drag.from.x, drag.from.y, drag.to.x, drag.to.y) {
-            Ok(delivery) => delivery,
-            Err(error) => {
-                eprintln!("GUI input injection failed: {error}");
+        // Injecting one synthetic gesture races the plugin's widget: on a cold
+        // hosted runner the window can be painted and focused (both are checked
+        // above) while the widget still drops the first press. Retrying the
+        // gesture keeps the assertion intact — input that never reaches the
+        // plugin fails every attempt — while not turning that race into a red
+        // build. Run #46 hit this on Windows with SunMao Sine Synth GL (CLAP);
+        // run #24 hit the same symptom from the WebView2 UIA path.
+        let attempts = env_count("SUNMAO_GUI_INPUT_ATTEMPTS", 3);
+        let mut verified = None;
+        for attempt in 1..=attempts {
+            let delivery = match window.drag_slider(drag.from.x, drag.from.y, drag.to.x, drag.to.y)
+            {
+                Ok(delivery) => delivery,
+                Err(error) => {
+                    eprintln!("GUI input injection failed: {error}");
+                    plugin.close_gui();
+                    plugin.shutdown();
+                    return false;
+                }
+            };
+            if let Err(error) = gui_test_render_delay(plugin.as_mut()) {
+                eprintln!("GUI input servicing failed: {error}");
                 plugin.close_gui();
                 plugin.shutdown();
                 return false;
             }
-        };
-        if let Err(error) = gui_test_render_delay(plugin.as_mut()) {
-            eprintln!("GUI input servicing failed: {error}");
-            plugin.close_gui();
-            plugin.shutdown();
-            return false;
-        }
-        let after = plugin.param_get(parameter.id).unwrap_or(before);
-        if (after - before).abs() <= 1.0e-6 {
+            let after = plugin.param_get(parameter.id).unwrap_or(before);
+            if (after - before).abs() > 1.0e-6 {
+                if attempt > 1 {
+                    println!("GUI input took {attempt} attempts to land");
+                }
+                verified = Some((delivery, after));
+                break;
+            }
             eprintln!(
-                "GUI input verification failed: parameter '{}' stayed at {:.6}",
+                "GUI input attempt {attempt}/{attempts}: parameter '{}' still at {:.6}",
+                parameter.name, before
+            );
+        }
+        let Some((delivery, after)) = verified else {
+            eprintln!(
+                "GUI input verification failed: parameter '{}' stayed at {:.6} across {attempts} attempts",
                 parameter.name, before
             );
             plugin.close_gui();
             plugin.shutdown();
             return false;
-        }
+        };
         println!(
             "GUI input verified via {delivery}: parameter '{}' changed {:.6} -> {:.6}",
             parameter.name, before, after,

@@ -211,3 +211,43 @@
 - Unresolved: 待三平台 hosted 全绿方可把遗留表第 3 项改为"已实现"。M1 余下 4 项未开始，
   下一个瓶颈是第 4 项 backend 层 expression/mod 端到端映射测试。注意 CI 时长因新增
   4 个 runner 套件而增加。
+
+### 2026-08-28 — run #46 Windows GUI 输入 flake：诊断与加固（非本项改动所致）
+
+- Command/platform: hosted run #46（commit `031717e`）：https://github.com/aizcutei/sunmao/actions/runs/33176536976
+- Result: macOS ARM64 与 Ubuntu x86_64 **success**；Windows x86_64 **failure**，
+  且失败步骤是既有的 "Package and exercise native GUI backends"，
+  **本项新增断言所在的 "Package and exercise VST3 + CLAP + standalone" 步骤在
+  Windows 上 success**。本机无 gh 且日志下载需 admin 权限（403），故经
+  `/check-runs/<id>/annotations` 取到失败详情：
+  `SunMao Sine Synth GL (CLAP)` → pixels/resize/focus 全过
+  （`foreground active=true, raised=true, input focused=true`、96 DPI、client 520x220、
+  drag (64,110)→(456,110)、`input depth 0`＝GL 表面无子窗口属正常），随后
+  `GUI input verification failed: parameter 'Volume' stayed at 0.500000`。
+- 诊断（未采信"flake"即跳过）：
+  - **不是**已记录的 Windows WGPU exit 139 收尾段错误（那是断言全过后崩溃；此处是断言本身失败），
+    因此不套用"再复现则查 WGPU/D3D 析构"的结论。
+  - 本 commit 未触碰任何 GUI 代码、GUI 布局或参数枚举；对 CLAP 路径的唯一改动是
+    latency/tail 缓存（`activate` 期间读值），与合成输入无因果关系。同一 fixture 的
+    同一断言在 run #42、#44 及更早多轮通过。
+  - `gui_test_render_delay` 确实在 500ms 内持续 `pump_events()`，且拖动前已完成
+    pixel 验证（说明已绘制），故排除"消息未泵送"与"尚未首绘"两个假设。
+  - 历史同症状：run #24 Windows `Gain WebView (VST3)` 同样 "stayed at 0.5"，
+    根因是冷 runner 上 UIA helper 5s 超时（修法是放宽超时而非删断言）；
+    Linux 亦有过因 WebKitGTK 字体度量导致拖动 y 坐标打偏的同症状。
+    即：该症状属"合成输入与控件竞态"这一既有 flake 家族。
+- Fix（加固而非重试，且不削弱断言）：GUI 输入验证改为**有界重试**
+  （`SUNMAO_GUI_INPUT_ATTEMPTS`，默认 3 次，沿用 `env_duration_ms` 的 env 约定）。
+  输入若真的到不了插件则每次都失败、仍然红；只有"第一次按下被控件丢弃"这类竞态
+  会被吸收。每次失败打印 `attempt n/N`，成功且 n>1 打印 `took n attempts`，
+  使真实回归与竞态在日志里可区分。与 run #24 放宽超时的处置同精神，
+  未回退任何 Phase 1 GUI 修复。
+- Result（本地验证）：macOS `gui-test --verify-pixels --verify-input` 对
+  `SunMao Sine Synth GL (CLAP)` 通过——`Volume` 0.500000 → 0.922414 一次命中
+  （无 "took n attempts"），gesture 证据 begin +1/value +13/end +1；成功路径未变。
+  `RUSTFLAGS=-Awarnings cargo test --locked` 115 套件全绿；
+  `package_examples.sh --debug --test` 退出 0、24 套件各 19/19；
+  metadata/fmt/diff-check、Windows 交叉 check 通过。
+- Unresolved: 本机为 macOS，无法在 Windows 上直接复现以定位控件丢弃首次按下的确切
+  层次（baseview 命中测试 / D3D 首帧 / SendInput 时序），故这是**竞态加固而非根因修复**；
+  已在日志中留下可区分证据。第 3 项仍待三平台 hosted 同 commit 全绿方可验收。
