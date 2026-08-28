@@ -6,6 +6,10 @@ use crate::ext::audio_ports::{AudioPortInfo, create_audio_ports_ext, create_audi
 use crate::ext::audio_ports_activation::{
     create_audio_ports_activation_ext, create_audio_ports_activation_ext_gui,
 };
+use crate::ext::audio_ports_config::{
+    AudioPortsConfig, create_audio_ports_config_ext, create_audio_ports_config_ext_gui,
+    create_audio_ports_config_info_ext, create_audio_ports_config_info_ext_gui,
+};
 use crate::ext::latency::{create_latency_ext, create_latency_ext_gui};
 use crate::ext::note_ports::{NotePortInfo, create_note_ports_ext, create_note_ports_ext_gui};
 use crate::ext::params::{ParameterInfo, create_params_ext, create_params_ext_gui};
@@ -20,6 +24,11 @@ use clap_sys::ext::audio_ports::{CLAP_EXT_AUDIO_PORTS, clap_plugin_audio_ports_t
 use clap_sys::ext::audio_ports_activation::{
     CLAP_EXT_AUDIO_PORTS_ACTIVATION, CLAP_EXT_AUDIO_PORTS_ACTIVATION_COMPAT,
     clap_plugin_audio_ports_activation_t,
+};
+use clap_sys::ext::audio_ports_config::{
+    CLAP_EXT_AUDIO_PORTS_CONFIG, CLAP_EXT_AUDIO_PORTS_CONFIG_INFO,
+    CLAP_EXT_AUDIO_PORTS_CONFIG_INFO_COMPAT, clap_plugin_audio_ports_config_info_t,
+    clap_plugin_audio_ports_config_t,
 };
 use clap_sys::ext::gui::clap_plugin_gui_t;
 use clap_sys::ext::latency::{CLAP_EXT_LATENCY, clap_plugin_latency_t};
@@ -67,12 +76,16 @@ pub struct PluginInstance<P: Plugin> {
     // Caches
     pub params_cache: Vec<ParameterInfo>,
     pub audio_ports_cache: Vec<AudioPortInfo>,
+    /// Host-selectable layouts, read once at construction.
+    pub audio_ports_configs_cache: Vec<AudioPortsConfig>,
     pub note_ports_cache: Vec<NotePortInfo>,
     tail_cache: AtomicU32,
     audio_thread: UnsafeCell<AudioThreadState<P::AudioProcessor>>,
     // Extension struct storage (leaked, lives for plugin lifetime)
     pub audio_ports_ext: Option<*const clap_plugin_audio_ports_t>,
     pub audio_ports_activation_ext: Option<*const clap_plugin_audio_ports_activation_t>,
+    pub audio_ports_config_ext: Option<*const clap_plugin_audio_ports_config_t>,
+    pub audio_ports_config_info_ext: Option<*const clap_plugin_audio_ports_config_info_t>,
     pub note_ports_ext: Option<*const clap_plugin_note_ports_t>,
     pub params_ext: Option<*const clap_plugin_params_t>,
     pub state_ext: Option<*const clap_plugin_state_t>,
@@ -88,6 +101,7 @@ impl<P: Plugin> PluginInstance<P> {
         let controller = P::new(host.clone());
         let params_cache = controller.declare_parameters();
         let audio_ports_cache = controller.audio_ports_config();
+        let audio_ports_configs_cache = controller.audio_ports_configs();
         let note_ports_cache = controller.note_ports_config();
         let tail_cache = AtomicU32::new(controller.tail());
         let process_buffers = process_buffers_for(&audio_ports_cache);
@@ -97,6 +111,7 @@ impl<P: Plugin> PluginInstance<P> {
             initialized: false,
             params_cache,
             audio_ports_cache,
+            audio_ports_configs_cache,
             note_ports_cache,
             tail_cache,
             audio_thread: UnsafeCell::new(AudioThreadState {
@@ -106,6 +121,8 @@ impl<P: Plugin> PluginInstance<P> {
             }),
             audio_ports_ext: None,
             audio_ports_activation_ext: None,
+            audio_ports_config_ext: None,
+            audio_ports_config_info_ext: None,
             note_ports_ext: None,
             params_ext: None,
             state_ext: None,
@@ -220,6 +237,16 @@ impl<P: Plugin> PluginInstance<P> {
                 ))
             };
         }
+        if let Some(ptr) = self.audio_ports_config_ext.take() {
+            unsafe { drop(Box::from_raw(ptr as *mut clap_plugin_audio_ports_config_t)) };
+        }
+        if let Some(ptr) = self.audio_ports_config_info_ext.take() {
+            unsafe {
+                drop(Box::from_raw(
+                    ptr as *mut clap_plugin_audio_ports_config_info_t,
+                ))
+            };
+        }
         if let Some(ptr) = self.note_ports_ext.take() {
             unsafe { drop(Box::from_raw(ptr as *mut clap_plugin_note_ports_t)) };
         }
@@ -250,6 +277,18 @@ impl<P: Plugin> PluginInstance<P> {
 /// GUI and non-GUI plugins use the same storage layout. Only their exported
 /// callback tables and initialized extensions differ.
 pub type PluginInstanceWithGui<P> = PluginInstance<P>;
+
+impl<P: Plugin> PluginInstance<P> {
+    /// Rebuilds the audio-thread scratch buffers from the current port cache.
+    ///
+    /// Only valid while the plugin is deactivated — both the CLAP layout-switch
+    /// and port-activation calls guarantee that — since it replaces state the
+    /// audio thread would otherwise be reading.
+    pub(crate) fn resize_process_buffers(&mut self) {
+        let buffers = process_buffers_for(&self.audio_ports_cache);
+        self.audio_thread.get_mut().process_buffers = buffers;
+    }
+}
 
 fn process_buffers_for(audio_ports: &[AudioPortInfo]) -> ProcessBuffers {
     ProcessBuffers::new(
@@ -308,6 +347,13 @@ unsafe fn plugin_init_unchecked<P: Plugin>(plugin: *const clap_plugin_t) -> bool
         instance.audio_ports_ext = Some(Box::into_raw(ext));
         let activation_ext = Box::new(create_audio_ports_activation_ext::<P>());
         instance.audio_ports_activation_ext = Some(Box::into_raw(activation_ext));
+    }
+
+    if !instance.audio_ports_configs_cache.is_empty() {
+        let config_ext = Box::new(create_audio_ports_config_ext::<P>());
+        instance.audio_ports_config_ext = Some(Box::into_raw(config_ext));
+        let info_ext = Box::new(create_audio_ports_config_info_ext::<P>());
+        instance.audio_ports_config_info_ext = Some(Box::into_raw(info_ext));
     }
 
     if !instance.note_ports_cache.is_empty() {
@@ -631,6 +677,20 @@ pub unsafe extern "C" fn plugin_get_extension<P: Plugin>(
         }
     }
 
+    if id_cstr.to_bytes_with_nul() == CLAP_EXT_AUDIO_PORTS_CONFIG.as_bytes() {
+        if let Some(ptr) = instance.audio_ports_config_ext {
+            return ptr as *const c_void;
+        }
+    }
+
+    if id_cstr.to_bytes_with_nul() == CLAP_EXT_AUDIO_PORTS_CONFIG_INFO.as_bytes()
+        || id_cstr.to_bytes_with_nul() == CLAP_EXT_AUDIO_PORTS_CONFIG_INFO_COMPAT.as_bytes()
+    {
+        if let Some(ptr) = instance.audio_ports_config_info_ext {
+            return ptr as *const c_void;
+        }
+    }
+
     if id_cstr.to_bytes_with_nul() == CLAP_EXT_NOTE_PORTS.as_bytes() {
         if let Some(ptr) = instance.note_ports_ext {
             return ptr as *const c_void;
@@ -713,6 +773,13 @@ unsafe fn plugin_init_with_gui_unchecked<P: Plugin + GuiHandler>(
         instance.audio_ports_ext = Some(Box::into_raw(ext));
         let activation_ext = Box::new(create_audio_ports_activation_ext_gui::<P>());
         instance.audio_ports_activation_ext = Some(Box::into_raw(activation_ext));
+    }
+
+    if !instance.audio_ports_configs_cache.is_empty() {
+        let config_ext = Box::new(create_audio_ports_config_ext_gui::<P>());
+        instance.audio_ports_config_ext = Some(Box::into_raw(config_ext));
+        let info_ext = Box::new(create_audio_ports_config_info_ext_gui::<P>());
+        instance.audio_ports_config_info_ext = Some(Box::into_raw(info_ext));
     }
 
     if !instance.note_ports_cache.is_empty() {
@@ -837,6 +904,20 @@ pub unsafe extern "C" fn plugin_get_extension_with_gui<P: Plugin + GuiHandler>(
         || id_cstr.to_bytes_with_nul() == CLAP_EXT_AUDIO_PORTS_ACTIVATION_COMPAT.as_bytes()
     {
         if let Some(ptr) = instance.audio_ports_activation_ext {
+            return ptr as *const c_void;
+        }
+    }
+
+    if id_cstr.to_bytes_with_nul() == CLAP_EXT_AUDIO_PORTS_CONFIG.as_bytes() {
+        if let Some(ptr) = instance.audio_ports_config_ext {
+            return ptr as *const c_void;
+        }
+    }
+
+    if id_cstr.to_bytes_with_nul() == CLAP_EXT_AUDIO_PORTS_CONFIG_INFO.as_bytes()
+        || id_cstr.to_bytes_with_nul() == CLAP_EXT_AUDIO_PORTS_CONFIG_INFO_COMPAT.as_bytes()
+    {
+        if let Some(ptr) = instance.audio_ports_config_info_ext {
             return ptr as *const c_void;
         }
     }

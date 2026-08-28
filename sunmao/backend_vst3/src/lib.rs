@@ -439,6 +439,25 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
         self.plugin.set_bus_active(is_input, bus_index, active)
     }
 
+    fn negotiate_bus_arrangement(
+        &mut self,
+        input_channels: &[u32],
+        output_channels: &[u32],
+    ) -> bool {
+        // VST3 hosts propose a layout rather than picking from a list, so the
+        // proposal is matched against the plugin's declared configs. A layout
+        // the plugin did not publish is refused — a VST3 host can therefore
+        // only reach the same set of layouts a CLAP host can select.
+        let configs = self.plugin.bus_configs();
+        let Some(index) = configs
+            .iter()
+            .position(|config| config.matches(input_channels, output_channels))
+        else {
+            return false;
+        };
+        self.plugin.select_bus_config(index)
+    }
+
     fn reset(&mut self) {
         // VST3 delivers an in-place reset through IAudioProcessor's
         // setProcessing(false) callback while the processor remains active.
@@ -2307,6 +2326,219 @@ mod tests {
             assert_eq!(
                 activate_bus(component, MediaTypes::kAudio, BusDirections::kInput, 2, 1),
                 kInvalidArgument
+            );
+
+            ((*component_vtbl).base.terminate)(component);
+            ((*component_vtbl).base.unknown.release)(component);
+        }
+    }
+
+    /// A plugin offering mono and stereo, like the `sunmao_fx_layout_gain`
+    /// fixture. Defaults to stereo.
+    #[derive(Default)]
+    struct LayoutPlugin {
+        layout: Option<usize>,
+    }
+
+    impl LayoutPlugin {
+        fn channels(&self) -> u32 {
+            match self.layout {
+                Some(0) => 1,
+                _ => 2,
+            }
+        }
+    }
+
+    impl SunmaoPlugin for LayoutPlugin {
+        const NAME: &'static str = "Layout Test";
+        const VENDOR: &'static str = "SunMao Test";
+        const URL: &'static str = "https://example.invalid";
+        type Params = EmptyParams;
+
+        fn params(&self) -> Arc<Self::Params> {
+            Arc::new(EmptyParams)
+        }
+
+        fn input_buses(&self) -> Vec<sunmao_core::plugin::BusInfo> {
+            vec![sunmao_core::plugin::BusInfo::main("Input", self.channels())]
+        }
+
+        fn output_buses(&self) -> Vec<sunmao_core::plugin::BusInfo> {
+            vec![sunmao_core::plugin::BusInfo::main(
+                "Output",
+                self.channels(),
+            )]
+        }
+
+        fn bus_configs(&self) -> Vec<sunmao_core::plugin::BusConfig> {
+            vec![
+                sunmao_core::plugin::BusConfig::new(
+                    "Mono",
+                    vec![sunmao_core::plugin::BusInfo::main("Input", 1)],
+                    vec![sunmao_core::plugin::BusInfo::main("Output", 1)],
+                ),
+                sunmao_core::plugin::BusConfig::new(
+                    "Stereo",
+                    vec![sunmao_core::plugin::BusInfo::main("Input", 2)],
+                    vec![sunmao_core::plugin::BusInfo::main("Output", 2)],
+                ),
+            ]
+        }
+
+        fn current_bus_config(&self) -> usize {
+            self.layout.unwrap_or(1)
+        }
+
+        fn select_bus_config(&mut self, index: usize) -> bool {
+            if index > 1 {
+                return false;
+            }
+            self.layout = Some(index);
+            true
+        }
+
+        fn process(
+            &mut self,
+            _buffer: &mut AudioBuffer,
+            _events: &EventQueue,
+            _context: &SunmaoProcessContext,
+        ) -> ProcessStatus {
+            ProcessStatus::Normal
+        }
+    }
+
+    /// Obtains the IAudioProcessor interface of a component.
+    unsafe fn query_audio_processor(component: *mut c_void) -> *mut c_void {
+        let vtbl = *(component as *const *const IComponentVtbl);
+        let mut audio = std::ptr::null_mut();
+        assert_eq!(
+            ((*vtbl).base.unknown.query_interface)(
+                component,
+                &vst3_rs::vst3_sys::vst::iid::IAudioProcessor,
+                &mut audio,
+            ),
+            kResultOk
+        );
+        assert!(!audio.is_null());
+        audio
+    }
+
+    /// Reads back the channel count VST3 reports for input bus 0.
+    unsafe fn reported_input_channels(component: *mut c_void) -> i32 {
+        use vst3_rs::vst3_sys::vst::{BusDirections, BusInfo as Vst3BusInfo, MediaTypes};
+        let vtbl = *(component as *const *const IComponentVtbl);
+        let mut info: Vst3BusInfo = std::mem::zeroed();
+        assert_eq!(
+            ((*vtbl).get_bus_info)(
+                component,
+                MediaTypes::kAudio,
+                BusDirections::kInput,
+                0,
+                &mut info,
+            ),
+            kResultOk
+        );
+        info.channel_count
+    }
+
+    #[test]
+    fn vst3_negotiates_a_published_layout_and_reports_it_back() {
+        use vst3_rs::vst3_sys::vst::{IAudioProcessorVtbl, SpeakerArr};
+
+        unsafe {
+            let processor = ProcessorWrapper::<SunmaoVst3Wrapper<LayoutPlugin>>::new([0; 16]);
+            let component = processor.cast::<c_void>();
+            let component_vtbl = *(component as *const *const IComponentVtbl);
+            assert_eq!(
+                ((*component_vtbl).base.initialize)(component, std::ptr::null_mut()),
+                kResultOk
+            );
+
+            // Starts in the declared stereo layout.
+            assert_eq!(reported_input_channels(component), 2);
+
+            let audio = query_audio_processor(component);
+            let audio_vtbl = *(audio as *const *const IAudioProcessorVtbl);
+            let set_arr = (*audio_vtbl).set_bus_arrangements;
+
+            // The host proposes mono in / mono out, which the plugin publishes.
+            let mut ins = [SpeakerArr::kMono];
+            let mut outs = [SpeakerArr::kMono];
+            assert_eq!(
+                set_arr(audio, ins.as_mut_ptr(), 1, outs.as_mut_ptr(), 1),
+                kResultOk
+            );
+            // getBusInfo must now report the negotiated layout, not the
+            // declared one — a host that is told otherwise would connect the
+            // wrong number of channels.
+            assert_eq!(reported_input_channels(component), 1);
+
+            // A layout nobody published is refused, and the previous one stands.
+            let mut wide = [SpeakerArr::k51];
+            let mut wide_out = [SpeakerArr::k51];
+            assert_eq!(
+                set_arr(audio, wide.as_mut_ptr(), 1, wide_out.as_mut_ptr(), 1),
+                kResultFalse
+            );
+            assert_eq!(reported_input_channels(component), 1);
+
+            // Going back to the declared layout works too.
+            let mut back_in = [SpeakerArr::kStereo];
+            let mut back_out = [SpeakerArr::kStereo];
+            assert_eq!(
+                set_arr(audio, back_in.as_mut_ptr(), 1, back_out.as_mut_ptr(), 1),
+                kResultOk
+            );
+            assert_eq!(reported_input_channels(component), 2);
+
+            ((*component_vtbl).base.terminate)(component);
+            ((*component_vtbl).base.unknown.release)(component);
+        }
+    }
+
+    #[test]
+    fn vst3_refuses_every_alternative_for_a_single_layout_plugin() {
+        use vst3_rs::vst3_sys::vst::{IAudioProcessorVtbl, SpeakerArr};
+
+        unsafe {
+            // BusActivationPlugin publishes no bus_configs, so it must stay
+            // locked to its declared layout — Phase 1/2 behaviour.
+            let processor =
+                ProcessorWrapper::<SunmaoVst3Wrapper<BusActivationPlugin>>::new([0; 16]);
+            let component = processor.cast::<c_void>();
+            let component_vtbl = *(component as *const *const IComponentVtbl);
+            assert_eq!(
+                ((*component_vtbl).base.initialize)(component, std::ptr::null_mut()),
+                kResultOk
+            );
+            let audio = query_audio_processor(component);
+            let audio_vtbl = *(audio as *const *const IAudioProcessorVtbl);
+
+            // Declared layout: stereo main + stereo sidechain in, stereo out.
+            let mut ins = [SpeakerArr::kStereo, SpeakerArr::kStereo];
+            let mut outs = [SpeakerArr::kStereo];
+            assert_eq!(
+                ((*audio_vtbl).set_bus_arrangements)(
+                    audio,
+                    ins.as_mut_ptr(),
+                    2,
+                    outs.as_mut_ptr(),
+                    1
+                ),
+                kResultOk
+            );
+            // Anything else is refused rather than quietly accepted.
+            let mut mono_ins = [SpeakerArr::kMono, SpeakerArr::kMono];
+            let mut mono_outs = [SpeakerArr::kMono];
+            assert_eq!(
+                ((*audio_vtbl).set_bus_arrangements)(
+                    audio,
+                    mono_ins.as_mut_ptr(),
+                    2,
+                    mono_outs.as_mut_ptr(),
+                    1
+                ),
+                kResultFalse
             );
 
             ((*component_vtbl).base.terminate)(component);

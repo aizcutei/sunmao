@@ -70,6 +70,69 @@ impl BusInfo {
     }
 }
 
+/// One complete, host-selectable bus layout.
+///
+/// A plugin that can run in more than one channel layout — mono and stereo,
+/// say — lists each one as a `BusConfig`. The two formats negotiate layouts in
+/// opposite directions, and this type is what lets one declaration serve both:
+///
+/// - CLAP enumerates configurations and the host *selects* one by id
+///   (`clap.audio-ports-config`), so the list is handed over as-is.
+/// - VST3 has the host *propose* a speaker arrangement per bus
+///   (`setBusArrangements`), so the backend searches this list for a matching
+///   entry and accepts only if it finds one.
+///
+/// Every config must declare the same number of buses in each direction; only
+/// channel counts may differ. A host that changes the *number* of buses is not
+/// something either format expresses through these calls.
+///
+/// ```
+/// # use sunmao_core::plugin::{BusConfig, BusInfo};
+/// let mono = BusConfig::new("Mono", vec![BusInfo::main("Input", 1)], vec![BusInfo::main("Output", 1)]);
+/// let stereo = BusConfig::new("Stereo", vec![BusInfo::main("Input", 2)], vec![BusInfo::main("Output", 2)]);
+/// assert_eq!(mono.input_channel_counts(), vec![1]);
+/// assert_eq!(stereo.input_channel_counts(), vec![2]);
+/// // The two configs agree on bus counts, as every config must.
+/// assert_eq!(mono.inputs.len(), stereo.inputs.len());
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BusConfig {
+    /// Host-visible name for this layout, e.g. "Stereo".
+    pub name: &'static str,
+    /// Input buses in declaration order.
+    pub inputs: Vec<BusInfo>,
+    /// Output buses in declaration order.
+    pub outputs: Vec<BusInfo>,
+}
+
+impl BusConfig {
+    /// Declares a selectable layout.
+    pub fn new(name: &'static str, inputs: Vec<BusInfo>, outputs: Vec<BusInfo>) -> Self {
+        Self {
+            name,
+            inputs,
+            outputs,
+        }
+    }
+
+    /// Channel count of each input bus, in declaration order.
+    pub fn input_channel_counts(&self) -> Vec<u32> {
+        self.inputs.iter().map(|bus| bus.channels).collect()
+    }
+
+    /// Channel count of each output bus, in declaration order.
+    pub fn output_channel_counts(&self) -> Vec<u32> {
+        self.outputs.iter().map(|bus| bus.channels).collect()
+    }
+
+    /// Whether this layout is exactly the per-bus channel counts a host asked
+    /// for. This is the VST3 `setBusArrangements` matching rule.
+    pub fn matches(&self, input_channels: &[u32], output_channels: &[u32]) -> bool {
+        self.input_channel_counts() == input_channels
+            && self.output_channel_counts() == output_channels
+    }
+}
+
 /// Polyphony information a host can query.
 ///
 /// CLAP exposes this through `clap.voice-info`; VST3 has no equivalent, so a
@@ -267,6 +330,63 @@ pub trait SunmaoPlugin: Default + Send + 'static {
     /// ```
     fn set_bus_active(&mut self, _is_input: bool, _bus_index: u32, _active: bool) -> bool {
         true
+    }
+
+    /// Alternative bus layouts this plugin can run in.
+    ///
+    /// The default is empty, meaning the plugin runs only in the single layout
+    /// its [`SunmaoPlugin::input_buses`]/[`SunmaoPlugin::output_buses`]
+    /// declare — a host cannot renegotiate it. Returning two or more configs
+    /// opts into negotiation. The entry named by
+    /// [`SunmaoPlugin::current_bus_config`] is the one in force, and before the
+    /// host selects anything it must agree with what
+    /// `input_buses()`/`output_buses()` report; the list order itself carries
+    /// no meaning beyond being the ids hosts use.
+    ///
+    /// A plugin that overrides this must also honour
+    /// [`SunmaoPlugin::select_bus_config`] by making `input_buses()` and
+    /// `output_buses()` reflect the selected config — those two are what the
+    /// backends use to lay out the audio buffer.
+    ///
+    /// ```
+    /// # use sunmao_core::plugin::{BusConfig, BusInfo};
+    /// let configs = vec![
+    ///     BusConfig::new("Mono", vec![BusInfo::main("In", 1)], vec![BusInfo::main("Out", 1)]),
+    ///     BusConfig::new("Stereo", vec![BusInfo::main("In", 2)], vec![BusInfo::main("Out", 2)]),
+    /// ];
+    /// // A VST3 host proposing stereo in / stereo out matches entry 1.
+    /// assert!(configs[1].matches(&[2], &[2]));
+    /// assert!(!configs[0].matches(&[2], &[2]));
+    /// ```
+    fn bus_configs(&self) -> Vec<BusConfig> {
+        Vec::new()
+    }
+
+    /// The index into [`SunmaoPlugin::bus_configs`] the plugin is currently in.
+    ///
+    /// Defaults to 0, the declared default layout.
+    fn current_bus_config(&self) -> usize {
+        0
+    }
+
+    /// Called when the host selects one of [`SunmaoPlugin::bus_configs`].
+    ///
+    /// `index` is always in range — both backends validate it against the
+    /// declared list first. Returning `false` rejects the layout and leaves the
+    /// previous one in force; the backends report that refusal to the host
+    /// rather than pretending the switch happened.
+    ///
+    /// After accepting, `input_buses()`/`output_buses()` must report the new
+    /// layout. Both formats only negotiate while the plugin is inactive, so
+    /// reallocating here is safe.
+    ///
+    /// Format notes: CLAP hosts call this directly through
+    /// `clap.audio-ports-config`'s `select`. VST3 hosts instead propose speaker
+    /// arrangements through `setBusArrangements`, and the backend translates
+    /// that into the matching index — so a VST3 host can only reach layouts
+    /// listed here. See `docs/phase2/semantics.md`.
+    fn select_bus_config(&mut self, _index: usize) -> bool {
+        false
     }
 
     /// Called before processing starts. Use for initialization.

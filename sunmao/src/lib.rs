@@ -84,8 +84,8 @@ pub mod prelude {
         ParamKind, ParamLayoutError, Params,
     };
     pub use sunmao_core::plugin::{
-        BusInfo, BusRole, ProcessContext, ProcessStatus, RenderMode, SunmaoPlugin, TailLength,
-        VoiceInfo,
+        BusConfig, BusInfo, BusRole, ProcessContext, ProcessStatus, RenderMode, SunmaoPlugin,
+        TailLength, VoiceInfo,
     };
     pub use sunmao_core::view::{
         ParamsViewContext, ParentWindow, StandaloneViewOptions, StandaloneViewResult, SunmaoView,

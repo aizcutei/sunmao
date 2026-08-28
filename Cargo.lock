@@ -4712,6 +4712,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sunmao_fx_layout_gain"
+version = "0.1.0"
+dependencies = [
+ "sunmao",
+]
+
+[[package]]
 name = "sunmao_fx_lpf_gui_gl"
 version = "0.1.0"
 dependencies = [

@@ -2,6 +2,8 @@
 //!
 //! This crate wraps `SunmaoPlugin` to expose it as a CLAP plugin via `clap_rs`.
 
+use clap_rs::clap_sys::id::CLAP_INVALID_ID;
+use clap_rs::ext::audio_ports_config::AudioPortsConfig as ClapAudioPortsConfig;
 use clap_rs::ext::gui::{GuiApi, GuiHandler, GuiResizeHints};
 use clap_rs::ext::voice_info::VoiceInfo as ClapVoiceInfo;
 use clap_rs::ext::RenderMode;
@@ -35,6 +37,28 @@ use sunmao_core::{
 use sunmao_core::{ParentWindow, SunmaoView, ViewHandle};
 
 pub use clap_rs::{export_clap_plugin, export_clap_plugin_with_gui, PluginInfo};
+
+/// Maps declared SunMao buses onto CLAP audio ports.
+///
+/// CLAP has no aux port type: a sidechain is an ordinary port that is simply
+/// not flagged as main, so `BusRole` maps onto `is_main`. Shared by the live
+/// port list and each selectable layout so the two cannot describe the same
+/// bus differently.
+fn clap_ports_for(inputs: &[SunmaoBusInfo], outputs: &[SunmaoBusInfo]) -> Vec<AudioPortInfo> {
+    let mut ports = Vec::new();
+    for (buses, is_input) in [(inputs, true), (outputs, false)] {
+        for bus in buses.iter().filter(|bus| bus.channels > 0) {
+            ports.push(AudioPortInfo {
+                id: ports.len() as u32,
+                name: bus.name.to_string(),
+                channel_count: bus.channels,
+                is_main: bus.role == SunmaoBusRole::Main,
+                is_input,
+            });
+        }
+    }
+    ports
+}
 
 /// Total channel count carried by a set of declared buses.
 fn total_bus_channels(buses: &[SunmaoBusInfo]) -> u32 {
@@ -756,23 +780,50 @@ impl<P: SunmaoPlugin> Plugin for SunmaoClapWrapper<P> {
     }
 
     fn audio_ports_config(&self) -> Vec<AudioPortInfo> {
-        // CLAP has no aux port type: a sidechain is an ordinary port that is
-        // simply not flagged as main, so `BusRole` maps onto `is_main`.
-        let mut ports = Vec::new();
-        let mut push = |buses: &[SunmaoBusInfo], is_input: bool, ports: &mut Vec<AudioPortInfo>| {
-            for bus in buses.iter().filter(|bus| bus.channels > 0) {
-                ports.push(AudioPortInfo {
-                    id: ports.len() as u32,
-                    name: bus.name.to_string(),
-                    channel_count: bus.channels,
-                    is_main: bus.role == SunmaoBusRole::Main,
-                    is_input,
-                });
-            }
+        clap_ports_for(&self.input_buses, &self.output_buses)
+    }
+
+    fn audio_ports_configs(&self) -> Vec<ClapAudioPortsConfig> {
+        // The config id is the index into the plugin's `bus_configs()`, which
+        // is also what `select_bus_config` takes — so the id a CLAP host hands
+        // back needs no lookup table.
+        let Some(plugin) = self.plugin.as_ref() else {
+            return Vec::new();
         };
-        push(&self.input_buses, true, &mut ports);
-        push(&self.output_buses, false, &mut ports);
-        ports
+        plugin
+            .bus_configs()
+            .iter()
+            .enumerate()
+            .map(|(index, config)| ClapAudioPortsConfig {
+                id: index as u32,
+                name: config.name.to_string(),
+                ports: clap_ports_for(&config.inputs, &config.outputs),
+            })
+            .collect()
+    }
+
+    fn current_audio_ports_config_id(&self) -> u32 {
+        self.plugin
+            .as_ref()
+            .map(|plugin| plugin.current_bus_config() as u32)
+            .unwrap_or(CLAP_INVALID_ID)
+    }
+
+    fn select_audio_ports_config(&mut self, config_id: u32) -> bool {
+        let Some(plugin) = self.plugin.as_mut() else {
+            return false;
+        };
+        if !plugin.select_bus_config(config_id as usize) {
+            return false;
+        }
+        // The plugin now reports a new layout, so refresh every cache derived
+        // from the old one — the channel totals feed scratch allocation and the
+        // bus lists feed the per-bus buffer bounds.
+        self.input_buses = plugin.input_buses();
+        self.output_buses = plugin.output_buses();
+        self.input_channels = total_bus_channels(&self.input_buses);
+        self.output_channels = total_bus_channels(&self.output_buses);
+        true
     }
 
     fn note_ports_config(&self) -> Vec<NotePortInfo> {
@@ -2445,6 +2496,135 @@ mod tests {
         assert!(inputs[0].is_main);
         assert_eq!(inputs[1].name, "Sidechain");
         assert!(!inputs[1].is_main);
+    }
+
+    /// A plugin offering mono and stereo, like the `sunmao_fx_layout_gain`
+    /// fixture.
+    #[derive(Default)]
+    struct LayoutPlugin {
+        layout: usize,
+    }
+
+    impl SunmaoPlugin for LayoutPlugin {
+        const NAME: &'static str = "Layout Test";
+        const VENDOR: &'static str = "SunMao Test";
+        const URL: &'static str = "https://example.invalid";
+        type Params = RealtimeParams;
+
+        fn params(&self) -> Arc<Self::Params> {
+            Arc::new(RealtimeParams)
+        }
+
+        fn input_buses(&self) -> Vec<SunmaoBusInfo> {
+            vec![SunmaoBusInfo::main(
+                "Input",
+                if self.layout == 0 { 1 } else { 2 },
+            )]
+        }
+
+        fn output_buses(&self) -> Vec<SunmaoBusInfo> {
+            vec![SunmaoBusInfo::main(
+                "Output",
+                if self.layout == 0 { 1 } else { 2 },
+            )]
+        }
+
+        fn bus_configs(&self) -> Vec<sunmao_core::plugin::BusConfig> {
+            vec![
+                sunmao_core::plugin::BusConfig::new(
+                    "Mono",
+                    vec![SunmaoBusInfo::main("Input", 1)],
+                    vec![SunmaoBusInfo::main("Output", 1)],
+                ),
+                sunmao_core::plugin::BusConfig::new(
+                    "Stereo",
+                    vec![SunmaoBusInfo::main("Input", 2)],
+                    vec![SunmaoBusInfo::main("Output", 2)],
+                ),
+            ]
+        }
+
+        fn current_bus_config(&self) -> usize {
+            self.layout
+        }
+
+        fn select_bus_config(&mut self, index: usize) -> bool {
+            if index > 1 {
+                return false;
+            }
+            self.layout = index;
+            true
+        }
+
+        fn process(
+            &mut self,
+            _buffer: &mut AudioBuffer,
+            _events: &EventQueue,
+            _context: &SunmaoProcessContext,
+        ) -> ProcessStatus {
+            ProcessStatus::Normal
+        }
+    }
+
+    #[test]
+    fn clap_publishes_one_config_per_sunmao_bus_config() {
+        let host = unsafe { HostHandle::from_raw(std::ptr::null()) };
+        let wrapper = <SunmaoClapWrapper<LayoutPlugin> as Plugin>::new(host);
+        let configs = Plugin::audio_ports_configs(&wrapper);
+        assert_eq!(configs.len(), 2);
+        // The id is the index, which is what `select` round-trips on.
+        assert_eq!(configs[0].id, 0);
+        assert_eq!(configs[0].name, "Mono");
+        assert_eq!(configs[1].id, 1);
+        assert_eq!(configs[1].name, "Stereo");
+
+        // Each config describes its own ports, not the live layout.
+        let mono_inputs: Vec<_> = configs[0].ports_in_direction(true).collect();
+        assert_eq!(mono_inputs.len(), 1);
+        assert_eq!(mono_inputs[0].channel_count, 1);
+        let stereo_inputs: Vec<_> = configs[1].ports_in_direction(true).collect();
+        assert_eq!(stereo_inputs[0].channel_count, 2);
+
+        // The default layout is reported as current.
+        assert_eq!(Plugin::current_audio_ports_config_id(&wrapper), 0);
+    }
+
+    #[test]
+    fn clap_selecting_a_config_reconfigures_the_live_port_list() {
+        let host = unsafe { HostHandle::from_raw(std::ptr::null()) };
+        let mut wrapper = <SunmaoClapWrapper<LayoutPlugin> as Plugin>::new(host);
+        // Mono is the default here, so the live ports start at one channel.
+        assert_eq!(Plugin::audio_ports_config(&wrapper)[0].channel_count, 1);
+
+        assert!(Plugin::select_audio_ports_config(&mut wrapper, 1));
+        assert_eq!(Plugin::current_audio_ports_config_id(&wrapper), 1);
+
+        // The live port list must follow the selection, otherwise the host
+        // would keep seeing the layout it just replaced.
+        let ports = Plugin::audio_ports_config(&wrapper);
+        assert!(ports.iter().all(|port| port.channel_count == 2));
+        // And the cached channel totals that drive scratch allocation.
+        assert_eq!(wrapper.input_channels, 2);
+        assert_eq!(wrapper.output_channels, 2);
+    }
+
+    #[test]
+    fn clap_refuses_a_config_the_plugin_rejects() {
+        let host = unsafe { HostHandle::from_raw(std::ptr::null()) };
+        let mut wrapper = <SunmaoClapWrapper<LayoutPlugin> as Plugin>::new(host);
+        assert!(!Plugin::select_audio_ports_config(&mut wrapper, 9));
+        // The refusal leaves the previous layout in force.
+        assert_eq!(Plugin::current_audio_ports_config_id(&wrapper), 0);
+        assert_eq!(Plugin::audio_ports_config(&wrapper)[0].channel_count, 1);
+    }
+
+    #[test]
+    fn a_plugin_without_alternatives_publishes_no_configs() {
+        // The extension must stay hidden for the Phase 1/2 plugins, which have
+        // exactly one layout.
+        let host = unsafe { HostHandle::from_raw(std::ptr::null()) };
+        let wrapper = <SunmaoClapWrapper<BusActivationPlugin> as Plugin>::new(host);
+        assert!(Plugin::audio_ports_configs(&wrapper).is_empty());
     }
 
     #[test]

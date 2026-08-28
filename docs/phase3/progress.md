@@ -92,3 +92,60 @@
   下一个瓶颈是第 2 项 speaker layout 动态协商——`setBusArrangements` 目前按声明
   固定接受而非真实协商，且 `clap_rs` 尚未暴露 `clap.audio-ports-config`（该扩展
   的 `clap_sys` 绑定已齐全，缺口同样在 `_rs` 层）。
+
+### 2026-08-28 — M1 第 2 项：speaker layout 动态协商（VST3 ↔ CLAP）
+
+- Command/platform: macOS ARM64，分支 `phase3/framework-dsp-library`。
+- Change:
+  - 先读上游确认事实：`setBusArrangements` 原实现**并非**"固定接受"，而是"与静态
+    声明逐一比对，不等就 `kResultFalse`"——两者都不是协商（插件无法提供备选）。
+    `clap_sys::audio_ports_config` 绑定齐全（config/config-info/draft-0 别名/host
+    rescan），缺口在 `_rs`。
+  - core：新增 `BusConfig{name,inputs,outputs}` + `input_channel_counts()`/
+    `output_channel_counts()`/`matches()`，以及 `SunmaoPlugin::bus_configs()`/
+    `current_bus_config()`/`select_bus_config()`（默认空 ＝ 不可协商，Phase 1/2
+    插件行为不变）。`BusConfig` 与 `BusInfo`/`BusRole` 一并进 `sunmao_core` 与
+    `sunmao` 两个 prelude，带 doc-test。
+  - `clap_rs`：新增 `ext/audio_ports_config.rs`，暴露 `clap.audio-ports-config`
+    与 `clap.audio-ports-config-info/1`（含 draft-0 别名）；`select` 先拒绝未发布
+    的 id，再转发插件，成功后**重建端口缓存并重算 audio-thread scratch buffer**
+    （新增 `PluginInstance::resize_process_buffers`）——否则 mono→stereo 会用旧
+    尺寸缓冲处理。两个扩展仅在插件发布了配置时创建，destroy 时释放，non-GUI 与
+    GUI 两条路径都接线。
+  - `clap_rs` 顺带修正既有缺陷：`audio_ports_get` 对**所有**端口固定上报
+    `port_type=stereo`；mono 布局出现后即为错报，现按通道数给 `mono`/`stereo`/null
+    （新增共享 `port_type_for`，两条 GUI/非 GUI 路径共用）。
+  - `vst3_rs`：`Plugin::negotiate_bus_arrangement(in_counts,out_counts)`（默认
+    全拒，保持既有语义）；`setBusArrangements` 在"等于声明布局"之外，按
+    **位图 popcount** 得到提议通道数并询问插件，接受后记录到
+    `input/output_bus_channels`；`getBusInfo`/`getBusArrangement`/
+    `setupProcessing` 改读该记录，使协商结果真正对宿主可见并被分配采用。
+  - backend：VST3 侧把提议在 `bus_configs()` 中查表后 `select_bus_config`（未发布
+    的布局一律拒绝，故 VST3 宿主可达布局集与 CLAP 完全一致）；CLAP 侧以下标为
+    config id 发布列表，`select` 成功后刷新 bus 列表与通道总数。抽出共享的
+    `clap_ports_for` 供实时端口表与各配置共用，避免两处描述同一 bus 却不一致。
+  - fixture：新增 `examples/sunmao_fx_layout_gain`（发布 mono/stereo，默认 stereo），
+    并入 workspace 与 CI 的 Phase 3 fixture 列表（blocking）。**未**改动
+    `sunmao_fx_gain` 等 Phase 1 参考示例，以免动到 runner smoke 契约。
+  - docs：semantics.md 用"speaker layout 动态协商"整行替换原"（M3 设计中）"占位，
+    记录两格式方向相反、可达集相同、限制（只协商通道数/bus 数不变/active 时拒绝）
+    与 port_type 修正，附全部测试名。
+- Result:
+  - 新增 12 个测试全绿：fixture 5、backend_clap 4、backend_vst3 2（其一驱动真实
+    `setBusArrangements` 并断言 `getBusInfo` 随协商改变）、core 跨格式可达性
+    proptest 1（任意配置集 × 任意提议：VST3 查表结果必等于独立算出的真值，命中项
+    的通道数必等于提议）。core doc-test 增至 8 个。
+  - `RUSTFLAGS=-Awarnings cargo test --locked` 115 套件全绿、exit 0（M1 第 1 项时
+    为 113）。
+  - `cargo metadata --locked`、`cargo fmt --all -- --check`、`git diff --check` 通过。
+  - `cargo check --locked --target x86_64-pc-windows-msvc` 覆盖 7 个改动 crate 通过。
+  - `tools/package_examples.sh --debug --test` 退出 0，20 个 runner 套件各 16/16
+    ——**并在补上"active 时拒绝协商"的守卫后重跑一次确认仍绿**（该守卫改变了
+    `setBusArrangements` 行为，首次打包跑在守卫之前，不足为证）。
+  - `nm -gU` 复查新 fixture cdylib：仅预期导出，无 AU 符号。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/phase3_m1b_test2.log`、
+  `/tmp/phase3_m1b_pkg2.log`、`/tmp/w2.log`）——本地证据等级。
+- Unresolved: 待三平台 hosted 全绿方可把遗留表第 2 项改为"已实现"。M1 余下 5 项
+  未开始，下一个瓶颈是第 3 项 runner 宿主侧断言（latency/tail 查询、多 bus 拓扑
+  枚举、向 sidechain 送信号验证路由）。已知边界：本项只协商通道数，bus 数量变化
+  与 surround 位图仍未支持（semantics.md 已记）。

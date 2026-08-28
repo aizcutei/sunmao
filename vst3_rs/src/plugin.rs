@@ -518,6 +518,27 @@ pub trait Plugin: Sized + 'static {
         true
     }
 
+    /// Asked when the host proposes a bus layout that is *not* the one
+    /// [`Plugin::audio_config`] declares.
+    ///
+    /// The arguments are the proposed channel count of each bus, in
+    /// declaration order; the bus *count* never changes, so the slice lengths
+    /// always match the declared ones. Returning `true` accepts the layout,
+    /// and the wrapper then reports these channel counts through `getBusInfo`
+    /// and `getBusArrangement` and sizes processing accordingly.
+    ///
+    /// The default refuses every alternative, which keeps a plugin that has
+    /// not thought about layouts locked to the single layout it declared.
+    /// A proposal that already equals the declared layout is accepted by the
+    /// wrapper without consulting this method.
+    fn negotiate_bus_arrangement(
+        &mut self,
+        _input_channels: &[u32],
+        _output_channels: &[u32],
+    ) -> bool {
+        false
+    }
+
     /// Latency in samples (processing delay)
     fn latency(&self) -> u32 {
         0

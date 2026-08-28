@@ -187,6 +187,28 @@ pub trait Plugin: Sized {
         true
     }
 
+    // Host-selectable port layouts (`clap.audio-ports-config`). Empty (the
+    // default) means the plugin has one fixed layout and the extension is not
+    // exposed at all.
+    fn audio_ports_configs(&self) -> Vec<crate::ext::audio_ports_config::AudioPortsConfig> {
+        Vec::new()
+    }
+
+    // Id of the layout currently in force, or `CLAP_INVALID_ID` when the
+    // plugin does not publish configurations.
+    fn current_audio_ports_config_id(&self) -> u32 {
+        clap_sys::id::CLAP_INVALID_ID
+    }
+
+    // Called when the host selects a published layout. The wrapper rejects
+    // unpublished ids first, so this only ever sees an id from
+    // `audio_ports_configs`. Returning `false` refuses the switch and keeps
+    // the previous layout. On success `audio_ports_config` must report the new
+    // layout.
+    fn select_audio_ports_config(&mut self, _config_id: u32) -> bool {
+        false
+    }
+
     // Whether ports may be (de)activated while processing. Off by default:
     // hosts must deactivate the plugin first, which keeps the callback on the
     // main thread.

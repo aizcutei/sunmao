@@ -265,13 +265,14 @@ jobs:
           set -euo pipefail
           # The Phase 3 fixtures carry the framework/DSP-library milestones
           # (M2-M4): parameter groups + smoothing, the sunmao/dsp components,
-          # and oversampling/metering. Blocking from M0 on, same shape as the
-          # Phase 2 step above.
+          # and oversampling/metering, plus the M1 layout-negotiation fixture.
+          # Blocking from M0 on, same shape as the Phase 2 step above.
           fixtures=(
             sunmao_syn_grouped_params
             sunmao_fx_svf
             sunmao_fx_os_dist
             sunmao_fx_meter
+            sunmao_fx_layout_gain
           )
           for fixture in "${fixtures[@]}"; do
             echo "::group::cargo test -p $fixture"

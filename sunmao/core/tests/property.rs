@@ -7,7 +7,7 @@
 use proptest::prelude::*;
 use sunmao_core::audio::AudioBuffer;
 use sunmao_core::events::{Event, EventQueue, MidiMessage, NoteExpression, NoteExpressionKind};
-use sunmao_core::plugin::{BusInfo, TailLength};
+use sunmao_core::plugin::{BusConfig, BusInfo, TailLength};
 
 /// Builds the bus bounds a format adapter hands to `AudioBuffer`.
 fn bounds_for(channels: &[u32]) -> Vec<usize> {
@@ -128,5 +128,63 @@ proptest! {
     fn a_finite_tail_is_never_infinite(samples in any::<u32>()) {
         prop_assert_ne!(TailLength::Samples(samples), TailLength::Infinite);
         prop_assert_ne!(TailLength::Samples(samples), TailLength::None);
+    }
+
+    /// The two formats must be able to reach exactly the same set of layouts.
+    ///
+    /// A CLAP host selects a published config by index; a VST3 host proposes
+    /// channel counts and the backend looks up the matching index. Those two
+    /// paths must agree: the VST3 lookup may only ever land on a config whose
+    /// channel counts are exactly what was proposed, and it must find one
+    /// whenever such a config exists. Otherwise a layout would be reachable in
+    /// one format but not the other, or VST3 would accept a proposal and then
+    /// run a different layout than the host asked for.
+    #[test]
+    fn a_layout_is_reachable_from_both_formats_or_neither(
+        config_shapes in prop::collection::vec(
+            (prop::collection::vec(0u32..4, 0..3), prop::collection::vec(0u32..4, 0..3)),
+            0..5,
+        ),
+        proposed_inputs in prop::collection::vec(0u32..4, 0..3),
+        proposed_outputs in prop::collection::vec(0u32..4, 0..3),
+    ) {
+        let configs: Vec<BusConfig> = config_shapes
+            .iter()
+            .map(|(inputs, outputs)| {
+                BusConfig::new(
+                    "Layout",
+                    inputs.iter().map(|c| BusInfo::main("In", *c)).collect(),
+                    outputs.iter().map(|c| BusInfo::main("Out", *c)).collect(),
+                )
+            })
+            .collect();
+
+        // The VST3 backend's rule.
+        let found = configs
+            .iter()
+            .position(|config| config.matches(&proposed_inputs, &proposed_outputs));
+
+        // The ground truth, independent of `matches`.
+        let expected = config_shapes
+            .iter()
+            .position(|(inputs, outputs)| {
+                inputs.as_slice() == proposed_inputs.as_slice()
+                    && outputs.as_slice() == proposed_outputs.as_slice()
+            });
+        prop_assert_eq!(found, expected);
+
+        // Whatever it landed on really is the proposed layout, so a CLAP host
+        // selecting that same index gets what the VST3 host asked for.
+        if let Some(index) = found {
+            prop_assert_eq!(configs[index].input_channel_counts(), proposed_inputs.clone());
+            prop_assert_eq!(configs[index].output_channel_counts(), proposed_outputs.clone());
+        } else {
+            prop_assert!(
+                !configs
+                    .iter()
+                    .any(|c| c.matches(&proposed_inputs, &proposed_outputs)),
+                "no config may match once the lookup reported none"
+            );
+        }
     }
 }

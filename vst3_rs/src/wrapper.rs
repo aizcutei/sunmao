@@ -799,7 +799,15 @@ impl<P: Plugin> ProcessorWrapper<P> {
             if let Some(port) = ports.get(index as usize) {
                 bus.media_type = MediaTypes::kAudio;
                 bus.direction = dir;
-                let Ok(channel_count) = int32::try_from(port.channels) else {
+                // Report the negotiated channel count, which is the declared
+                // one until a host successfully renegotiates.
+                let channels = Self::current_bus_channels(
+                    Self::from_component(this),
+                    dir == BusDirections::kInput,
+                    index as usize,
+                )
+                .unwrap_or(port.channels);
+                let Ok(channel_count) = int32::try_from(channels) else {
                     return kInvalidArgument;
                 };
                 bus.channel_count = channel_count;
@@ -1029,11 +1037,68 @@ impl<P: Plugin> ProcessorWrapper<P> {
                 .all(|(port, &actual)| {
                     speaker_arrangement(port).is_some_and(|expected| expected == actual)
                 });
-        if inputs_match && outputs_match {
-            kResultOk
-        } else {
-            kResultFalse
+        let obj = Self::from_audio(this);
+        if (*obj).active {
+            // Both branches below record a new channel layout, which
+            // `setupProcessing` and the audio thread read. VST3 requires the
+            // component to be inactive for this call; refuse rather than
+            // mutate that state underneath a running processor.
+            return kResultFalse;
         }
+        if inputs_match && outputs_match {
+            // The declared layout: accept it and make sure any earlier
+            // negotiation is undone, so the reported layout matches what the
+            // host just set rather than a stale alternative.
+            Self::adopt_bus_channels(
+                obj,
+                &config.inputs.iter().map(|p| p.channels).collect::<Vec<_>>(),
+                &config
+                    .outputs
+                    .iter()
+                    .map(|p| p.channels)
+                    .collect::<Vec<_>>(),
+            );
+            return kResultOk;
+        }
+
+        // A layout other than the declared one. A speaker arrangement is a
+        // channel bitmap, so its channel count is its population count.
+        let proposed_inputs: Vec<u32> = input_arrangements
+            .iter()
+            .map(|arr| arr.count_ones())
+            .collect();
+        let proposed_outputs: Vec<u32> = output_arrangements
+            .iter()
+            .map(|arr| arr.count_ones())
+            .collect();
+
+        let Some(plugin) = (*obj).plugin.as_mut() else {
+            return kNotInitialized;
+        };
+        if !plugin.negotiate_bus_arrangement(&proposed_inputs, &proposed_outputs) {
+            return kResultFalse;
+        }
+        Self::adopt_bus_channels(obj, &proposed_inputs, &proposed_outputs);
+        kResultOk
+    }
+
+    /// Records the channel layout now in force. `getBusInfo`,
+    /// `getBusArrangement` and `setupProcessing` all read these, so this is
+    /// what makes a negotiated layout visible to the host.
+    unsafe fn adopt_bus_channels(obj: *mut Self, inputs: &[u32], outputs: &[u32]) {
+        (*obj).input_bus_channels = inputs.to_vec().into_boxed_slice();
+        (*obj).output_bus_channels = outputs.to_vec().into_boxed_slice();
+    }
+
+    /// The channel count of one bus as currently negotiated, falling back to
+    /// the declared count when the index is outside the recorded layout.
+    unsafe fn current_bus_channels(obj: *mut Self, is_input: bool, index: usize) -> Option<u32> {
+        let recorded = if is_input {
+            &(*obj).input_bus_channels
+        } else {
+            &(*obj).output_bus_channels
+        };
+        recorded.get(index).copied()
     }
 
     unsafe extern "system" fn audio_get_bus_arrangement(
@@ -1067,8 +1132,26 @@ impl<P: Plugin> ProcessorWrapper<P> {
         let Some(port) = ports.get(index as usize) else {
             return kInvalidArgument;
         };
-        let Some(arrangement) = speaker_arrangement(port) else {
-            return kResultFalse;
+        // A negotiated layout wins over the declared one; without this the host
+        // would be told the arrangement it just replaced.
+        let negotiated = Self::current_bus_channels(
+            Self::from_audio(this),
+            dir == BusDirections::kInput,
+            index as usize,
+        );
+        let arrangement = match negotiated {
+            Some(channels) if channels != port.channels => {
+                let Some(arrangement) = default_speaker_arrangement(channels) else {
+                    return kResultFalse;
+                };
+                arrangement
+            }
+            _ => {
+                let Some(arrangement) = speaker_arrangement(port) else {
+                    return kResultFalse;
+                };
+                arrangement
+            }
         };
         *arr = arrangement;
         kResultOk
@@ -1144,16 +1227,24 @@ impl<P: Plugin> ProcessorWrapper<P> {
         let sample_rate = setup.sample_rate;
         let max_frames = setup.max_samples_per_block as u32;
 
-        // Create process context
-        let config = P::audio_config();
-        let Some(num_in) = config.inputs.iter().try_fold(0usize, |total, port| {
-            total.checked_add(port.channels as usize)
-        }) else {
+        // Create process context sized for the layout currently in force, so a
+        // renegotiated channel count is what actually gets allocated.
+        let Some(num_in) = (*obj)
+            .input_bus_channels
+            .iter()
+            .try_fold(0usize, |total, &channels| {
+                total.checked_add(channels as usize)
+            })
+        else {
             return kInvalidArgument;
         };
-        let Some(num_out) = config.outputs.iter().try_fold(0usize, |total, port| {
-            total.checked_add(port.channels as usize)
-        }) else {
+        let Some(num_out) = (*obj)
+            .output_bus_channels
+            .iter()
+            .try_fold(0usize, |total, &channels| {
+                total.checked_add(channels as usize)
+            })
+        else {
             return kInvalidArgument;
         };
         let Some(process_ctx) = ProcessContext::try_new(

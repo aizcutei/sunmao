@@ -32,7 +32,9 @@ pub mod prelude {
         stable_param_id, validate_param_layout, BoolParam, FloatParam, IntParam, ParamDescriptor,
         ParamKind, ParamLayoutError, Params,
     };
-    pub use crate::plugin::{ProcessContext, ProcessStatus, SunmaoPlugin};
+    pub use crate::plugin::{
+        BusConfig, BusInfo, BusRole, ProcessContext, ProcessStatus, SunmaoPlugin,
+    };
     pub use crate::view::{
         ParamsViewContext, ParentWindow, StandaloneViewOptions, StandaloneViewResult, SunmaoView,
         ViewContext, ViewHandle,
