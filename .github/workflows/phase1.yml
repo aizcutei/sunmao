@@ -42,6 +42,8 @@ jobs:
             daw-binary: target/debug/libsunmao_daw_info_gui.so
             delay-binary: target/debug/libsunmao_fx_tempo_delay.so
             sidechain-binary: target/debug/libsunmao_fx_sidechain_comp.so
+            os-dist-binary: target/debug/libsunmao_fx_os_dist.so
+            meter-binary: target/debug/libsunmao_fx_meter.so
             executable-suffix: ""
           - name: macOS native
             os: macos-latest
@@ -57,6 +59,8 @@ jobs:
             daw-binary: target/debug/libsunmao_daw_info_gui.dylib
             delay-binary: target/debug/libsunmao_fx_tempo_delay.dylib
             sidechain-binary: target/debug/libsunmao_fx_sidechain_comp.dylib
+            os-dist-binary: target/debug/libsunmao_fx_os_dist.dylib
+            meter-binary: target/debug/libsunmao_fx_meter.dylib
             executable-suffix: ""
           - name: Windows x86_64
             os: windows-latest
@@ -72,6 +76,8 @@ jobs:
             daw-binary: target/debug/sunmao_daw_info_gui.dll
             delay-binary: target/debug/sunmao_fx_tempo_delay.dll
             sidechain-binary: target/debug/sunmao_fx_sidechain_comp.dll
+            os-dist-binary: target/debug/sunmao_fx_os_dist.dll
+            meter-binary: target/debug/sunmao_fx_meter.dll
             executable-suffix: .exe
 
     steps:
@@ -394,6 +400,8 @@ jobs:
           synth_output="target/phase1-artifacts/SunMaoSine"
           delay_output="target/phase1-artifacts/SunMaoTempoDelay"
           sidechain_output="target/phase1-artifacts/SunMaoSidechainComp"
+          os_dist_output="target/phase1-artifacts/SunMaoOsDistortion"
+          meter_output="target/phase1-artifacts/SunMaoMeter"
           standalone_dir="target/phase1-artifacts/standalone"
           gain_standalone="target/debug/sunmao_fx_gain_standalone${{ matrix.executable-suffix }}"
           synth_standalone="target/debug/sunmao_syn_sine_standalone${{ matrix.executable-suffix }}"
@@ -454,6 +462,22 @@ jobs:
               --name "SunMao Sidechain Comp" \
               --bundle-id com.sunmao.fx.sidechain-comp \
               --version 1.0.0
+            # Phase 3 M4 fixtures. OS Distortion is the only plugin whose
+            # reported latency is a linear-phase group delay, so it is the one
+            # the runner's `latency_alignment` impulse measurement asserts
+            # against; without it that test only ever takes its skip path.
+            "$packager" "$format" \
+              --binary "${{ matrix.os-dist-binary }}" \
+              --out "$os_dist_output" \
+              --name "SunMao OS Distortion" \
+              --bundle-id com.sunmao.fx.os-dist \
+              --version 1.0.0
+            "$packager" "$format" \
+              --binary "${{ matrix.meter-binary }}" \
+              --out "$meter_output" \
+              --name "SunMao Meter" \
+              --bundle-id com.sunmao.fx.meter \
+              --version 1.0.0
           done
           "$packager" standalone \
             --binary "$gain_standalone" \
@@ -490,6 +514,10 @@ jobs:
           "$runner" test "$delay_output.clap" 2>&1 | tee "$delay_output.clap.test.log"
           "$runner" test "$sidechain_output.vst3" 2>&1 | tee "$sidechain_output.vst3.test.log"
           "$runner" test "$sidechain_output.clap" 2>&1 | tee "$sidechain_output.clap.test.log"
+          "$runner" test "$os_dist_output.vst3" 2>&1 | tee "$os_dist_output.vst3.test.log"
+          "$runner" test "$os_dist_output.clap" 2>&1 | tee "$os_dist_output.clap.test.log"
+          "$runner" test "$meter_output.vst3" 2>&1 | tee "$meter_output.vst3.test.log"
+          "$runner" test "$meter_output.clap" 2>&1 | tee "$meter_output.clap.test.log"
           "$gain_standalone" --smoke 2>&1 | tee "$gain_standalone_output.raw.smoke.log"
           "$synth_standalone" --smoke 2>&1 | tee "$synth_standalone_output.raw.smoke.log"
           "$packaged_gain" --smoke 2>&1 | tee "$gain_standalone_output.packaged.smoke.log"

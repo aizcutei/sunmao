@@ -773,3 +773,50 @@
   断言）、dry/wet 与增益工具、peak/RMS metering（GUI 可读的无锁发布），
   由 `sunmao_fx_os_dist` 与 `sunmao_fx_meter` 两个 fixture 消费验证。
   仍挂账：instrument 模板 81 行未达 ≤50（需 voice/synth 抽象，非 M4 范围）。
+
+### 2026-09-03 — M4：oversampling / mixing / metering 三模块落地，runner 实测 latency 对齐
+
+- Command/platform: macOS ARM64 本地。`sunmao/dsp` 新增三模块并接入 prelude（各带 doc-test）：
+  - `oversampling`：`Oversampler`/`OversamplingFactor{None,X2,X4}`，2x/4x 为**级联**半带 FIR
+    （4x 不是一次 4 倍零填充——两级各在自身速率上切 1/4，否则基带 Nyquist 到截止之间的镜像会在
+    抽取时折回）。FIR 取 **33 tap**（中心 16）而非常见 31：4x 两级速率不同，只有中心可被 4 整除
+    时总群延迟才是整数基采样（15 → 22.5 samples，宿主只能收整数，会永远差半个样本）。
+    latency 挂在 `OversamplingFactor::latency_samples()`（2x=16，4x=24）而不只在已 prepare 的
+    实例上：VST3 在 `setActive` 之前就调 `getLatencySamples`，插件必须在未 prepare 时也能如实回答。
+    `prepare` 唯一分配；`process` 零分配，超出 prepare 尺寸的 block 退化为直通而非在音频线程 realloc。
+    输入在插值与抽取两处 `sanitize`（非有限→0，|x|>1e30 夹住）：插值乘 2 会让 `f32::MAX` 溢出成
+    inf，FIR 再算 inf−inf 得 NaN 并滞留在延迟线里——调用方的非线性根本没机会看到那个样本。
+  - `mixing`：`db_to_gain`/`gain_to_db`（-inf dB ⇄ 静音，NaN 有定义）、`apply_gain`、
+    `DryWet{Linear,EqualPower}`（`mix`/`mix_block`）。
+  - `metering`：`Meter`（音频侧）/`MeterHandle`（GUI 侧，可 clone）经 `Arc<AtomicU32>` 位存发布
+    peak/RMS，无锁；峰值 -20 dB/s 回落、RMS 一阶 100 ms 时间常数；每块发布一次而非每样本。
+  - `sunmao_fx_os_dist` 换用 `Oversampler`（4x）+ `DryWet`：dry/wet **在过采样域内**混合，使 dry
+    与 wet 走同一组滤波器与同一延迟（基速率 dry 对延迟 wet 混合会成梳状滤波——过采样效果器的经典
+    latency bug）；`latency_samples()` 直接返回 `FACTOR.latency_samples()`。
+    `sunmao_fx_meter` 换用 `Meter`/`MeterHandle`，handle 在 `Default` 构造期即取得（编辑器可先于
+    激活打开），增益改为 dB 语义经 `db_to_gain`。
+  - runner 新增第 19 项 `latency_alignment`（套件 19→20）：经格式 API 读 latency 后送单位冲激、
+    定位输出峰值帧，要求 |峰值帧 − 上报值| ≤ 1。仅对 OS Distortion 断言（Tempo Delay 的冲激峰值在
+    延迟时间处而非 lookahead 处，线性相位才有"峰值＝latency"的性质），其余 fixture 走 skip 路径并
+    打印原因。**发现 CI 缺口**：Phase 3 fixture 此前只 `cargo test -p`，从未打包并交给 runner，
+    该断言在 CI 里只会走 skip——已把 `sunmao_fx_os_dist`/`sunmao_fx_meter` 接入 workflow 矩阵
+    （`os-dist-binary`/`meter-binary`）、打包-exercise 步骤（VST3+CLAP 各跑 runner）与
+    `tools/package_examples.sh`（24→28 套件）。
+  - proptest +7（`sunmao/dsp/tests/property.rs`）：oversampler 任意因子/块长/极端幅度下无非有限输出
+    且 `None` 为逐位直通；上报 latency 与任意块长下实测群延迟一致；线性 body 保持 DC 单位增益；
+    reset 与新建不可区分；dB 换算往返且单调；`DryWet` 两律各守恒且块/逐样本一致；meter 读数不越过
+    所见幅度且 handle 与音频侧逐位一致。**proptest 抓出一个真实缺陷**：`EqualPower` 全湿时
+    `cos(π/2)` 在 f32 为 -4.4e-8，dry 增益为负——已夹到 `[0,1]`。
+- Result: `RUSTFLAGS=-Awarnings cargo test --locked` **123 套件全绿、exit 0**（中途两处失败均已修：
+  上述 EqualPower 负增益；meter fixture 单样本瞬态测试容差 1e-3 过紧——瞬态落在块尾前 46 样本，
+  按 -20 dB/s 回落 0.2% 是组件既定弹道，容差放到 1e-2 并注明）。metadata/fmt/diff-check 通过；
+  `cargo check --locked --target x86_64-pc-windows-msvc` 覆盖 runner/dsp/两 fixture 通过
+  （warnings 均为既有 `vst3_sys` 常量命名，与改动无关）；`tools/package_examples.sh --debug --test`
+  退出 0、**28 套件各 20/20**，其中 `SunMao OS Distortion.vst3` 与 `.clap` 均
+  `latency_alignment (reported 24, measured 24)`；`nm -gU` 两个新 cdylib 无 AU 符号。
+  semantics.md latency 行追加 M4 说明；status.md fixture 表与 M4 行更新为"代码齐备，待 hosted"。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/m4_test.log`、`/tmp/m4_pkg.log`、`/tmp/m4_win.log`）
+  ——本地证据等级。
+- Unresolved: 待三平台 hosted 全绿方可把 M4 记为完成。注意 Windows/Linux 首次在 CI 打包并 exercise
+  这两个 fixture，任何平台差异都会在"Package and exercise VST3 + CLAP + standalone"步骤暴露。
+  M4 完成后进入 M5（semver/state 兼容策略文档 + 收尾）。仍挂账：instrument 模板 81 行未达 ≤50。

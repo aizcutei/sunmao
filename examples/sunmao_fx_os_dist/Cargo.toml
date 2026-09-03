@@ -10,3 +10,4 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 sunmao = { path = "../../sunmao" }
+sunmao_dsp = { path = "../../sunmao/dsp" }

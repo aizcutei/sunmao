@@ -8,7 +8,22 @@
 use proptest::prelude::*;
 use sunmao_dsp::envelopes::{Adsr, AdsrStage, EnvelopeFollower};
 use sunmao_dsp::filters::{Biquad, BiquadKind, OnePole, OnePoleKind, Svf};
+use sunmao_dsp::metering::Meter;
+use sunmao_dsp::mixing::{DryWet, MixLaw, db_to_gain, gain_to_db};
 use sunmao_dsp::oscillators::{Oscillator, Waveform};
+use sunmao_dsp::oversampling::{Oversampler, OversamplingFactor};
+
+fn oversampling_factors() -> impl Strategy<Value = OversamplingFactor> {
+    prop::sample::select(vec![
+        OversamplingFactor::None,
+        OversamplingFactor::X2,
+        OversamplingFactor::X4,
+    ])
+}
+
+fn mix_laws() -> impl Strategy<Value = MixLaw> {
+    prop::sample::select(vec![MixLaw::Linear, MixLaw::EqualPower])
+}
 
 /// Sample rates a host may actually use.
 fn sample_rates() -> impl Strategy<Value = f64> {
@@ -252,6 +267,232 @@ proptest! {
                 level <= amplitude + 1.0e-3,
                 "exceeded the input magnitude: {level} > {amplitude}"
             );
+        }
+    }
+
+    /// When it resamples, the oversampler never hands the body, or returns to
+    /// the caller, a non-finite sample — for any block size up to the prepared
+    /// maximum, and input up to and including `f32::MAX`. When it does not
+    /// (`None`), it is a bypass and the body sees the input exactly as it was.
+    ///
+    /// Interpolation doubles the signal to make up for the inserted zeros, so
+    /// a finite-but-huge input is exactly how `inf - inf` becomes NaN inside
+    /// the FIR and then lodges in its delay line.
+    #[test]
+    fn the_oversampler_never_produces_a_non_finite_sample(
+        factor in oversampling_factors(),
+        max_block in 1usize..512,
+        block_fraction in 0.0f32..=1.0,
+        amplitude in prop::sample::select(vec![0.0f32, 1.0, 100.0, 1.0e30, f32::MAX]),
+        poison in prop::bool::ANY,
+    ) {
+        let mut os = Oversampler::new();
+        os.prepare(factor, max_block);
+        let block_len = ((max_block as f32 * block_fraction) as usize).max(1);
+        let mut block: Vec<f32> = (0..block_len)
+            .map(|index| if index % 2 == 0 { amplitude } else { -amplitude })
+            .collect();
+        if poison {
+            block[0] = f32::NAN;
+            if block_len > 1 {
+                block[1] = f32::INFINITY;
+            }
+        }
+        let original = block.clone();
+
+        for _ in 0..4 {
+            let mut seen = 0;
+            let mut body_saw_input = false;
+            os.process(&mut block, |upsampled| {
+                seen = upsampled.len();
+                body_saw_input = upsampled
+                    .iter()
+                    .zip(original.iter())
+                    .all(|(a, b)| a.to_bits() == b.to_bits());
+                if factor != OversamplingFactor::None {
+                    for sample in upsampled.iter() {
+                        assert!(sample.is_finite(), "{factor:?} body was handed {sample}");
+                    }
+                }
+            });
+            prop_assert_eq!(seen, block_len * factor.ratio(), "{:?}", factor);
+            if factor == OversamplingFactor::None {
+                prop_assert!(body_saw_input, "bypass altered the block");
+            } else {
+                for sample in block.iter() {
+                    prop_assert!(sample.is_finite(), "{factor:?} produced {sample}");
+                }
+            }
+        }
+    }
+
+    /// The latency the factor reports is the delay the signal actually
+    /// suffers, and it does not depend on how the host chops the stream into
+    /// blocks.
+    ///
+    /// This is the number a host shifts the track by, so "close" is not good
+    /// enough: a host can only be told an integer, and the design deliberately
+    /// sizes the filters so the true delay *is* one.
+    #[test]
+    fn reported_latency_is_the_measured_delay_for_any_block_size(
+        factor in prop::sample::select(vec![OversamplingFactor::X2, OversamplingFactor::X4]),
+        block_len in 1usize..256,
+    ) {
+        let mut os = Oversampler::new();
+        os.prepare(factor, block_len);
+        let reported = factor.latency_samples() as usize;
+
+        let mut signal = vec![0.0f32; (reported + 64).div_ceil(block_len) * block_len];
+        signal[0] = 1.0;
+        for chunk in signal.chunks_mut(block_len) {
+            os.process(chunk, |_| {});
+        }
+        let measured = signal
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.abs().partial_cmp(&b.1.abs()).unwrap())
+            .map(|(index, _)| index)
+            .unwrap();
+        prop_assert!(
+            reported.abs_diff(measured) <= 1,
+            "{factor:?} at block {block_len}: reported {reported}, measured {measured}"
+        );
+    }
+
+    /// Up then down with a linear body is a pure delay: DC gain stays at unity
+    /// whatever the level, so oversampling never changes how loud a plugin is.
+    #[test]
+    fn a_linear_body_keeps_unity_gain_at_dc(
+        factor in oversampling_factors(),
+        amplitude in 0.0f32..4.0,
+        block_len in 1usize..256,
+    ) {
+        let mut os = Oversampler::new();
+        os.prepare(factor, block_len);
+        // Long enough for both filter cascades to be fully primed.
+        let mut block = vec![amplitude; block_len];
+        let mut steady = Vec::new();
+        for pass in 0..(512 / block_len + 4) {
+            block.fill(amplitude);
+            os.process(&mut block, |_| {});
+            if pass * block_len >= 256 {
+                steady.extend_from_slice(&block);
+            }
+        }
+        for sample in steady {
+            prop_assert!(
+                (sample - amplitude).abs() <= amplitude * 0.02 + 1.0e-4,
+                "{factor:?} changed the level: {sample} vs {amplitude}"
+            );
+        }
+    }
+
+    /// After `reset`, an oversampler is indistinguishable from a fresh one:
+    /// nothing from the previous session leaks into the next.
+    #[test]
+    fn reset_makes_an_oversampler_indistinguishable_from_new(
+        factor in oversampling_factors(),
+        amplitude in -2.0f32..2.0,
+    ) {
+        let block_len = 64;
+        let mut used = Oversampler::new();
+        used.prepare(factor, block_len);
+        let mut noise: Vec<f32> = (0..block_len).map(|i| (i as f32 * 0.7).sin() * 3.0).collect();
+        used.process(&mut noise, |_| {});
+        used.reset();
+
+        let mut fresh = Oversampler::new();
+        fresh.prepare(factor, block_len);
+
+        let mut a = vec![amplitude; block_len];
+        let mut b = vec![amplitude; block_len];
+        used.process(&mut a, |_| {});
+        fresh.process(&mut b, |_| {});
+        prop_assert_eq!(a, b, "{:?}", factor);
+    }
+
+    /// Decibels and linear gain round-trip, and the mapping is monotone: a
+    /// louder setting in dB is never a quieter gain.
+    #[test]
+    fn decibel_conversion_round_trips_and_is_monotone(
+        db in -119.0f32..60.0,
+        step in 0.0f32..10.0,
+    ) {
+        let gain = db_to_gain(db);
+        prop_assert!(gain.is_finite() && gain > 0.0, "{db} dB gave {gain}");
+        let back = gain_to_db(gain);
+        prop_assert!((back - db).abs() < 1.0e-2, "{db} dB came back as {back}");
+        prop_assert!(db_to_gain(db + step) >= gain, "not monotone at {db} + {step}");
+    }
+
+    /// A dry/wet mixer's gains stay in `0.0..=1.0` for any amount, and each law
+    /// holds the quantity it promises constant: the linear law's coefficients
+    /// sum to one, the equal-power law's squares do.
+    #[test]
+    fn a_dry_wet_mixer_holds_its_law_for_any_amount(
+        law in mix_laws(),
+        amount in -1.0f32..2.0,
+        dry in -2.0f32..2.0,
+        wet in -2.0f32..2.0,
+    ) {
+        let mixer = DryWet::new(law, amount);
+        let (dry_gain, wet_gain) = (mixer.dry_gain(), mixer.wet_gain());
+        prop_assert!((0.0..=1.0).contains(&dry_gain), "dry gain {dry_gain}");
+        prop_assert!((0.0..=1.0).contains(&wet_gain), "wet gain {wet_gain}");
+        let conserved = match law {
+            MixLaw::Linear => dry_gain + wet_gain,
+            MixLaw::EqualPower => dry_gain * dry_gain + wet_gain * wet_gain,
+        };
+        prop_assert!((conserved - 1.0).abs() < 1.0e-5, "{law:?} conserved {conserved}");
+
+        // The block path is the per-sample path applied everywhere.
+        let mut block = vec![wet; 32];
+        mixer.mix_block(&mut block, &vec![dry; 32]);
+        for sample in block {
+            prop_assert!((sample - mixer.mix(dry, wet)).abs() < 1.0e-6);
+        }
+        // Mixing a signal with itself under the linear law is the identity,
+        // which is why that law is the right one for correlated paths.
+        if law == MixLaw::Linear {
+            prop_assert!((mixer.mix(dry, dry) - dry).abs() < 1.0e-5);
+        }
+    }
+
+    /// A meter reports a level no higher than the largest magnitude it saw,
+    /// never negative, never non-finite, and the reader handle sees exactly
+    /// what the audio side published — even when the input contains NaN.
+    #[test]
+    fn a_meter_stays_within_the_signal_it_measured(
+        amplitude in 0.0f32..4.0,
+        block_len in 1usize..1_024,
+        blocks in 1usize..64,
+        sample_rate in sample_rates(),
+        poison in prop::bool::ANY,
+    ) {
+        let mut meter = Meter::new();
+        meter.set_sample_rate(sample_rate);
+        let handle = meter.handle();
+
+        let mut block: Vec<f32> = (0..block_len)
+            .map(|index| (index as f32 * 0.37).sin() * amplitude)
+            .collect();
+        if poison {
+            block[0] = f32::NAN;
+        }
+        let largest = block
+            .iter()
+            .filter(|s| s.is_finite())
+            .fold(0.0f32, |acc, s| acc.max(s.abs()));
+
+        for _ in 0..blocks {
+            meter.process_block(&block);
+            let (peak, rms) = (meter.peak(), meter.rms());
+            prop_assert!(peak.is_finite() && rms.is_finite(), "peak {peak} rms {rms}");
+            prop_assert!(peak >= 0.0 && rms >= 0.0, "peak {peak} rms {rms}");
+            prop_assert!(peak <= largest + 1.0e-6, "peak {peak} exceeded input {largest}");
+            prop_assert!(rms <= largest + 1.0e-3, "rms {rms} exceeded input {largest}");
+            prop_assert_eq!(handle.peak().to_bits(), peak.to_bits());
+            prop_assert_eq!(handle.rms().to_bits(), rms.to_bits());
         }
     }
 }

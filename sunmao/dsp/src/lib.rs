@@ -13,7 +13,10 @@
 
 pub mod envelopes;
 pub mod filters;
+pub mod metering;
+pub mod mixing;
 pub mod oscillators;
+pub mod oversampling;
 
 /// Snaps values that have decayed to inaudibility down to zero.
 ///
@@ -45,5 +48,8 @@ pub mod prelude {
     pub use crate::envelopes::{Adsr, AdsrStage, EnvelopeFollower};
     pub use crate::filters::{Biquad, BiquadKind, OnePole, OnePoleKind, Svf, SvfOutput};
     pub use crate::flush_denormal;
+    pub use crate::metering::{Meter, MeterHandle};
+    pub use crate::mixing::{DryWet, MixLaw, apply_gain, db_to_gain, gain_to_db};
     pub use crate::oscillators::{Oscillator, Waveform};
+    pub use crate::oversampling::{Oversampler, OversamplingFactor};
 }

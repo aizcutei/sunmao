@@ -88,6 +88,11 @@ EXAMPLES=(
   # CLAP id, so the fixtures' `clap_info` ids are unaffected.
   "sunmao_fx_tempo_delay|SunMao Tempo Delay|com.sunmao.fx.tempo-delay|||"
   "sunmao_fx_sidechain_comp|SunMao Sidechain Comp|com.sunmao.fx.sidechain-comp|||"
+  # Phase 3 M4 fixtures. OS Distortion reports a linear-phase group delay,
+  # which is the only kind the runner's `latency_alignment` impulse measurement
+  # can check against; Meter exercises the lock-free metering publication.
+  "sunmao_fx_os_dist|SunMao OS Distortion|com.sunmao.fx.os-dist|||"
+  "sunmao_fx_meter|SunMao Meter|com.sunmao.fx.meter|||"
 )
 
 supports_au() {

@@ -4738,6 +4738,7 @@ name = "sunmao_fx_meter"
 version = "0.1.0"
 dependencies = [
  "sunmao",
+ "sunmao_dsp",
 ]
 
 [[package]]
@@ -4745,6 +4746,7 @@ name = "sunmao_fx_os_dist"
 version = "0.1.0"
 dependencies = [
  "sunmao",
+ "sunmao_dsp",
 ]
 
 [[package]]

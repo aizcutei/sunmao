@@ -1,6 +1,6 @@
 # Phase 3 状态
 
-更新时间：2026-08-28
+更新时间：2026-09-03
 
 ## 目标与边界
 
@@ -38,8 +38,8 @@ Phase 1（run #25 / commit `c8401e6`）与 Phase 2 核心（run #38 / commit
 |---|---|---|---|
 | Grouped Params Synth | `examples/sunmao_syn_grouped_params` | M2 参数分组/smoothing/instrument template | 单音 sine + 一阶 LP + 线性 AR 包络，参数平铺（前缀标记未来分组），4 单元测试（macOS 本地通过） |
 | SVF Filter | `examples/sunmao_fx_svf` | M3 sunmao/dsp filter 组件替换 | inline TPT SVF（LP/BP/HP），6 单元测试含稳定性/边界（macOS 本地通过） |
-| OS Distortion | `examples/sunmao_fx_os_dist` | M4 oversampling + latency 契约 | 无 oversampling 的 tanh waveshaper，latency 固定 0，6 单元测试（macOS 本地通过） |
-| Meter | `examples/sunmao_fx_meter` | M4 无锁 metering 发布 | passthrough + AtomicU32 位存 peak/RMS，6 单元测试含跨线程读取（macOS 本地通过） |
+| OS Distortion | `examples/sunmao_fx_os_dist` | M4 oversampling + latency 契约 | M4 演进：tanh waveshaper 跑在 `sunmao/dsp` 4x `Oversampler` 内，dry/wet 用 `DryWet` 在过采样域内混合（避免 dry/wet 相对延迟成梳状），latency 由 `OversamplingFactor::latency_samples()`（24）上报且在 prepare 之前即可回答，8 单元测试含群延迟对齐与 13kHz 混叠抑制（macOS 本地通过） |
+| Meter | `examples/sunmao_fx_meter` | M4 无锁 metering 发布 | M4 演进：换用 `sunmao/dsp` `Meter`/`MeterHandle`（原子位存发布、-20 dB/s 峰值回落、100 ms RMS 时间常数），handle 在构造期即可取得（编辑器可先于激活打开），增益经 `db_to_gain` 以 dB 表达，10 单元测试含跨线程读取（macOS 本地通过） |
 | Layout Gain | `examples/sunmao_fx_layout_gain` | M1 第 2 项 speaker layout 动态协商 | M1 新增（非 M0 骨架）：发布 mono/stereo 两个 `BusConfig`，5 单元测试（macOS 本地通过） |
 | Template Effect / Instrument | `examples/sunmao_template_{effect,instrument}` | M2 新插件样板 | M2 新增：effect **恰好 50 行**（达标），instrument 86 行（**未达标**，见下）。行数预算由 `sunmao/tests/template_size.rs` 机械强制 |
 
@@ -54,7 +54,7 @@ M2 的验收方式是 grouped synth 换用分组 + smoothing + template 后测�
 | M1 Phase 2 收口 | 7 项遗留（见 phase2/status.md 遗留表），每项完成即更新该表 | **完成**：7/7 项全部验收（各自三平台 hosted 绿）（第 1 项 bus 激活/去激活回调 11 测试；第 2 项 speaker layout 动态协商 12 测试；第 3 项 runner 宿主侧断言 3 测试 + 套件 16→19、打包 20→24 套件；各自三平台 hosted 全绿）。原盘点（2026-08-28）已确认 `_sys` 层无缺口（`clap_sys::clap_plugin_audio_ports_activation_t`、`audio_ports_config` 全家族、`vst3_sys::IComponent::activate_bus`），缺口在 `_rs`/core，activation 与 `audio_ports_config`（layout 协商）两侧现均已补齐 | 第 1 项：[run #42](https://github.com/aizcutei/sunmao/actions/runs/33171119003)（commit `b78aca6`）；第 2 项：[run #44](https://github.com/aizcutei/sunmao/actions/runs/33174187893)（commit `1478189`）；第 3 项：[run #47](https://github.com/aizcutei/sunmao/actions/runs/33177884493)（commit `0e79bd2`）。三次均三 job success、全部 blocking 步骤零非成功、artifacts 齐备 | M1 七项全部落地后进入 M2（参数分组/smoothing/template） |
 | M2 参数系统与构造 API | 分组/嵌套、smoothing、effect/instrument template | **完成**（三项均三平台 hosted 全绿）（各自三平台 hosted 全绿）。smoothing 的指数 ramp 不终止与 `is_smoothing` 残余偏移两个缺陷由新增 proptest 抓出并修正（详见 progress.md）。自 `_sys` 补起：`vst3_sys` 新增 `IUnitInfo` 绑定（IID 自上游头文件转录），并修正 `clap_rs` 把 `info.module` 无条件清零的既有缺陷 | 分组：[run #57](https://github.com/aizcutei/sunmao/actions/runs/33189876572)（commit `94b3542`）；smoothing：[run #59](https://github.com/aizcutei/sunmao/actions/runs/33192422381)（commit `d0a13d3`）；template：[run #61](https://github.com/aizcutei/sunmao/actions/runs/33194134348)（commit `3374c5f`）。三次均三 job success、零非成功步骤、artifacts 齐备 | — （M2 完成；instrument 模板 86 行未达 ≤50，待 M3 的 oscillator/envelope 落地后重测） |
 | M3 DSP 基础组件 | `sunmao/dsp`：filters/envelopes/oscillators | **完成**：filters/envelopes/oscillators 三家族齐备且三平台 hosted 全绿。filters（三平台 hosted 全绿；一阶/SVF/biquad + 4 proptest；SVF fixture 已换组件实现且**测试零改动**通过；顺带修掉 f32 biquad 低 cutoff DC 增益 14% 失准）。**envelopes/oscillators 已验收**（ADSR/follower、PolyBLEP sine/saw/pulse，+3 proptest；instrument 模板换用组件后 86→81 行，**仍未达 ≤50**，原因见 progress.md） | filters：[run #63](https://github.com/aizcutei/sunmao/actions/runs/33196120193)（commit `9db6ff0`）三 job success、零非成功步骤、artifacts 齐备 | — （M3 完成；进入 M4） |
-| M4 oversampling/mixing/metering | 2x/4x oversampling、dry-wet/增益、peak/RMS metering | 进行中 | — | oversampler latency 接 Phase 2 契约并被 runner 断言；`sunmao_fx_os_dist` 与 `sunmao_fx_meter` fixture 消费验证 |
+| M4 oversampling/mixing/metering | 2x/4x oversampling、dry-wet/增益、peak/RMS metering | **代码齐备，待 hosted 验收**：`sunmao/dsp` 新增 `oversampling`（2x/4x 级联半带 FIR，33 tap 使 4x 群延迟为整数 24）、`mixing`（dB 换算、`apply_gain`、线性/等功率 `DryWet`）、`metering`（`Meter`/`MeterHandle` 原子发布）三模块 + 7 proptest；两个 fixture 换组件实现；runner 新增第 19 项 `latency_alignment`（两格式读 latency 后以冲激实测峰值帧，容差 1）。proptest 抓出 `EqualPower` 全湿时 `cos(π/2)` 为 -4.4e-8 的负 dry 增益并修正 | 本地：macOS ARM64 123 套件全绿、Windows 交叉 check、打包 24 套件（见 progress.md）——本地证据等级 | 推送后等待三平台 hosted；全绿即更新本行进 M5 |
 | M5 版本兼容策略与总验收 | semver/state 兼容文档、proptest/文档收尾 | 未开始 | — | — |
 
 ## 完成规则

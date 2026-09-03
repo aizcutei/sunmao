@@ -316,7 +316,7 @@ fn cmd_test(args: &[String]) -> bool {
         let mut results = Vec::new();
 
         // === Test 1: Load ===
-        println!("  [1/19] Loading plugin...");
+        println!("  [1/20] Loading plugin...");
         let t0 = Instant::now();
         let plugin = match load_plugin(plugin_info) {
             Ok(p) => {
@@ -339,7 +339,7 @@ fn cmd_test(args: &[String]) -> bool {
         let mut plugin = plugin;
 
         // === Test 2: Initialize ===
-        println!("  [2/19] Initializing (44100 Hz, 512 frames)...");
+        println!("  [2/20] Initializing (44100 Hz, 512 frames)...");
         let t0 = Instant::now();
         match plugin.initialize(44100.0, 512) {
             Ok(()) => {
@@ -360,7 +360,7 @@ fn cmd_test(args: &[String]) -> bool {
         }
 
         // === Test 3: Parameter enumeration ===
-        println!("  [3/19] Enumerating parameters...");
+        println!("  [3/20] Enumerating parameters...");
         let param_count = plugin.param_count();
         let mut parameter_metadata_ok = true;
         let mut parameter_infos = Vec::with_capacity(param_count as usize);
@@ -431,7 +431,7 @@ fn cmd_test(args: &[String]) -> bool {
             run_synth_processing_tests(plugin.as_mut(), &runtime_info, frames, &mut results);
         } else {
             // === Test 4: Process silence ===
-            println!("  [4/19] Processing silence (512 frames)...");
+            println!("  [4/20] Processing silence (512 frames)...");
             let mut output = vec![0.0f32; frames * output_channels];
             match plugin.process(&input, &mut output) {
                 Ok(()) => {
@@ -446,7 +446,7 @@ fn cmd_test(args: &[String]) -> bool {
             }
 
             // === Test 5: Process impulse ===
-            println!("  [5/19] Processing impulse...");
+            println!("  [5/20] Processing impulse...");
             let mut impulse = vec![0.0f32; frames * input_channels];
             impulse
                 .iter_mut()
@@ -466,7 +466,7 @@ fn cmd_test(args: &[String]) -> bool {
             }
 
             // === Test 6: Process sine wave (440 Hz) ===
-            println!("  [6/19] Processing 440 Hz sine wave...");
+            println!("  [6/20] Processing 440 Hz sine wave...");
             let sine = make_sine(440.0, frames, 44100.0, 0.5, input_channels);
             let mut output3 = vec![0.0f32; frames * output_channels];
             match plugin.process(&sine, &mut output3) {
@@ -492,7 +492,7 @@ fn cmd_test(args: &[String]) -> bool {
             }
 
             // === Test 7: Process sine wave (1000 Hz) ===
-            println!("  [7/19] Processing 1000 Hz sine wave...");
+            println!("  [7/20] Processing 1000 Hz sine wave...");
             let sine1k = make_sine(1000.0, frames, 44100.0, 0.5, input_channels);
             let mut output3b = vec![0.0f32; frames * output_channels];
             match plugin.process(&sine1k, &mut output3b) {
@@ -508,7 +508,7 @@ fn cmd_test(args: &[String]) -> bool {
             }
 
             // === Test 8: DC offset test ===
-            println!("  [8/19] Processing DC offset (value=0.5)...");
+            println!("  [8/20] Processing DC offset (value=0.5)...");
             let dc_input = vec![0.5f32; frames * input_channels];
             let mut output_dc = vec![0.0f32; frames * output_channels];
             match plugin.process(&dc_input, &mut output_dc) {
@@ -525,7 +525,7 @@ fn cmd_test(args: &[String]) -> bool {
         }
 
         // === Test 9: Parameter set/get ===
-        println!("  [9/19] Testing parameter set/get...");
+        println!("  [9/20] Testing parameter set/get...");
         if param_count > 0 {
             let mut param_ok = true;
             for i in 0..param_count {
@@ -565,7 +565,7 @@ fn cmd_test(args: &[String]) -> bool {
         }
 
         // === Test 10: Sample-accurate parameter automation ===
-        println!("  [10/19] Testing sample-accurate parameter automation...");
+        println!("  [10/20] Testing sample-accurate parameter automation...");
         results.push(run_parameter_automation_test(
             plugin.as_mut(),
             &runtime_info,
@@ -573,7 +573,7 @@ fn cmd_test(args: &[String]) -> bool {
         ));
 
         // === Test 11: Reset ===
-        println!("  [11/19] Resetting plugin...");
+        println!("  [11/20] Resetting plugin...");
         match plugin.reset() {
             Ok(()) => {
                 println!("         Reset complete");
@@ -586,7 +586,7 @@ fn cmd_test(args: &[String]) -> bool {
         }
 
         // === Test 12: Process after reset ===
-        println!("  [12/19] Processing after reset...");
+        println!("  [12/20] Processing after reset...");
         let mut output4 = vec![0.0f32; frames * output_channels];
         match plugin.process(&input, &mut output4) {
             Ok(())
@@ -619,7 +619,7 @@ fn cmd_test(args: &[String]) -> bool {
         }
 
         // === Test 13: Continuous processing (stress test) ===
-        println!("  [13/19] Stress test: 100 continuous blocks...");
+        println!("  [13/20] Stress test: 100 continuous blocks...");
         let t0 = Instant::now();
         let mut stress_ok = true;
         let mut stress_peak: f32 = 0.0;
@@ -675,7 +675,7 @@ fn cmd_test(args: &[String]) -> bool {
         }
 
         // === Test 14: Different sample rates ===
-        println!("  [14/19] Testing different sample rates (re-loading plugin)...");
+        println!("  [14/20] Testing different sample rates (re-loading plugin)...");
         let rates = [22050.0, 44100.0, 48000.0, 88200.0, 96000.0];
         let mut sr_results = Vec::new();
         let mut sample_rates_ok = true;
@@ -772,7 +772,7 @@ fn cmd_test(args: &[String]) -> bool {
         }
 
         // === Test 15: State save/roundtrip ===
-        println!("  [15/19] Testing state save/load...");
+        println!("  [15/20] Testing state save/load...");
         match capture_parameter_snapshot(plugin.as_ref()) {
             Ok(snapshot) => match plugin.save_state() {
                 Ok(state) => {
@@ -816,18 +816,22 @@ fn cmd_test(args: &[String]) -> bool {
 
         // === Test 16: Shutdown ===
         // === Test 16: Latency and tail queried through the format API ===
-        println!("  [16/19] Querying reported latency and tail...");
+        println!("  [16/20] Querying reported latency and tail...");
         results.push(run_latency_tail_test(plugin.as_mut(), 44100.0));
 
         // === Test 17: Audio bus topology enumeration ===
-        println!("  [17/19] Enumerating audio bus topology...");
+        println!("  [17/20] Enumerating audio bus topology...");
         results.push(run_bus_topology_test(plugin.as_mut()));
 
         // === Test 18: Sidechain routing ===
-        println!("  [18/19] Verifying sidechain routing...");
+        println!("  [18/20] Verifying sidechain routing...");
         results.push(run_sidechain_routing_test(plugin.as_mut(), frames));
 
-        println!("  [19/19] Shutting down...");
+        // === Test 19: Reported latency matches measured latency ===
+        println!("  [19/20] Measuring latency against the reported value...");
+        results.push(run_reported_latency_alignment_test(plugin.as_mut(), frames));
+
+        println!("  [20/20] Shutting down...");
         plugin.shutdown();
         println!("         Shutdown complete");
         results.push(TestResult::pass("shutdown"));
@@ -948,6 +952,99 @@ fn run_latency_tail_test(plugin: &mut dyn HostPlugin, sample_rate: f64) -> TestR
     TestResult::pass(format!(
         "latency_tail (latency={:?}, tail={:?})",
         latency, tail
+    ))
+}
+
+/// Checks that a plugin's *reported* latency is the latency it actually has.
+///
+/// Reporting a plausible-looking number is not the contract — the host shifts
+/// the track by exactly this many samples, so a value that is merely in range
+/// still misaligns the session. The only way to know is to measure: send an
+/// impulse and find where it comes out.
+///
+/// This measures through the format API, so it independently confirms that the
+/// number survives the VST3 and CLAP paths rather than only being right inside
+/// the plugin's own unit tests.
+fn run_reported_latency_alignment_test(plugin: &mut dyn HostPlugin, frames: usize) -> TestResult {
+    let info = plugin.info().clone();
+    let Some(latency) = plugin.reported_latency() else {
+        return TestResult::pass("latency_alignment (not exposed)");
+    };
+
+    // Only a linear-phase processor has its impulse peak *at* its reported
+    // latency. A delay's peak sits at the delay time, and a plugin reporting
+    // zero has nothing to check, so both would fail this for behaving
+    // correctly. The oversampled fixture exists to exercise exactly this.
+    if !info.name.contains("OS Distortion") {
+        return TestResult::pass("latency_alignment (not a lookahead fixture)");
+    }
+    if latency == 0 {
+        return TestResult::fail(
+            "latency_alignment",
+            "OS Distortion oversamples but the host read zero latency",
+        );
+    }
+
+    let input_channels = info.input_channels as usize;
+    let output_channels = info.output_channels as usize;
+    if input_channels == 0 || output_channels == 0 {
+        return TestResult::pass("latency_alignment (no audio bus)");
+    }
+
+    let mut input = vec![0.0f32; frames * input_channels];
+    for channel in 0..input_channels {
+        input[channel] = 1.0;
+    }
+    let mut output = vec![0.0f32; frames * output_channels];
+    if let Err(error) = plugin.process(&input, &mut output) {
+        return TestResult::fail("latency_alignment", format!("impulse pass: {error}"));
+    }
+    if let Err(error) = plugin.reset() {
+        return TestResult::fail("latency_alignment", format!("reset: {error}"));
+    }
+    if !samples_are_finite(&output) {
+        return TestResult::fail("latency_alignment", "non-finite output");
+    }
+
+    // Locate the impulse in the output, by frame.
+    let mut peak_frame = 0usize;
+    let mut peak_value = 0.0f32;
+    for frame in 0..frames {
+        let base = frame * output_channels;
+        for channel in 0..output_channels {
+            let magnitude = output[base + channel].abs();
+            if magnitude > peak_value {
+                peak_value = magnitude;
+                peak_frame = frame;
+            }
+        }
+    }
+
+    if peak_value <= 1e-6 {
+        return TestResult::fail(
+            "latency_alignment",
+            "the impulse never reached the output; cannot verify latency",
+        );
+    }
+    println!(
+        "         reported latency {latency} samples, impulse peaked at frame {peak_frame} ({peak_value:.6})"
+    );
+
+    // One sample of slack: the peak of a discretely-sampled symmetric response
+    // can straddle two samples.
+    let difference = (peak_frame as i64 - latency as i64).unsigned_abs();
+    if difference > 1 {
+        return TestResult::fail(
+            "latency_alignment",
+            format!(
+                "reported {latency} samples of latency but the impulse arrived at frame \
+                 {peak_frame}; a host would misalign this track by {difference} samples"
+            ),
+        );
+    }
+
+    TestResult::pass(format!(
+        "latency_alignment (reported {latency}, measured {peak_frame})"
     ))
 }
 
@@ -1351,7 +1448,7 @@ fn run_synth_processing_tests(
     frames: usize,
     results: &mut Vec<TestResult>,
 ) {
-    println!("  [4/19] Verifying synth bus layout and idle processing...");
+    println!("  [4/20] Verifying synth bus layout and idle processing...");
     let input = Vec::<f32>::new();
     let output_samples = frames * info.output_channels as usize;
     if info.input_channels != 0 || info.output_channels == 0 {
@@ -1379,7 +1476,7 @@ fn run_synth_processing_tests(
         }
     }
 
-    println!("  [5/19] Sending note-on at sample offset 17...");
+    println!("  [5/20] Sending note-on at sample offset 17...");
     let note_on = [HostEvent::NoteOn {
         sample_offset: 17,
         channel: 0,
@@ -1417,7 +1514,7 @@ fn run_synth_processing_tests(
         Err(error) => results.push(TestResult::fail("synth_note_on", error)),
     }
 
-    println!("  [6/19] Sending note-off and processing release blocks...");
+    println!("  [6/20] Sending note-off and processing release blocks...");
     let note_off = [HostEvent::NoteOff {
         sample_offset: 31,
         channel: 0,
@@ -1473,7 +1570,7 @@ fn run_synth_processing_tests(
         results.push(TestResult::fail("synth_note_off_release", release_error));
     }
 
-    println!("  [7/19] Re-triggering synth after release...");
+    println!("  [7/20] Re-triggering synth after release...");
     let retrigger = [HostEvent::NoteOn {
         sample_offset: 0,
         channel: 0,
@@ -1494,7 +1591,7 @@ fn run_synth_processing_tests(
         Err(error) => results.push(TestResult::fail("synth_retrigger", error)),
     }
 
-    println!("  [8/19] Releasing re-triggered note...");
+    println!("  [8/20] Releasing re-triggered note...");
     let final_off = [HostEvent::NoteOff {
         sample_offset: (frames - 1) as u32,
         channel: 0,
