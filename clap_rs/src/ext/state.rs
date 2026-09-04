@@ -315,6 +315,7 @@ unsafe fn stream_read_exact(stream: *const clap_istream_t, mut bytes: &mut [u8])
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::c_void;
 
     fn parameter(id: u32, name: &str) -> ParameterInfo {
         ParameterInfo {
@@ -410,5 +411,247 @@ mod tests {
         let mut header = header_bytes(STATE_VERSION, 0);
         header[0] = b'X';
         assert_eq!(decode_header(&header, STATE_VERSION), None);
+    }
+
+    /// A plugin that records what a state load did to it, so a property can
+    /// assert on the *effect* of `load_parameter_state` rather than only on
+    /// the codec underneath it.
+    struct StateProbe {
+        params: Vec<ParameterInfo>,
+        applied: Vec<(u32, f64)>,
+        migrated_from: Option<u32>,
+    }
+
+    impl crate::plugin::Plugin for StateProbe {
+        type AudioProcessor = ();
+
+        const STATE_VERSION: u32 = 3;
+
+        fn new(_host: crate::plugin::HostHandle) -> Self {
+            unreachable!("the probe is constructed directly by the tests")
+        }
+
+        fn activate(
+            &mut self,
+            _sample_rate: f64,
+            _min_frames: u32,
+            _max_frames: u32,
+        ) -> Option<Self::AudioProcessor> {
+            Some(())
+        }
+
+        fn declare_parameters(&self) -> Vec<ParameterInfo> {
+            self.params.clone()
+        }
+
+        fn get_parameter(&self, _id: u32) -> f64 {
+            0.0
+        }
+
+        fn set_parameter(&mut self, id: u32, value: f64) {
+            self.applied.push((id, value));
+        }
+
+        fn state_loaded(&mut self, from_version: u32) {
+            self.migrated_from = Some(from_version);
+        }
+    }
+
+    /// A `clap_istream_t` over a byte slice, matching how a host feeds a
+    /// preset back: short reads are legal, so the reader must loop.
+    struct ByteStream {
+        bytes: Vec<u8>,
+        offset: usize,
+    }
+
+    unsafe extern "C" fn byte_stream_read(
+        stream: *const clap_istream_t,
+        buffer: *mut c_void,
+        size: u64,
+    ) -> i64 {
+        let state = unsafe { &mut *((*stream).ctx as *mut ByteStream) };
+        let remaining = state.bytes.len() - state.offset;
+        let count = remaining.min(size as usize);
+        if count > 0 {
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    state.bytes[state.offset..].as_ptr(),
+                    buffer.cast::<u8>(),
+                    count,
+                );
+            }
+            state.offset += count;
+        }
+        count as i64
+    }
+
+    fn load_from_bytes(plugin: &mut StateProbe, bytes: Vec<u8>) -> bool {
+        let params = plugin.params.clone();
+        let mut state = ByteStream { bytes, offset: 0 };
+        let stream = clap_istream_t {
+            ctx: (&raw mut state).cast(),
+            read: Some(byte_stream_read),
+        };
+        unsafe { load_parameter_state(plugin, &params, &stream) }
+    }
+
+    /// The unit tests above pin the codec on hand-written examples. These pin
+    /// the rules `docs/phase3/compatibility.md` promises for *every* blob a
+    /// host may hand back — including blobs no build of this framework wrote.
+    proptest::proptest! {
+        /// A saved value must come back exactly. Users' presets are the one
+        /// thing a plugin can never regenerate, so "close enough" is not a
+        /// tolerance the codec gets: the round trip is bit-for-bit.
+        #[test]
+        fn any_parameter_set_round_trips_bit_for_bit(
+            entries in proptest::collection::vec(
+                (proptest::prelude::any::<u32>(), 0u32..5, 0.0f64..1.0),
+                0..24,
+            ),
+            version in 0u32..STATE_VERSION + 1,
+        ) {
+            // CLAP stores plain values, so each parameter's value has to sit
+            // inside the range that parameter declares.
+            let mut seen = std::collections::BTreeMap::new();
+            for (id, steps, fraction) in &entries {
+                let max = f64::from((*steps).max(1));
+                seen.insert(*id, (max, fraction * max));
+            }
+            let params: Vec<ParameterInfo> = seen
+                .iter()
+                .map(|(id, (max, _))| ParameterInfo {
+                    id: *id,
+                    name: "param".to_string(),
+                    module: String::new(),
+                    min_value: 0.0,
+                    max_value: *max,
+                    default_value: 0.0,
+                    is_stepped: false,
+                })
+                .collect();
+
+            let bytes = encode_parameter_state(version, &params, |id| seen[&id].1)
+                .expect("in-range values must encode");
+            let decoded = decode_parameter_state(&bytes, STATE_VERSION)
+                .expect("a blob this build wrote must decode in this build");
+
+            proptest::prop_assert_eq!(decoded.len(), seen.len());
+            for (got, (id, (_, value))) in decoded.iter().zip(seen.iter()) {
+                proptest::prop_assert_eq!(got.0, *id);
+                // Bit equality, not `==`: it also rules out a -0.0/0.0 swap.
+                proptest::prop_assert_eq!(got.1.to_bits(), value.to_bits());
+            }
+        }
+
+        /// A host can hand back a truncated file, a foreign file, or bytes from
+        /// a crashed write. The decoder must answer `None` or a *complete*
+        /// entry list — never panic, and never a partial list that the caller
+        /// would apply as if it were a whole preset.
+        #[test]
+        fn decoding_arbitrary_bytes_never_panics_and_never_yields_a_partial_list(
+            prefix_is_valid in proptest::prelude::any::<bool>(),
+            version in 0u32..4,
+            count in 0u32..600,
+            body in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..800),
+            current in 0u32..4,
+        ) {
+            let mut bytes = Vec::new();
+            if prefix_is_valid {
+                bytes.extend_from_slice(&STATE_MAGIC);
+            } else {
+                bytes.extend_from_slice(b"XXXXXXX\0");
+            }
+            bytes.extend_from_slice(&version.to_le_bytes());
+            bytes.extend_from_slice(&count.to_le_bytes());
+            bytes.extend_from_slice(&body);
+
+            if let Some(entries) = decode_parameter_state(&bytes, current) {
+                proptest::prop_assert_eq!(entries.len(), count as usize);
+                proptest::prop_assert!(entries.iter().all(|(_, value)| value.is_finite()));
+            }
+        }
+
+        /// The version rule is an inequality, not a match: this build reads
+        /// anything it or an older build wrote, and refuses anything newer
+        /// because it cannot know how a future layout reinterprets values.
+        #[test]
+        fn a_blob_is_readable_exactly_when_it_is_not_from_the_future(
+            version in proptest::prelude::any::<u32>(),
+            current in proptest::prelude::any::<u32>(),
+        ) {
+            let header = header_bytes(version, 0);
+            proptest::prop_assert_eq!(
+                decode_header(&header, current).is_some(),
+                version <= current
+            );
+        }
+
+        /// The load path's contract, end to end: a rejected blob leaves the
+        /// plugin untouched (no value applied, no migration), and an accepted
+        /// one applies every known id before migrating — never the reverse
+        /// order, which would show the plugin a half-restored preset.
+        #[test]
+        fn a_rejected_state_never_reaches_the_plugin(
+            version in 0u32..6,
+            declared in proptest::collection::vec(0u32..8, 0..6),
+            written in proptest::collection::vec((0u32..8, -1.0f64..3.0), 0..6),
+            truncate in 0usize..4,
+        ) {
+            let params: Vec<ParameterInfo> = {
+                let mut ids = declared.clone();
+                ids.sort_unstable();
+                ids.dedup();
+                ids.iter()
+                    .map(|id| ParameterInfo {
+                        id: *id,
+                        name: "param".to_string(),
+                        module: String::new(),
+                        min_value: 0.0,
+                        max_value: 1.0,
+                        default_value: 0.0,
+                        is_stepped: false,
+                    })
+                    .collect()
+            };
+
+            // Hand-build the blob so out-of-range values and truncation —
+            // which the encoder refuses to produce — still get exercised.
+            let mut blob = header_bytes(version, written.len() as u32);
+            for (id, value) in &written {
+                blob.extend_from_slice(&id.to_le_bytes());
+                blob.extend_from_slice(&value.to_le_bytes());
+            }
+            blob.truncate(blob.len().saturating_sub(truncate));
+
+            let mut plugin = StateProbe {
+                params,
+                applied: Vec::new(),
+                migrated_from: None,
+            };
+            let accepted = load_from_bytes(&mut plugin, blob);
+
+            let known: Vec<(u32, f64)> = written
+                .iter()
+                .copied()
+                .filter(|(id, _)| plugin.params.iter().any(|param| param.id == *id))
+                .collect();
+            let all_in_range = known.iter().all(|(_, value)| (0.0..=1.0).contains(value));
+            let complete = truncate == 0;
+
+            proptest::prop_assert_eq!(
+                accepted,
+                complete && version <= StateProbe::STATE_VERSION && all_in_range
+            );
+            if accepted {
+                proptest::prop_assert_eq!(&plugin.applied, &known);
+                proptest::prop_assert_eq!(
+                    plugin.migrated_from,
+                    (version < StateProbe::STATE_VERSION).then_some(version)
+                );
+            } else {
+                proptest::prop_assert!(plugin.applied.is_empty());
+                proptest::prop_assert_eq!(plugin.migrated_from, None);
+            }
+        }
     }
 }

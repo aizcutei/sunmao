@@ -18,6 +18,13 @@ Phase 1 已完成：扩展后的 VST3 + CLAP + standalone gate 由 run #25（com
 
 稳定插件构造 API、参数分组/嵌套/smoothing、effect/instrument templates；建立 filters、envelopes、oscillators、oversampling、mixing、metering 等可组合 DSP 组件，并定义版本兼容策略。
 
+进展：Phase 2 的 7 项遗留已全部收口，参数分组/嵌套与 smoothing、`sunmao/dsp` 的
+filters/envelopes/oscillators/oversampling/mixing/metering 均已落地，各里程碑分别在独立
+commit 上取得三平台 hosted 绿（run #42/#44/#47/#49/#51/#53/#55/#57/#59/#61/#63/#66/#68）。
+API 与 state 的兼容策略见 [`docs/phase3/compatibility.md`](phase3/compatibility.md)，
+验收状态与证据见 `docs/phase3/status.md`。**尚未达标**：instrument 模板 81 行未达
+"新插件样板 ≤50 行"的目标（由 `sunmao/tests/template_size.rs` 机械盯住，不会悄悄增长）。
+
 ## Phase 4：GUI 组件库与平台完善
 
 完善布局、主题、text rendering、accessibility、clipboard、IME/国际键盘、cursor/focus、scale negotiation、floating CLAP editor；明确 renderer 资源和线程归属，在 X11 生命周期稳定后加入 Wayland。

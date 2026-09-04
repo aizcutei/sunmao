@@ -820,3 +820,74 @@
 - Unresolved: 待三平台 hosted 全绿方可把 M4 记为完成。注意 Windows/Linux 首次在 CI 打包并 exercise
   这两个 fixture，任何平台差异都会在"Package and exercise VST3 + CLAP + standalone"步骤暴露。
   M4 完成后进入 M5（semver/state 兼容策略文档 + 收尾）。仍挂账：instrument 模板 81 行未达 ≤50。
+
+### 2026-09-04 — M4 验收：hosted run #68 三平台全绿
+
+- Command/platform: 轮询 GitHub Actions API（本机无 gh）读 commit `04d036a` 的 check-runs
+  与 run #68 的 jobs/steps/artifacts：https://github.com/aizcutei/sunmao/actions/runs/33867319967
+- Result: macOS ARM64、Windows x86_64、Ubuntu x86_64 三个 job 同一 commit 全部 success，
+  **每个 job 25 个步骤逐个 success/skipped、零非成功**。M4 的三个新模块与两个 fixture 演进
+  一并验收。要点：本 run 是 Windows/Linux **首次**在 CI 里打包并 exercise
+  `sunmao_fx_os_dist` / `sunmao_fx_meter`（M4 之前 Phase 3 fixture 只做 `cargo test -p`），
+  "Package and exercise VST3 + CLAP + standalone" 三平台均 success，
+  因此 `latency_alignment` 断言不再只在 CI 里走 skip 路径。
+- Evidence/artifact: run #68 上传三平台 artifacts（`phase1-macOS-ARM64` 52.3MB、
+  `phase1-Windows-X64` 78.1MB、`phase1-Linux-X64` 960.1MB），均 `expired=false` 可下载。
+- Unresolved: 已知 flake（Windows WGPU 收尾 exit 139）在本 run 的
+  "Package and exercise native GUI backends" 上**连续第二次未复现**；仍按"间歇性失败的
+  单次绿不构成证明"处理，是否降级为"已修复"留到 M5 收尾判断。进入 M5。
+
+### 2026-09-04 — M5：兼容策略文档 + proptest 收口，并修掉 flush 破坏耦合衰减的真实缺陷
+
+- Command/platform: macOS ARM64 本地。
+  - **文档**：`docs/phase3/compatibility.md` 落地并从 README、`docs/roadmap.md` 链接。
+    两条独立的兼容轴：crate semver（受保护的 API 面 / 什么算破坏性 / `sunmao_dsp` 的数值语义
+    承诺 / 弃用流程）与 state 兼容（blob 布局、载入规则表、何时升 `STATE_VERSION`、
+    什么永不进 state、验证方式）。**核对代码时发现文档自身两处失实并修正**：
+    (a) 原文称 blob 里的 `value` 是归一化值，实际 CLAP 侧写的是 **plain value**——
+    连续参数恰好等于归一化值，但 stepped 参数写的是**步进索引**（`parameter_to_clap_value`），
+    VST3 侧才是归一化；(b) 因此两格式 blob 不通用不只是 magic 不同，同一个 stepped 参数
+    的**数值尺度**本身就不同。
+  - **proptest +8**（把文档里的承诺变成机械守卫，而不是散文）：`vst3_rs::state::tests`
+    4 项（逐位 round-trip、顺序无关、任意字节串不 panic 且**绝不给出部分条目表**、
+    版本规则是不等式）；`clap_rs::ext::state::tests` 4 项（同前三项 +
+    `a_rejected_state_never_reaches_the_plugin`：用一个假的 `clap_istream_t` 与记录型
+    `Plugin` 探针端到端断言"被拒的 blob 不应用任何值、不触发迁移；被接受的 blob
+    先应用完全部已知 id 才回调迁移"）；`sunmao_core` 3 项（id 哈希对照独立实现的 FNV-1a、
+    永不落在保留的 `u32::MAX`、group 路径归一化幂等且无空层级）。
+  - **真实缺陷（本轮主要收获，由 proptest 抓出）**：`RUSTFLAGS=-Awarnings cargo test`
+    出现一次 `every_filter_settles_below_audibility_and_out_of_the_denormal_range` 失败
+    （`svf left an audible residue: -2.5e-18`，cutoff 20 / res 0.2 / 96 kHz）。这不是容差
+    问题：**`flush_denormal` 被独立施加到耦合递推的每个状态上，会破坏让它们衰减的耦合。**
+    量化（临时探针，已删）：`Svf` 的 `ic1` 幅度约为 `ic2` 的 `g` 倍（20 Hz/96 kHz 时约
+    1/1500），于是 `ic1` 先跌破 1e-20 被清零，而 `ic1` 正是 `ic2` 唯一的快衰减通道——
+    `ic2` 随后以 `O(g²)` 的 `2*a3` 速率爬行，归零耗时 **6,833,421 样本（71 秒）**，
+    而其时间常数只要 **43,346 样本（0.45 秒）**，慢了 158 倍。`Biquad` 更糟：低 cutoff 下
+    `a1 → -2`、`a2 → 1`，衰减来自 `-a1*output` 与 `s2` 的近似抵消，单独清零 `s2` 后剩下
+    `s1 * -a1` 是近 2 倍的增益，两个状态轮流被清零又被泵起，**永久停在 6.2e-20 的极限环**。
+    修法：两者都改为**成组** flush（只有全部状态都在 floor 内才一起清零），并把阈值提为
+    `sunmao_dsp::DENORMAL_FLOOR`（进 prelude，带 doc-test 讲清成组规则），
+    `flush_denormal` 的文档注明只适用于单状态组件。
+  - **测试本身也是缺陷的一部分**，一并修：(a) 原断言"400k 样本后残留 < 1e-18"里的 400k 是
+    拍出来的——最慢的合法设置（20 Hz / res 1.0 / 192 kHz）**本来就需要约 140 万样本**，
+    所以该测试在慢区证明不了任何事，在别处又把真 bug 报成边缘抖动。改为
+    `every_filter_settles_within_its_own_time_constant`：按各滤波器的**离散极点半径**
+    （SVF 取状态矩阵特征值、one-pole 取 `1-c`、biquad 取 `sqrt(a2)`）算预算，断言
+    "预算内到达精确 0 并在随后 64 样本窗口保持 0"。用解析式模型不行：`π*fc*k/fs` 只在
+    小 `g` 下成立，0.49*fs 时真实衰减比它慢 10 倍，会在正确代码上失败。
+    (b) 判定"已归零"不能看单个 0 输出——振铃滤波器**会穿过零**（这一版先失败在
+    `biquad left zero at 3607 after settling at 3606`），故改用整窗口全零。
+    (c) cutoff 改为**对数均匀**采样（新增 `cutoffs()`）：均匀采样把 99.9% 的样例放在
+    200 Hz 以上，低归一化 cutoff 这个缺陷所在的角落每例只有约 1/4000 的命中率——
+    这正是该 bug 能一直藏着、只在一个不巧的种子上冒出来的原因。
+  - 反向验证：把 `filters.rs` 暂时切回修复前，新测试**立即失败**并 shrink 到
+    `cutoff = 19.999999999999996, resonance = 0.20088771, sample_rate = 96000`；恢复后通过。
+- Result: `RUSTFLAGS=-Awarnings cargo test --locked` **123 套件 / 504 测试全绿、exit 0**
+  （含 `sunmao_fx_svf` fixture 的既有测试**零改动**通过——组件行为的改变只在 -350 dBFS 以下）。
+  metadata/fmt/diff-check 通过；`cargo check --locked --target x86_64-pc-windows-msvc`
+  覆盖 dsp/两 `_rs`/core/三 fixture 零 error、零新 warning。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/m5_test.log`、`/tmp/m5_pkg.log`）——本地证据等级。
+- Unresolved: 待三平台 hosted 全绿方可把 M5 的这一步记为完成。**Phase 3 总验收前仍挂账一项**：
+  instrument 模板 81 行未达 M2 的"新插件样板 ≤50 行"，这是 Phase 3 唯一写进 milestone
+  却未满足的目标，下一轮单独收口（需要 voice/synth 层抽象与参数默认值的声明式表达），
+  不以"完成规则未提及"为由跳过。

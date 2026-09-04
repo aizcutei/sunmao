@@ -163,6 +163,13 @@ reports from all three jobs. The earlier run
 Current scope and deferred work are tracked in
 [`docs/phase1/status.md`](docs/phase1/status.md), [`docs/phase1/progress.md`](docs/phase1/progress.md), and [`docs/roadmap.md`](docs/roadmap.md).
 
+### Compatibility policy
+
+What upgrading SunMao may and may not change — the semver-protected API surface,
+the numeric promises `sunmao_dsp` components make, the saved-state format, and
+when a plugin must bump its `STATE_VERSION` — is specified in
+[`docs/phase3/compatibility.md`](docs/phase3/compatibility.md).
+
 ## Inspirations And License
 
 SunMao builds on ideas and bindings from [clap-sys](https://github.com/micahrj/clap-sys),

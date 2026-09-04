@@ -7,6 +7,7 @@
 use proptest::prelude::*;
 use sunmao_core::audio::AudioBuffer;
 use sunmao_core::events::{Event, EventQueue, MidiMessage, NoteExpression, NoteExpressionKind};
+use sunmao_core::params::{group_segments, stable_param_id};
 use sunmao_core::plugin::{BusConfig, BusInfo, TailLength};
 use sunmao_core::smoothing::{Smoother, SmoothingStyle};
 
@@ -268,5 +269,51 @@ proptest! {
                 break;
             }
         }
+    }
+
+    /// `stable_param_id` is the key saved state is written under, and both
+    /// plugin APIs reserve `u32::MAX` as "no such parameter". A string that
+    /// happened to hash there would produce a parameter the host cannot
+    /// address and a state entry that never matches, so the remap must hold
+    /// for every possible id — including non-ASCII ones.
+    #[test]
+    fn a_parameter_id_never_hashes_to_the_reserved_value(id in ".*") {
+        prop_assert_ne!(stable_param_id(&id), u32::MAX);
+    }
+
+    /// The hash algorithm itself is part of the persistence contract: every
+    /// preset ever saved is keyed by it, so swapping it would silently orphan
+    /// every stored value rather than fail loudly. This holds the production
+    /// function against an independent FNV-1a written from the specification,
+    /// so a "harmless" rewrite cannot pass unnoticed.
+    #[test]
+    fn the_id_hash_stays_fnv_1a_over_the_id_bytes(id in ".*") {
+        let reference = id.bytes().fold(0x811c_9dc5u32, |hash, byte| {
+            (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
+        });
+        let expected = if reference == u32::MAX {
+            u32::MAX - 1
+        } else {
+            reference
+        };
+        prop_assert_eq!(stable_param_id(&id), expected);
+    }
+
+    /// A group path is normalized once and then encoded by both backends: as a
+    /// VST3 unit tree and as a CLAP module string. An empty level would name a
+    /// unit nothing, so normalization must drop them — and re-normalizing the
+    /// joined result must be a no-op, or the two formats could disagree about
+    /// how deep a parameter sits.
+    #[test]
+    fn a_group_path_normalizes_to_named_levels_and_stays_normalized(
+        raw in prop::collection::vec(prop::sample::select(vec!["", "Osc", "Filter", "/", "a"]), 0..6),
+    ) {
+        let path = raw.join("/");
+        let segments = group_segments(&path).collect::<Vec<_>>();
+        prop_assert!(segments.iter().all(|segment| !segment.is_empty()));
+        prop_assert!(segments.iter().all(|segment| !segment.contains('/')));
+
+        let joined = segments.join("/");
+        prop_assert_eq!(group_segments(&joined).collect::<Vec<_>>(), segments);
     }
 }

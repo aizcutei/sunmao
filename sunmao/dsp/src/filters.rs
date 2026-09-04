@@ -3,7 +3,7 @@
 //! All three separate coefficient computation from processing. `set_*` does the
 //! trigonometry; `process`/`tick` is arithmetic only.
 
-use crate::{flush_denormal, flush_denormal_f64};
+use crate::{DENORMAL_FLOOR, flush_denormal};
 
 /// Largest fraction of the sample rate a cutoff may reach.
 ///
@@ -162,8 +162,26 @@ impl Svf {
         let v3 = input - self.ic2;
         let v1 = a1 * self.ic1 + a2 * v3;
         let v2 = self.ic2 + a2 * self.ic1 + a3 * v3;
-        self.ic1 = flush_denormal(2.0 * v1 - self.ic1);
-        self.ic2 = flush_denormal(2.0 * v2 - self.ic2);
+        let ic1 = 2.0 * v1 - self.ic1;
+        let ic2 = 2.0 * v2 - self.ic2;
+        // The two integrator states have to be flushed as a *pair*, not one at
+        // a time. They differ hugely in scale at low cutoff — |ic1| is about
+        // `g` times |ic2|, so at 20 Hz / 96 kHz the bandpass state is ~1500x
+        // smaller — and ic1 is the only fast decay path ic2 has: with ic1
+        // pinned to zero, ic2 crawls down at the O(g²) rate `2*a3` instead of
+        // the O(g*k) rate the filter is designed to decay at. Flushing them
+        // independently therefore zeroes ic1 first and *slows the decay down*:
+        // at 20 Hz, resonance 0.2, 96 kHz the filter took 6.8M samples (71
+        // seconds) to reach zero instead of the 43k samples (0.45 s) its own
+        // time constant implies. Flushing jointly keeps the pair coupled all
+        // the way down, and costs the same one comparison per state.
+        if ic1.abs() < DENORMAL_FLOOR && ic2.abs() < DENORMAL_FLOOR {
+            self.ic1 = 0.0;
+            self.ic2 = 0.0;
+        } else {
+            self.ic1 = ic1;
+            self.ic2 = ic2;
+        }
         SvfOutput {
             lowpass: v2,
             bandpass: v1,
@@ -299,8 +317,24 @@ impl Biquad {
             0.0
         };
         let output = self.b0 * input + self.s1;
-        self.s1 = flush_denormal_f64(self.b1 * input - self.a1 * output + self.s2);
-        self.s2 = flush_denormal_f64(self.b2 * input - self.a2 * output);
+        let s1 = self.b1 * input - self.a1 * output + self.s2;
+        let s2 = self.b2 * input - self.a2 * output;
+        // Flushed as a pair, for the same reason as [`Svf`] — and here the
+        // independent version does worse than stall, it *pumps*. At a low
+        // cutoff `a1` approaches -2 and `a2` approaches 1, so the decay comes
+        // out of the near-cancellation between `-a1 * output` and `s2`. Zero
+        // `s2` on its own and what is left is `s1 * -a1`, a gain of nearly two:
+        // the pair then sits in a limit cycle just above the floor, each state
+        // taking turns being zeroed and pumped back up. A 121 Hz lowpass at
+        // 96 kHz was measured parked at 6.2e-20 indefinitely. Zeroing only
+        // when both states are inside the floor keeps the cancellation intact.
+        if s1.abs() < f64::from(DENORMAL_FLOOR) && s2.abs() < f64::from(DENORMAL_FLOOR) {
+            self.s1 = 0.0;
+            self.s2 = 0.0;
+        } else {
+            self.s1 = s1;
+            self.s2 = s2;
+        }
         output as f32
     }
 }

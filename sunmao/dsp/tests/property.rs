@@ -25,6 +25,19 @@ fn mix_laws() -> impl Strategy<Value = MixLaw> {
     prop::sample::select(vec![MixLaw::Linear, MixLaw::EqualPower])
 }
 
+/// Audible cutoffs, sampled **log-uniformly**.
+///
+/// Uniform sampling over 20..20_000 puts 99.9% of its cases above 200 Hz, and
+/// low normalized cutoff is exactly where filter arithmetic degrades: the
+/// prewarped `g` shrinks, state variables separate in scale, and decay slows
+/// until flushing and cancellation start to matter. A uniform sweep reaches
+/// that corner with probability ~1/4000 per case, which is how a stalled decay
+/// at 20 Hz survived in this crate until one unlucky seed hit it. Log-uniform
+/// gives each decade equal weight.
+fn cutoffs() -> impl Strategy<Value = f64> {
+    (20.0f64.ln()..20_000.0f64.ln()).prop_map(f64::exp)
+}
+
 /// Sample rates a host may actually use.
 fn sample_rates() -> impl Strategy<Value = f64> {
     prop::sample::select(vec![
@@ -77,16 +90,24 @@ proptest! {
         }
     }
 
-    /// A filter fed silence must decay to inaudibility and never sit on a
-    /// denormal, where arithmetic is far slower on many CPUs.
+    /// A filter fed silence must settle to zero within its *own* time
+    /// constant, and never sit on a denormal, where arithmetic is far slower on
+    /// many CPUs.
     ///
-    /// Deliberately *not* "reaches exactly zero": a second-order recursion can
-    /// hover just above any flush floor for a long time, and demanding exact
-    /// zero would only invite tuning the floor upward until the test passes.
-    /// What matters is that the residue is inaudible and normal-ranged.
+    /// The budget is derived from the parameters rather than fixed, because a
+    /// fixed one tests two different things depending on where the sweep
+    /// lands. This filter's slowest legitimate setting — 20 Hz at maximum
+    /// resonance and 192 kHz — genuinely needs ~1.4M samples to decay, so a
+    /// fixed 400k budget both failed to prove anything there *and* let a real
+    /// bug hide elsewhere: with the states flushed independently, a 20 Hz /
+    /// resonance 0.2 / 96 kHz SVF took 6.8M samples to reach zero instead of
+    /// the 43k its time constant implies, a 158x slowdown that a
+    /// "residue < 1e-18 after 400k" assertion reported as a marginal failure
+    /// rather than as the coupling bug it was. Comparing against the analytic
+    /// envelope names the defect directly.
     #[test]
-    fn every_filter_settles_below_audibility_and_out_of_the_denormal_range(
-        cutoff in 20.0f64..20_000.0,
+    fn every_filter_settles_within_its_own_time_constant(
+        cutoff in cutoffs(),
         resonance in 0.0f32..1.0,
         sample_rate in sample_rates(),
     ) {
@@ -102,29 +123,91 @@ proptest! {
             one_pole.process(1.0);
             biquad.process(1.0);
         }
-        // Long enough for any decay at these cutoffs to reach the flush floor.
-        for _ in 0..400_000 {
-            svf.tick(0.0);
-            one_pole.process(0.0);
-            biquad.process(0.0);
-        }
-        // f32 denormals live below ~1.18e-38; anything below -360 dBFS is
-        // inaudible by any measure.
-        const INAUDIBLE: f32 = 1.0e-18;
+
+        // The SVF's damping is `2 - 1.9 * resonance` and its envelope decays as
+        // exp(-pi * fc * k / fs) per sample, which is the slowest of the three
+        // (the one-pole and the Q=0.707 biquad both decay faster at the same
+        // cutoff). Reaching the 1e-20 floor from unity takes ln(1e-20) of those
+        // time constants; 3x that is slack for the transient the step leaves
+        // behind without being so loose that a stalled decay still passes.
+        // The budget comes from each filter's *discrete* pole radius, not from
+        // the analog prototype's `exp(-pi * fc * k / fs)`. That approximation
+        // is only good while the pole is slow: at 0.49 * fs the prewarped `g`
+        // is 32, and the real decay is 10x slower than the analog formula
+        // claims — a budget built on it would fail on correct code. The
+        // components also clamp a cutoff into a safe fraction of the sample
+        // rate, so the *effective* normalized cutoff is what matters here.
+        let normalized = (cutoff / sample_rate).clamp(1.0e-5, 0.49);
+        let radius = {
+            // SVF: state matrix [[2a1-1, -2a2], [2a2, 1-2a3]].
+            let g = (std::f64::consts::PI * normalized).tan();
+            let k = f64::from(2.0 - 1.9 * resonance);
+            let a1 = 1.0 / (1.0 + g * (g + k));
+            let a2 = g * a1;
+            let a3 = g * a2;
+            let trace = 2.0 * (a1 - a3);
+            let det = (2.0 * a1 - 1.0) * (1.0 - 2.0 * a3) + 4.0 * a2 * a2;
+            let discriminant = trace * trace - 4.0 * det;
+            let svf = if discriminant < 0.0 {
+                det.abs().sqrt()
+            } else {
+                let root = discriminant.sqrt();
+                ((trace + root) / 2.0).abs().max(((trace - root) / 2.0).abs())
+            };
+
+            // One pole: state *= 1 - coefficient.
+            let one_pole = (-std::f64::consts::TAU * normalized).exp();
+
+            // Biquad, RBJ lowpass at Q=0.707: a conjugate pair with product a2.
+            let omega = std::f64::consts::TAU * normalized;
+            let alpha = omega.sin() / (2.0 * 0.707);
+            let biquad = ((1.0 - alpha) / (1.0 + alpha)).abs().sqrt();
+
+            svf.max(one_pole).max(biquad).min(1.0 - 1.0e-12)
+        };
+        // Decades to fall from the step's unity-ish state to the 1e-20 floor,
+        // times three for slack, with a floor for the near-Nyquist settings
+        // where a few samples is genuinely enough.
+        let budget = ((3.0 * 46.05 / -radius.ln()).ceil() as usize).max(512);
+
         const SMALLEST_NORMAL: f32 = f32::MIN_POSITIVE;
-        for (label, value) in [
-            ("svf", svf.tick(0.0).lowpass),
-            ("one pole", one_pole.process(0.0)),
-            ("biquad", biquad.process(0.0)),
-        ] {
-            prop_assert!(
-                value.abs() < INAUDIBLE,
-                "{label} left an audible residue: {value:e}"
-            );
-            prop_assert!(
-                value == 0.0 || value.abs() >= SMALLEST_NORMAL,
-                "{label} settled on a denormal: {value:e}"
-            );
+        for _ in 0..budget {
+            for (label, value) in [
+                ("svf", svf.tick(0.0).lowpass),
+                ("one pole", one_pole.process(0.0)),
+                ("biquad", biquad.process(0.0)),
+            ] {
+                prop_assert!(
+                    value == 0.0 || value.abs() >= SMALLEST_NORMAL,
+                    "{label} sat on a denormal: {value:e}"
+                );
+            }
+        }
+
+        // A ringing filter crosses zero on its way down, so a single zero
+        // sample proves nothing about its state. A whole window of exact zeros
+        // does: with at most two state variables, any non-zero state shows up
+        // at the output within two samples.
+        for index in 0..64 {
+            for (label, value) in [
+                ("svf", svf.tick(0.0).lowpass),
+                ("one pole", one_pole.process(0.0)),
+                ("biquad", biquad.process(0.0)),
+            ] {
+                prop_assert_eq!(
+                    value,
+                    0.0,
+                    "{} still ringing {} samples past a {}-sample budget: {:e} \
+                     (cutoff={} resonance={} sample_rate={})",
+                    label,
+                    index,
+                    budget,
+                    value,
+                    cutoff,
+                    resonance,
+                    sample_rate
+                );
+            }
         }
     }
 

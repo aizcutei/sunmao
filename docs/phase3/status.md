@@ -1,6 +1,6 @@
 # Phase 3 状态
 
-更新时间：2026-09-03
+更新时间：2026-09-04
 
 ## 目标与边界
 
@@ -54,8 +54,8 @@ M2 的验收方式是 grouped synth 换用分组 + smoothing + template 后测�
 | M1 Phase 2 收口 | 7 项遗留（见 phase2/status.md 遗留表），每项完成即更新该表 | **完成**：7/7 项全部验收（各自三平台 hosted 绿）（第 1 项 bus 激活/去激活回调 11 测试；第 2 项 speaker layout 动态协商 12 测试；第 3 项 runner 宿主侧断言 3 测试 + 套件 16→19、打包 20→24 套件；各自三平台 hosted 全绿）。原盘点（2026-08-28）已确认 `_sys` 层无缺口（`clap_sys::clap_plugin_audio_ports_activation_t`、`audio_ports_config` 全家族、`vst3_sys::IComponent::activate_bus`），缺口在 `_rs`/core，activation 与 `audio_ports_config`（layout 协商）两侧现均已补齐 | 第 1 项：[run #42](https://github.com/aizcutei/sunmao/actions/runs/33171119003)（commit `b78aca6`）；第 2 项：[run #44](https://github.com/aizcutei/sunmao/actions/runs/33174187893)（commit `1478189`）；第 3 项：[run #47](https://github.com/aizcutei/sunmao/actions/runs/33177884493)（commit `0e79bd2`）。三次均三 job success、全部 blocking 步骤零非成功、artifacts 齐备 | M1 七项全部落地后进入 M2（参数分组/smoothing/template） |
 | M2 参数系统与构造 API | 分组/嵌套、smoothing、effect/instrument template | **完成**（三项均三平台 hosted 全绿）（各自三平台 hosted 全绿）。smoothing 的指数 ramp 不终止与 `is_smoothing` 残余偏移两个缺陷由新增 proptest 抓出并修正（详见 progress.md）。自 `_sys` 补起：`vst3_sys` 新增 `IUnitInfo` 绑定（IID 自上游头文件转录），并修正 `clap_rs` 把 `info.module` 无条件清零的既有缺陷 | 分组：[run #57](https://github.com/aizcutei/sunmao/actions/runs/33189876572)（commit `94b3542`）；smoothing：[run #59](https://github.com/aizcutei/sunmao/actions/runs/33192422381)（commit `d0a13d3`）；template：[run #61](https://github.com/aizcutei/sunmao/actions/runs/33194134348)（commit `3374c5f`）。三次均三 job success、零非成功步骤、artifacts 齐备 | — （M2 完成；instrument 模板 86 行未达 ≤50，待 M3 的 oscillator/envelope 落地后重测） |
 | M3 DSP 基础组件 | `sunmao/dsp`：filters/envelopes/oscillators | **完成**：filters/envelopes/oscillators 三家族齐备且三平台 hosted 全绿。filters（三平台 hosted 全绿；一阶/SVF/biquad + 4 proptest；SVF fixture 已换组件实现且**测试零改动**通过；顺带修掉 f32 biquad 低 cutoff DC 增益 14% 失准）。**envelopes/oscillators 已验收**（ADSR/follower、PolyBLEP sine/saw/pulse，+3 proptest；instrument 模板换用组件后 86→81 行，**仍未达 ≤50**，原因见 progress.md） | filters：[run #63](https://github.com/aizcutei/sunmao/actions/runs/33196120193)（commit `9db6ff0`）三 job success、零非成功步骤、artifacts 齐备 | — （M3 完成；进入 M4） |
-| M4 oversampling/mixing/metering | 2x/4x oversampling、dry-wet/增益、peak/RMS metering | **代码齐备，待 hosted 验收**：`sunmao/dsp` 新增 `oversampling`（2x/4x 级联半带 FIR，33 tap 使 4x 群延迟为整数 24）、`mixing`（dB 换算、`apply_gain`、线性/等功率 `DryWet`）、`metering`（`Meter`/`MeterHandle` 原子发布）三模块 + 7 proptest；两个 fixture 换组件实现；runner 新增第 19 项 `latency_alignment`（两格式读 latency 后以冲激实测峰值帧，容差 1）。proptest 抓出 `EqualPower` 全湿时 `cos(π/2)` 为 -4.4e-8 的负 dry 增益并修正 | 本地：macOS ARM64 123 套件全绿、Windows 交叉 check、打包 24 套件（见 progress.md）——本地证据等级 | 推送后等待三平台 hosted；全绿即更新本行进 M5 |
-| M5 版本兼容策略与总验收 | semver/state 兼容文档、proptest/文档收尾 | 未开始 | — | — |
+| M4 oversampling/mixing/metering | 2x/4x oversampling、dry-wet/增益、peak/RMS metering | **完成**（三平台 hosted 全绿）：`sunmao/dsp` 新增 `oversampling`（2x/4x 级联半带 FIR，33 tap 使 4x 群延迟为整数 24）、`mixing`（dB 换算、`apply_gain`、线性/等功率 `DryWet`）、`metering`（`Meter`/`MeterHandle` 原子发布）三模块 + 7 proptest；两个 fixture 换组件实现；runner 新增第 19 项 `latency_alignment`（两格式读 latency 后以冲激实测峰值帧，容差 1）。proptest 抓出 `EqualPower` 全湿时 `cos(π/2)` 为 -4.4e-8 的负 dry 增益并修正 | [run #68](https://github.com/aizcutei/sunmao/actions/runs/33867319967)（commit `04d036a`）三 job success，每 job 25 步零非成功，"Test Phase 3 acceptance fixtures" 与两个 "Package and exercise ..." 步骤三平台均 success，artifacts `phase1-macOS-ARM64`（52.3MB）、`phase1-Windows-X64`（78.1MB）、`phase1-Linux-X64`（960.1MB）可下载 | — （M4 完成；进入 M5） |
+| M5 版本兼容策略与总验收 | semver/state 兼容文档、proptest/文档收尾 | **进行中**：`docs/phase3/compatibility.md` 落地（API 面 / 破坏性定义 / `sunmao_dsp` 数值语义承诺 / 弃用流程 / state 格式与载入规则 / 何时升 `STATE_VERSION` / 验证方式），README 与 roadmap 已链接；proptest +8 把该文件的 state 与 id 承诺机械钉住（两 `_rs` 各 4 / 3 项 + core 3 项，含 CLAP 端到端"被拒的 state 不触达插件"）。核对代码时修正文档两处失实（CLAP blob 存 plain value 而非归一化值，stepped 参数写步进索引；因此两格式 blob 不通用不只因 magic）。**并修掉一个由 proptest 抓出的真实 DSP 缺陷**：`flush_denormal` 被独立施加到耦合递推的每个状态上会破坏其衰减——`Svf` 归零由 43k 样本劣化到 683 万样本（慢 158 倍），`Biquad` 永久停在 6.2e-20 极限环；两者改为成组 flush（阈值提为 prelude 里的 `DENORMAL_FLOOR`，带 doc-test），并把该测试从"400k 样本后残留 < 1e-18"改写为按各滤波器离散极点半径算预算的 `every_filter_settles_within_its_own_time_constant`，cutoff 改对数均匀采样（原均匀采样命中该角落的概率约 1/4000，这正是缺陷长期潜伏的原因） | 本地：macOS ARM64 123 套件 / 504 测试全绿、Windows 交叉 check、打包 28 套件各 20/20（见 progress.md）——本地证据等级 | 推送后等待三平台 hosted；随后收口 instrument 模板行数目标再做总验收 |
 
 ## 完成规则
 
@@ -91,4 +91,15 @@ artifacts 可下载后，才把本文件状态改为 "Phase 3 完成"。任何�
   （commit `e1455dd`）三平台全绿、零非成功步骤；CLAP 侧完整落地，VST3 program list
   按边界不实现（`vst3_sys` 无相应绑定，VST3 宿主经 `setState` 走状态应用那一半），
   已在 semantics.md 记为单格式能力。第 7 项（无界 fuzz 脚手架）已验收——hosted run #55（commit `f0c2f2e`）三平台全绿；`fuzz/` 排除出 workspace，本地实跑 300 万例无崩溃。**M1 收口完成，进入 M2。**
+- M4 已验收：hosted run #68（commit `04d036a`）三平台 native job 全绿，每个 job 25 个步骤
+  零非成功，artifacts 齐备。该 run 也是 Windows/Linux 首次在 CI 打包并 exercise
+  `sunmao_fx_os_dist` 与 `sunmao_fx_meter`（"Package and exercise VST3 + CLAP + standalone"
+  三平台 success），`latency_alignment` 断言因此不再只走 skip 路径。另外，run #66 修掉的
+  Windows WGPU 收尾段错误在本 run 的 "Package and exercise native GUI backends" 上**再次
+  未复现**（连续两次绿）——但仍按"间歇性失败单次绿不构成证明"处理，留待 M5 收尾时决定是否
+  把该项从"已知 flake"降级为"已修复"。
+- M5 进行中：兼容策略文档与其 proptest 守卫已落地（见 M5 行），等待三平台 hosted。
+  **总验收前仍有一项未达标**：instrument 模板 81 行未达 M2 的"≤50 行"目标；这是 Phase 3
+  唯一一条写进 milestone 却未满足的目标，将在 M5 期间单独收口（需要 voice/synth 层抽象），
+  不会以"完成规则未提及"为由跳过。
 - 分支：`phase3/framework-dsp-library`（自 main `2df01ce` 切出）。

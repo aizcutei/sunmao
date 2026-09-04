@@ -259,4 +259,130 @@ mod tests {
         header[0] = b'X';
         assert_eq!(decode_header(&header, STATE_VERSION), None);
     }
+
+    /// The unit tests above pin the codec on hand-written examples. These pin
+    /// the rules `docs/phase3/compatibility.md` promises for *every* blob a
+    /// host may hand back — including blobs no build of this framework wrote.
+    proptest::proptest! {
+        /// A saved value must come back exactly. Users' presets are the one
+        /// thing a plugin can never regenerate, so "close enough" is not a
+        /// tolerance the codec gets: the round trip is bit-for-bit.
+        #[test]
+        fn any_parameter_set_round_trips_bit_for_bit(
+            entries in proptest::collection::vec(
+                (proptest::prelude::any::<u32>(), -1.0e300f64..1.0e300),
+                0..24,
+            ),
+            version in proptest::prelude::any::<u32>(),
+        ) {
+            // Duplicate ids cannot occur in a real layout (`ParamLayoutError`
+            // rejects them upstream), so the property is stated over the
+            // deduplicated set.
+            let mut seen = std::collections::BTreeMap::new();
+            for (id, value) in &entries {
+                seen.insert(*id, *value);
+            }
+            let params: Vec<ParamInfo> = seen
+                .keys()
+                .map(|id| ParamInfo::new(*id, "param"))
+                .collect();
+
+            let bytes = encode_parameter_state(version, &params, |id| seen[&id])
+                .expect("finite values within a valid layout must encode");
+            let decoded = decode_parameter_state(&bytes, version)
+                .expect("a blob this build wrote must decode in this build");
+
+            let expected: Vec<(u32, f64)> = seen.into_iter().collect();
+            proptest::prop_assert_eq!(decoded.len(), expected.len());
+            for (got, want) in decoded.iter().zip(expected.iter()) {
+                proptest::prop_assert_eq!(got.0, want.0);
+                // Bit equality, not `==`: it also rules out a -0.0/0.0 swap.
+                proptest::prop_assert_eq!(got.1.to_bits(), want.1.to_bits());
+            }
+        }
+
+        /// Order independence is what makes adding, removing and reordering
+        /// fields in a `#[derive(Params)]` struct safe. Encoding the same
+        /// values under a permuted layout must yield the same id-keyed map.
+        #[test]
+        fn the_decoded_map_does_not_depend_on_parameter_order(
+            ids in proptest::collection::vec(proptest::prelude::any::<u32>(), 1..12),
+            rotation in 0usize..12,
+        ) {
+            let mut unique: Vec<u32> = ids.clone();
+            unique.sort_unstable();
+            unique.dedup();
+            let value_for = |id: u32| f64::from(id % 1_000) / 1_000.0;
+
+            let forward: Vec<ParamInfo> =
+                unique.iter().map(|id| ParamInfo::new(*id, "param")).collect();
+            let mut rotated = unique.clone();
+            let shift = rotation % rotated.len();
+            rotated.rotate_left(shift);
+            let rotated: Vec<ParamInfo> =
+                rotated.iter().map(|id| ParamInfo::new(*id, "param")).collect();
+
+            let a = decode_parameter_state(
+                &encode_parameter_state(STATE_VERSION, &forward, value_for).unwrap(),
+                STATE_VERSION,
+            )
+            .unwrap();
+            let b = decode_parameter_state(
+                &encode_parameter_state(STATE_VERSION, &rotated, value_for).unwrap(),
+                STATE_VERSION,
+            )
+            .unwrap();
+
+            let as_map = |entries: Vec<(u32, f64)>| {
+                entries
+                    .into_iter()
+                    .map(|(id, value)| (id, value.to_bits()))
+                    .collect::<std::collections::BTreeMap<_, _>>()
+            };
+            proptest::prop_assert_eq!(as_map(a), as_map(b));
+        }
+
+        /// A host can hand back a truncated file, a foreign file, or bytes from
+        /// a crashed write. The decoder must answer `None` or a *complete*
+        /// entry list — never panic, and never a partial list that the caller
+        /// would apply as if it were a whole preset.
+        #[test]
+        fn decoding_arbitrary_bytes_never_panics_and_never_yields_a_partial_list(
+            prefix_is_valid in proptest::prelude::any::<bool>(),
+            version in 0u32..4,
+            count in 0u32..600,
+            body in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..800),
+            current in 0u32..4,
+        ) {
+            let mut bytes = Vec::new();
+            if prefix_is_valid {
+                bytes.extend_from_slice(&STATE_MAGIC);
+            } else {
+                bytes.extend_from_slice(b"XXXXXXX\0");
+            }
+            bytes.extend_from_slice(&version.to_le_bytes());
+            bytes.extend_from_slice(&count.to_le_bytes());
+            bytes.extend_from_slice(&body);
+
+            if let Some(entries) = decode_parameter_state(&bytes, current) {
+                proptest::prop_assert_eq!(entries.len(), count as usize);
+                proptest::prop_assert!(entries.iter().all(|(_, value)| value.is_finite()));
+            }
+        }
+
+        /// The version rule is an inequality, not a match: this build reads
+        /// anything it or an older build wrote, and refuses anything newer
+        /// because it cannot know how a future layout reinterprets values.
+        #[test]
+        fn a_blob_is_readable_exactly_when_it_is_not_from_the_future(
+            version in proptest::prelude::any::<u32>(),
+            current in proptest::prelude::any::<u32>(),
+        ) {
+            let header = header_bytes(version, 0);
+            proptest::prop_assert_eq!(
+                decode_header(&header, current).is_some(),
+                version <= current
+            );
+        }
+    }
 }

@@ -7,3 +7,5 @@
 cc e55fa029f8518b99ac844710006bb3341d30da543db4d6d27c503b516af6c59d # shrinks to cutoff = 20.0, resonance = 0.71866935, sample_rate = 48000.0
 cc e95daa8e73f6c664a074c6c4dc9f80b16a814a68ea42286e8f8e31fffa178d24 # shrinks to cutoff = 16678.674461177234, resonance = 0.0, sample_rate = 192000.0
 cc b6509ab44b8810f9fef452da74cc4f6c267646679ee73a4598800ab045fd6f75 # shrinks to cutoff = 20.0, sample_rate = 96000.0
+cc 94cb6d7836a15995612a493946e63aaf8a454c89a033d87437c48e777516f1a0 # shrinks to cutoff = 20.0, resonance = 0.20088771, sample_rate = 96000.0
+cc b7e0e64b9d41e930f927ba9155ed2c3432a84180899bc8f15ca7f06b7c2c1904 # shrinks to cutoff = 19558.954091396918, resonance = 0.0, sample_rate = 8000.0
