@@ -93,6 +93,12 @@ EXAMPLES=(
   # can check against; Meter exercises the lock-free metering publication.
   "sunmao_fx_os_dist|SunMao OS Distortion|com.sunmao.fx.os-dist|||"
   "sunmao_fx_meter|SunMao Meter|com.sunmao.fx.meter|||"
+  # The instrument template. Packaged because `IS_INSTRUMENT` and
+  # `MonoVoice::render` are only really proven by a host: the runner's synth
+  # suite checks that the plugin declares zero inputs and accepts notes, and
+  # that a note-on takes effect at its *sample offset* rather than at the
+  # start of the block. Compiling the template proves neither.
+  "sunmao_template_instrument|SunMao Template Instrument|com.sunmao.template-instrument|||"
 )
 
 supports_au() {

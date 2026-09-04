@@ -17,8 +17,8 @@ workspace 所有 crate 共用 `[workspace.package] version`（当前 `0.1.0`）�
 
 | crate | 受保护的面 | 说明 |
 |---|---|---|
-| `sunmao` | `sunmao::prelude::*` 中的每个名字；`sunmao_export!`、`#[derive(Params)]` 的输入语法 | prelude 是插件作者唯一被要求知道的导入路径。不在 prelude 里的路径（`sunmao::backend_clap`、`sunmao::__private`、各 `_rs`/`_sys` crate）**不受保护**，随时可能变。 |
-| `sunmao_core` | `SunmaoPlugin` trait 的既有方法签名与默认实现、`AudioBuffer`/`EventQueue`/`Event`/`ProcessContext`/`TailLength`/`RenderMode`/`BusConfig`、参数类型 `FloatParam`/`IntParam`/`BoolParam` 与 `ParamDescriptor`、`Smoother`/`SmoothingStyle` | `SunmaoPlugin` 只允许**新增带默认实现的方法**；改既有方法签名、去掉默认实现、新增无默认实现的方法都是破坏性变更。 |
+| `sunmao` | `sunmao::prelude::*` 中的每个名字（含经 prelude 转出的 `sunmao_dsp` 名字与 `voice::MonoVoice`）；`sunmao_export!`、`#[derive(Params)]` 的输入语法（含 `#[param(name/default/range/unit/group)]` 与"全部字段声明 `default` 时 derive 生成 `Default`"这条规则） | prelude 是插件作者唯一被要求知道的导入路径。不在 prelude 里的路径（`sunmao::backend_clap`、`sunmao::__private`、各 `_rs`/`_sys` crate）**不受保护**，随时可能变。 |
+| `sunmao_core` | `SunmaoPlugin` trait 的既有方法签名、关联常量与默认实现、`AudioBuffer`/`EventQueue`/`Event`/`ProcessContext`/`TailLength`/`RenderMode`/`BusConfig`、参数类型 `FloatParam`/`IntParam`/`BoolParam` 与 `ParamDescriptor`、`Smoother`/`SmoothingStyle` | `SunmaoPlugin` 只允许**新增带默认值的关联常量与带默认实现的方法**（`IS_INSTRUMENT` 即按此规则加入）；改既有签名、改既有默认值、去掉默认实现、新增无默认的项都是破坏性变更。注意默认实现之间的**联动**也受保护：`input_channels`/`accepts_midi` 的默认值由 `IS_INSTRUMENT` 推导，改这个推导会改变宿主看到的端口与 MIDI 能力。 |
 | `sunmao_dsp` | `sunmao_dsp::prelude::*` 中的每个类型与函数，及其 `process`/`tick`/`next` 系列方法的**数值语义**（见 1.3） | 模块内未被 prelude 导出的项（如 `oversampling` 的 `HALFBAND_TAPS`）是实现细节。 |
 
 ### 1.2 什么算破坏性

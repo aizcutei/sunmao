@@ -20,22 +20,18 @@ fn the_effect_template_fits_the_boilerplate_budget() {
 }
 
 #[test]
-fn the_instrument_template_does_not_grow_past_its_recorded_size() {
-    // M3's oscillator and envelope brought this from 86 to 81 lines, but the
-    // remaining bulk is not DSP: it is the trait ceremony (params `Default`,
-    // `input_channels`/`accepts_midi`/`params`/`initialize`, the `process`
-    // signature) plus MIDI handling and the per-sample write loop. Reaching 50
-    // needs a higher-level voice abstraction, which is a design decision beyond
-    // the DSP crate. So the budget is still not asserted here; the size is
-    // pinned so it cannot creep, and the gap stays visible.
+fn the_instrument_template_fits_the_boilerplate_budget() {
+    // This one took three tries to get under the budget, and only the third
+    // was a real fix. M3's oscillator and envelope took it from 86 to 81
+    // lines, which was not close, because the bulk was never DSP: it was
+    // parameter `Default` boilerplate, two methods spelling out "this is an
+    // instrument", MIDI note bookkeeping, and a per-sample write loop. Those
+    // became `#[param(default = ..., range = ...)]`, `IS_INSTRUMENT`,
+    // `MonoVoice::play_events`, and `AudioBuffer::fill_mono` — each useful to
+    // any plugin, not just to this file's line count.
     let lines = INSTRUMENT.lines().count();
     assert!(
-        lines <= 85,
-        "instrument template grew to {lines} lines; shrink it or raise the pin deliberately"
-    );
-    assert!(
-        lines > BUDGET,
-        "instrument template is now {lines} lines, at or under the {BUDGET} budget — \
-         switch this test to assert the budget and update docs/phase3/status.md"
+        lines <= BUDGET,
+        "instrument template is {lines} lines, budget is {BUDGET}"
     );
 }

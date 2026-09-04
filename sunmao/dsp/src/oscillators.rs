@@ -69,6 +69,28 @@ impl Oscillator {
         self.increment = (frequency_hz / sample_rate).clamp(0.0, 0.49);
     }
 
+    /// Switches waveform without disturbing phase or frequency.
+    ///
+    /// Keeping the phase is deliberate: resetting it mid-note would produce a
+    /// click exactly when a user is auditioning waveforms.
+    ///
+    /// ```
+    /// # use sunmao_dsp::oscillators::{Oscillator, Waveform};
+    /// let mut osc = Oscillator::new(Waveform::Sine);
+    /// osc.set_frequency(1_000.0, 48_000.0);
+    /// for _ in 0..12 {
+    ///     osc.next();
+    /// }
+    /// let before = osc.next();
+    /// osc.set_waveform(Waveform::Saw);
+    /// // A saw at the same phase is a different value, but the oscillator did
+    /// // not jump back to the start of its cycle.
+    /// assert_ne!(before, osc.next());
+    /// ```
+    pub fn set_waveform(&mut self, waveform: Waveform) {
+        self.waveform = waveform;
+    }
+
     /// Sets the pulse duty cycle, clamped away from the degenerate extremes
     /// where the wave would be constant.
     pub fn set_pulse_width(&mut self, width: f32) {

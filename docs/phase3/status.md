@@ -41,7 +41,7 @@ Phase 1（run #25 / commit `c8401e6`）与 Phase 2 核心（run #38 / commit
 | OS Distortion | `examples/sunmao_fx_os_dist` | M4 oversampling + latency 契约 | M4 演进：tanh waveshaper 跑在 `sunmao/dsp` 4x `Oversampler` 内，dry/wet 用 `DryWet` 在过采样域内混合（避免 dry/wet 相对延迟成梳状），latency 由 `OversamplingFactor::latency_samples()`（24）上报且在 prepare 之前即可回答，8 单元测试含群延迟对齐与 13kHz 混叠抑制（macOS 本地通过） |
 | Meter | `examples/sunmao_fx_meter` | M4 无锁 metering 发布 | M4 演进：换用 `sunmao/dsp` `Meter`/`MeterHandle`（原子位存发布、-20 dB/s 峰值回落、100 ms RMS 时间常数），handle 在构造期即可取得（编辑器可先于激活打开），增益经 `db_to_gain` 以 dB 表达，10 单元测试含跨线程读取（macOS 本地通过） |
 | Layout Gain | `examples/sunmao_fx_layout_gain` | M1 第 2 项 speaker layout 动态协商 | M1 新增（非 M0 骨架）：发布 mono/stereo 两个 `BusConfig`，5 单元测试（macOS 本地通过） |
-| Template Effect / Instrument | `examples/sunmao_template_{effect,instrument}` | M2 新插件样板 | M2 新增：effect **恰好 50 行**（达标），instrument 86 行（**未达标**，见下）。行数预算由 `sunmao/tests/template_size.rs` 机械强制 |
+| Template Effect / Instrument | `examples/sunmao_template_{effect,instrument}` | M2 新插件样板 | **两者均达标**（effect 42 行、instrument 49 行，预算 ≤50）。M5 期间收口：`#[param(default/range/name)]` 让 derive 生成 `Default`、`SunmaoPlugin::IS_INSTRUMENT` 一次声明两个宿主开关、facade 的 `MonoVoice::render`（按事件 sample offset 分段渲染）、`AudioBuffer::fill_mono{,_range}`。instrument 现已进打包矩阵，由 runner 的 synth 套件在两格式上实测（历史：M2 时 86 行、M3 组件化后 81 行，均未达标）。行数预算由 `sunmao/tests/template_size.rs` 机械强制 |
 
 M3/M4 的验收方式是把骨架的 inline DSP 换成 `sunmao/dsp` 组件且**测试语义不变**；
 M2 的验收方式是 grouped synth 换用分组 + smoothing + template 后测试仍绿。
@@ -99,7 +99,12 @@ artifacts 可下载后，才把本文件状态改为 "Phase 3 完成"。任何�
   未复现**（连续两次绿）——但仍按"间歇性失败单次绿不构成证明"处理，留待 M5 收尾时决定是否
   把该项从"已知 flake"降级为"已修复"。
 - M5 进行中：兼容策略文档与其 proptest 守卫已落地（见 M5 行），等待三平台 hosted。
-  **总验收前仍有一项未达标**：instrument 模板 81 行未达 M2 的"≤50 行"目标；这是 Phase 3
-  唯一一条写进 milestone 却未满足的目标，将在 M5 期间单独收口（需要 voice/synth 层抽象），
-  不会以"完成规则未提及"为由跳过。
+- **M2 的"新插件样板 ≤50 行"已收口**（Phase 3 唯一一条写进 milestone 却长期未满足的目标）：
+  instrument 从 81 行降到 **49 行**、effect 从 50 降到 42，靠的是四个对任何插件都有用的
+  API 而非删注释——`#[param(default/range/name)]`（derive 据此生成 `Default`）、
+  `SunmaoPlugin::IS_INSTRUMENT`、`MonoVoice`（facade 层，按事件 sample offset 渲染）、
+  `AudioBuffer::fill_mono{,_range}`。`template_size.rs` 已从"钉住 81 行并提示差距"改为
+  直接断言两者都在预算内。把 instrument 接进打包矩阵后，runner 立刻在真实宿主里抓出两个
+  单测看不到的缺陷（模板从未实现 `reset()`；runner 自己的 note-off 断言只接受"瞬间静音"
+  的无包络合成器），详见 progress.md。
 - 分支：`phase3/framework-dsp-library`（自 main `2df01ce` 切出）。

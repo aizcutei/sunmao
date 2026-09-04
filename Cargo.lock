@@ -4621,9 +4621,11 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 name = "sunmao"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "sunmao_backend_clap",
  "sunmao_backend_vst3",
  "sunmao_core",
+ "sunmao_dsp",
  "sunmao_gui",
  "sunmao_macros",
  "sunmao_runtime",
@@ -4911,7 +4913,6 @@ name = "sunmao_template_instrument"
 version = "0.1.0"
 dependencies = [
  "sunmao",
- "sunmao_dsp",
 ]
 
 [[package]]

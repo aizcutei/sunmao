@@ -1521,10 +1521,27 @@ fn run_synth_processing_tests(
         pitch: 60,
         velocity: 0.0,
     }];
+    // A note-off starts a release; it does not necessarily produce silence on
+    // the next sample. This used to demand that the rest of the note-off block
+    // was already inaudible, which only an envelope-free synth can satisfy —
+    // and such a synth clicks. So the contract here is what actually
+    // distinguishes a working voice from a broken one: the tail must never get
+    // louder than the note was, it must reach silence, and it must stay
+    // silent. `RELEASE_BLOCKS` bounds that at roughly two seconds of audio,
+    // far longer than a voice's release and short enough to stay a quick test.
+    const RELEASE_BLOCKS: usize = 200;
+    const SILENT_BLOCKS_REQUIRED: usize = 2;
     let mut release_ok = true;
     let mut release_error = String::new();
     let mut note_off_timing_checked = false;
-    for block in 0..9 {
+    let mut consecutive_silent = 0usize;
+    // The loudest the release block itself was. Later blocks are compared
+    // against this rather than against the few samples before the note-off:
+    // that window is 31 samples, a fraction of a cycle at these pitches, so
+    // its peak depends on where the waveform happened to be. A whole block
+    // spans several cycles and is a stable reference.
+    let mut release_reference = 0.0f32;
+    for block in 0..RELEASE_BLOCKS {
         let mut release_output = vec![0.0; output_samples];
         let events = if block == 0 { &note_off[..] } else { &[] };
         match plugin.process_with_events(&input, &mut release_output, events) {
@@ -1533,19 +1550,38 @@ fn run_synth_processing_tests(
                     let offset_samples =
                         note_off[0].sample_offset() as usize * info.output_channels as usize;
                     let before_peak = output_peak(&release_output[..offset_samples]);
-                    let after_peak = output_peak(&release_output[offset_samples..]);
-                    if before_peak <= 1.0e-6 || after_peak > 1.0e-6 {
+                    if before_peak <= 1.0e-6 {
                         release_ok = false;
                         release_error = format!(
-                            "note-off timing invalid (before peak: {:.8}, after peak: {:.8})",
-                            before_peak, after_peak
+                            "the note was not sounding before its note-off (peak: {before_peak:.8})"
                         );
                         break;
                     }
                     note_off_timing_checked = true;
-                } else if output_peak(&release_output) > 1.0e-6 {
+                }
+
+                let peak = output_peak(&release_output);
+                if block == 0 {
+                    release_reference = peak;
+                } else if peak > release_reference + 1.0e-6 {
+                    // A release decays. A voice that gets louder after its
+                    // note-off has a broken gate or envelope direction.
                     release_ok = false;
-                    release_error = format!("release block {} remained audible", block);
+                    release_error = format!(
+                        "release block {block} grew louder than the block its note-off \
+                         arrived in (peak: {peak:.8}, reference: {release_reference:.8})"
+                    );
+                    break;
+                }
+                if peak <= 1.0e-6 {
+                    consecutive_silent += 1;
+                    if consecutive_silent >= SILENT_BLOCKS_REQUIRED {
+                        break;
+                    }
+                } else if consecutive_silent > 0 {
+                    release_ok = false;
+                    release_error =
+                        format!("release block {block} became audible again after silence");
                     break;
                 }
             }
@@ -1560,6 +1596,12 @@ fn run_synth_processing_tests(
                 break;
             }
         }
+    }
+    if release_ok && consecutive_silent < SILENT_BLOCKS_REQUIRED {
+        release_ok = false;
+        release_error = format!(
+            "the voice never reached silence within {RELEASE_BLOCKS} blocks after its note-off"
+        );
     }
     if release_ok && note_off_timing_checked {
         results.push(TestResult::pass("synth_note_off_release"));

@@ -10,6 +10,7 @@ repository = "https://github.com/aizcutei/sunmao"
 
 [dependencies]
 sunmao_core = { path = "core" }
+sunmao_dsp = { path = "dsp" }
 sunmao_macros = { path = "macros" }
 sunmao_backend_clap = { path = "backend_clap" }
 sunmao_backend_vst3 = { path = "backend_vst3" }
@@ -38,3 +39,6 @@ gui-webview = [
     "dep:sunmao_view_baseview",
     "sunmao_view_baseview/webview",
 ]
+
+[dev-dependencies]
+proptest = "1.11.0"

@@ -6,16 +6,8 @@ use sunmao::prelude::*;
 
 #[derive(Params)]
 pub struct TemplateEffectParams {
-    #[unit = "LinearGain"]
+    #[param(name = "Gain", default = 1.0, range = 0.0..=2.0, unit = "LinearGain")]
     pub gain: FloatParam,
-}
-
-impl Default for TemplateEffectParams {
-    fn default() -> Self {
-        Self {
-            gain: FloatParam::new("gain", "Gain", 1.0, 0.0, 2.0),
-        }
-    }
 }
 
 #[derive(Default)]

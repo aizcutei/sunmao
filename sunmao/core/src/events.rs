@@ -50,6 +50,26 @@ impl MidiMessage {
     pub fn channel(&self) -> u8 {
         self.data[0] & 0x0F
     }
+
+    /// The note's pitch in Hz, 12-tone equal temperament with A4 = 440 Hz.
+    ///
+    /// Every instrument needs this conversion and it is easy to write with the
+    /// wrong reference note — 69, not 60 — so it lives here rather than in
+    /// each plugin. The formula is defined over the whole `u8` range, so the
+    /// out-of-range notes a sloppy host can send still produce a finite pitch
+    /// instead of a NaN that would lodge in an oscillator.
+    ///
+    /// ```
+    /// # use sunmao_core::events::MidiMessage;
+    /// let a4 = MidiMessage::note_on(0, 0, 69, 100);
+    /// assert!((a4.frequency_hz() - 440.0).abs() < 1.0e-6);
+    /// // An octave down is exactly half the frequency.
+    /// let a3 = MidiMessage::note_on(0, 0, 57, 100);
+    /// assert!((a3.frequency_hz() - 220.0).abs() < 1.0e-6);
+    /// ```
+    pub fn frequency_hz(&self) -> f64 {
+        440.0 * 2.0_f64.powf((f64::from(self.note()) - 69.0) / 12.0)
+    }
 }
 
 /// A normalized host automation change for a declared parameter.

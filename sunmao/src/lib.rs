@@ -24,8 +24,13 @@
 //! sunmao_export!(MyPlugin);
 //! ```
 
+pub mod voice;
+
 // Re-export everything from sunmao_core
 pub use sunmao_core::*;
+
+/// The DSP component library, re-exported so plugins depend on one crate.
+pub use sunmao_dsp as dsp;
 
 // Re-export macros
 pub use sunmao_macros::*;
@@ -93,6 +98,12 @@ pub mod prelude {
         ViewContext, ViewHandle,
     };
     pub use sunmao_macros::{sunmao_export, Params};
+
+    /// The DSP building blocks, so a plugin needs one import rather than two.
+    /// None of these names collide with the framework's.
+    pub use sunmao_dsp::prelude::*;
+
+    pub use crate::voice::MonoVoice;
 
     #[cfg(feature = "standalone")]
     pub use sunmao_runtime::{

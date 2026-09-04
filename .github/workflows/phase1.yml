@@ -44,6 +44,7 @@ jobs:
             sidechain-binary: target/debug/libsunmao_fx_sidechain_comp.so
             os-dist-binary: target/debug/libsunmao_fx_os_dist.so
             meter-binary: target/debug/libsunmao_fx_meter.so
+            template-instrument-binary: target/debug/libsunmao_template_instrument.so
             executable-suffix: ""
           - name: macOS native
             os: macos-latest
@@ -61,6 +62,7 @@ jobs:
             sidechain-binary: target/debug/libsunmao_fx_sidechain_comp.dylib
             os-dist-binary: target/debug/libsunmao_fx_os_dist.dylib
             meter-binary: target/debug/libsunmao_fx_meter.dylib
+            template-instrument-binary: target/debug/libsunmao_template_instrument.dylib
             executable-suffix: ""
           - name: Windows x86_64
             os: windows-latest
@@ -78,6 +80,7 @@ jobs:
             sidechain-binary: target/debug/sunmao_fx_sidechain_comp.dll
             os-dist-binary: target/debug/sunmao_fx_os_dist.dll
             meter-binary: target/debug/sunmao_fx_meter.dll
+            template-instrument-binary: target/debug/sunmao_template_instrument.dll
             executable-suffix: .exe
 
     steps:
@@ -328,6 +331,7 @@ jobs:
           -p vst3_sys_syn_sine
           -p sunmao_backend_clap
           -p sunmao_backend_vst3
+          -p sunmao
 
       - name: Build cross-platform examples and tools
         run: >-
@@ -402,6 +406,7 @@ jobs:
           sidechain_output="target/phase1-artifacts/SunMaoSidechainComp"
           os_dist_output="target/phase1-artifacts/SunMaoOsDistortion"
           meter_output="target/phase1-artifacts/SunMaoMeter"
+          template_instrument_output="target/phase1-artifacts/SunMaoTemplateInstrument"
           standalone_dir="target/phase1-artifacts/standalone"
           gain_standalone="target/debug/sunmao_fx_gain_standalone${{ matrix.executable-suffix }}"
           synth_standalone="target/debug/sunmao_syn_sine_standalone${{ matrix.executable-suffix }}"
@@ -478,6 +483,17 @@ jobs:
               --name "SunMao Meter" \
               --bundle-id com.sunmao.fx.meter \
               --version 1.0.0
+            # The instrument template. `IS_INSTRUMENT` and
+            # `MonoVoice::render` are claims about what a host sees, so a host
+            # has to check them: the runner's synth suite asserts zero inputs,
+            # accepted notes, and a note-on that takes effect at its sample
+            # offset instead of at the start of the block.
+            "$packager" "$format" \
+              --binary "${{ matrix.template-instrument-binary }}" \
+              --out "$template_instrument_output" \
+              --name "SunMao Template Instrument" \
+              --bundle-id com.sunmao.template-instrument \
+              --version 1.0.0
           done
           "$packager" standalone \
             --binary "$gain_standalone" \
@@ -518,6 +534,8 @@ jobs:
           "$runner" test "$os_dist_output.clap" 2>&1 | tee "$os_dist_output.clap.test.log"
           "$runner" test "$meter_output.vst3" 2>&1 | tee "$meter_output.vst3.test.log"
           "$runner" test "$meter_output.clap" 2>&1 | tee "$meter_output.clap.test.log"
+          "$runner" test "$template_instrument_output.vst3" 2>&1 | tee "$template_instrument_output.vst3.test.log"
+          "$runner" test "$template_instrument_output.clap" 2>&1 | tee "$template_instrument_output.clap.test.log"
           "$gain_standalone" --smoke 2>&1 | tee "$gain_standalone_output.raw.smoke.log"
           "$synth_standalone" --smoke 2>&1 | tee "$synth_standalone_output.raw.smoke.log"
           "$packaged_gain" --smoke 2>&1 | tee "$gain_standalone_output.packaged.smoke.log"

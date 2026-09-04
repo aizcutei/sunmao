@@ -891,3 +891,102 @@
   instrument 模板 81 行未达 M2 的"新插件样板 ≤50 行"，这是 Phase 3 唯一写进 milestone
   却未满足的目标，下一轮单独收口（需要 voice/synth 层抽象与参数默认值的声明式表达），
   不以"完成规则未提及"为由跳过。
+
+### 2026-09-04 — 收口 M2 的"新插件样板 ≤50 行"：81 → 49 行，并被真实宿主抓出两个缺陷
+
+- Command/platform: macOS ARM64 本地。这一项从 M2 起就挂账（86 → 81 行），此前的判断是
+  "剩下的体积不是 DSP 而是 trait 仪式，需要 voice 抽象"。这一轮按那个判断做，但**不是靠
+  删注释或压行**，而是补四个对任何插件都有用的 API（每个都带 doc-test 与单测）：
+  - `#[param(name = ..., default = ..., range = a..=b, unit = ...)]`：`#[derive(Params)]`
+    现在能据此**生成 `Default`**，参数 id 取字段名。规则是全有或全无——只有部分字段声明
+    `default` 会**编译报错**而不是生成一个悄悄漏掉几个参数的 `Default`。`range` 必须是
+    **闭区间**（`0.0..1.0` 会让最大值不可达，不是"参数范围"的意思），`BoolParam` 带
+    `range` 也报错。这同时是 CLAUDE.md 目标语法里参数属性写法的第一步。
+  - `SunmaoPlugin::IS_INSTRUMENT`（带默认值的关联常量，按兼容策略 1.1 属于允许的新增）：
+    "是不是乐器"对宿主其实是**两个必须一致的开关**（无音频输入 + 接收 MIDI），分开写容易
+    只写对一半——漏掉 `accepts_midi` 的乐器会以"静音效果器"的身份加载。默认实现由它推导，
+    两个方法仍可各自 override（带 sidechain 的乐器、要 MIDI 的效果器）。
+  - `MonoVoice`（放在 **facade** 而不是 `sunmao_dsp`）：`sunmao_dsp` 不认识宿主、事件、
+    插件，保持这一点才是它能被 SunMao 之外复用的原因；读 `EventQueue` 的 voice 是两层之间的
+    胶水，所以归 facade。单音、**后按优先**，且 note-off 只在它指名的音**正在响**时才生效
+    （否则松开一个已被顶替的键会切掉玩家正按住的音）。facade 因此新增对 `sunmao_dsp` 的
+    依赖并在 prelude 转出其 DSP 名字（两边无重名）——插件从此只需一个依赖、一行 `use`。
+  - `AudioBuffer::fill_mono{,_range}`：每帧调用一次闭包并写到所有输出声道。按声道推进
+    振荡器会让立体声下频率翻倍，这种错误值得从 API 上做成不可能，而不是写在文档里。
+- **把模板接进打包矩阵后，runner 立刻抓出两个单测看不到的缺陷**（这正是"能力必须被真实
+  宿主验证"的价值）：
+  1. **模板从未实现 `reset()`**：`SunmaoPlugin::reset` 默认空实现，宿主 reset（走带停止、
+     离线渲染开始）后声音继续。runner 的 `process_after_reset` 直接失败
+     （`synth reset left an active voice (peak: 0.446559)`）。旧模板同样没有实现，只是它
+     从未被打包过，所以没人发现。已在模板实现 `reset`（+3 行，仍 49 行 ≤ 50）。
+  2. **runner 自己的 note-off 断言写错了模型**：它要求 note-off **所在块的剩余部分就已经
+     静音**（`after_peak <= 1e-6`）。只有**无包络**的合成器能满足——而无包络合成器是会
+     咔嗒响的；现存的 `sunmao_syn_sine` fixture 正是这种（note-off 直接 `active = false`），
+     断言当初就是照它写的。任何带 release 的真实乐器都会失败。已把契约改成真正区分
+     "能用的 voice"与"坏掉的 voice"的三条：尾巴**不得比音本身更响**、必须**到达静音**、
+     且到达后**保持静音**（窗口放到约 2 秒的块数并在静音后提前退出）。这是**收紧**而非放松：
+     原来只要求第 1..8 块静音，现在要求静音必须被真正达到并保持，且尾部不得增长。
+     `sunmao_syn_sine` 的瞬间静音天然满足新契约。
+- Result: instrument 模板 **81 → 49 行**、effect **50 → 42 行**，`template_size.rs` 从
+  "钉住 81 行并提示差距"改为直接断言两者都 ≤50。`RUSTFLAGS=-Awarnings cargo test --locked`
+  **123 套件 / 522 测试全绿、exit 0**；metadata/fmt/diff-check 通过；
+  `cargo check --locked --target x86_64-pc-windows-msvc` 覆盖 facade/core/macros/runner/两模板
+  零 error；`tools/package_examples.sh --debug --test` 退出 0、**30 套件各 20/20**
+  （28 → 30：instrument 模板的 VST3 与 CLAP 各一），其中模板的
+  `synth_note_on (peak: 0.491, offset: 17)` 证明 `MonoVoice::render` 真的按 sample offset
+  起音而不是块对齐；`nm -gU` 新 cdylib 无 AU 符号。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/m6_test2.log`、`/tmp/m6_pkg2.log`；
+  `/tmp/m6_pkg.log` 是抓出上述两个缺陷的那一次失败运行）——本地证据等级。
+- Unresolved: 待三平台 hosted 全绿。CI 已同步接线（矩阵新增 `template-instrument-binary`、
+  打包与两格式 runner 调用）。Windows/Linux 是首次打包并 exercise 这个模板，
+  任何平台差异会在 "Package and exercise VST3 + CLAP + standalone" 暴露。
+  此后 Phase 3 五个 milestone 的目标全部满足，可进入总验收。
+
+### 2026-09-04 — 推送受阻（环境问题），两个 commit 待 hosted 验收
+
+- Command/platform: macOS ARM64 本地。`git push origin phase3/framework-dsp-library` 反复失败：
+  `Connection closed by 198.18.0.126 port 443` / `Connection timed out during banner exchange`。
+  本机 `~/.ssh/config` 把 `github.com` 指向 `ssh.github.com:443`，而 198.18.0.0/15 是本地
+  VPN/代理的 fake-IP 段——即代理在拦截该连接并丢弃。
+- Result: **不是权限问题也不是沙箱问题**：同一时刻 `curl https://github.com` 返回 200、
+  GitHub API 轮询正常（run #68 的验收数据就是这样取到的）；关掉沙箱重试同样失败，
+  说明是代理只处理 TLS 而不透传裸 SSH。keychain 里没有 HTTPS 凭据，因此无法改用 HTTPS 推送。
+- Evidence/artifact: 两个 commit 已在本地并各自通过完整本地 gate（见上两条日志）：
+  `9157a4b`（M5 兼容策略 + proptest + 耦合状态 flush 修复）与
+  `e71a8f9`（模板 ≤50 行收口 + runner note-off 契约修正 + MonoVoice 零分配/proptest）。
+  后台挂着定时重试的推送循环，网络恢复即自动推送。
+- 等待期间补了一项本地可做的验证：`MonoVoice::render` 是新的 audio-callback 路径，而 CI 的
+  "realtime callback allocation matrix" 此前只覆盖两个 backend，不覆盖 facade。已按 backend
+  同样的 `GlobalAlloc` 计数器写 `rendering_a_block_does_not_allocate`（render + play_events +
+  256 次 `next()` 全程 0 次分配），并把 `-p sunmao` 加入该 CI 步骤——**release 模式**下内联行为
+  与 debug 不同，分配检查值得在两种模式都跑。另外确认了 CI 的 cdylib 来源不是
+  `cargo test -p`（实测不产出 cdylib），而是该步骤末尾的
+  `cargo build --locked "${fixtures[@]/#/--package=}"`，instrument 模板已在该列表里，
+  故打包步骤能找到 `libsunmao_template_instrument.*`。
+  同一理由补了 `MonoVoice` 的 proptest（`sunmao/tests/voice_property.rs`，+3，套件 123→124）：
+  任意事件序列（含越界 offset、倒序 offset、同一样本多事件、空块）× 任意块长/声道数/采样率下，
+  **块内每个样本都被写过**（buffer 预填 NaN，漏写即可见）、各声道逐位相同、峰值不超过给定 gain；
+  空块渲染与逐样本 `next()` 必须**逐位相等**（分段渲染不得改变数值）。
+- 2026-09-05 续：推送仍不通（累计已重试 >5 小时）。补做了三项**在没有 hosted 的情况下
+  能提高把握**的本地验证：
+  1. **Linux 目标编译检查**（此前从未做过——之前只交叉检查 Windows）：
+     `cargo check --locked --target x86_64-unknown-linux-gnu` 覆盖 core/macros/dsp/facade、
+     **全部 8 个 Phase 3 fixture** 与 `sunmao_unittest_runner`，零 error。三平台里现在有两个
+     平台有本地编译证据，只剩"跑起来"必须靠 hosted。
+  2. **按 CI 原文跑分配矩阵**：把 workflow 里那一步的命令逐字复制执行
+     （`cargo test --release --locked -p ... -p sunmao`），19 套件 / 93 测试全绿、exit 0，
+     确认新加的 `-p sunmao` 不会让该步骤在 release 下失败。
+  3. **workflow 结构检查**：本轮改过 `.github/workflows/phase1.yml`，而 YAML 语法错误会让
+     整个 run 直接失败。检查无 tab、22 个 step 与 18 个 run 键齐全、折叠标量 `>-` 续行正确。
+  代理侧的进一步定位（供恢复时参考）：本机跑的是 **Clash Verge 的 TUN 模式**
+  （`clash-ver` 监听 127.0.0.1:33331，但该端口既不是 HTTP CONNECT 也不是 SOCKS5，
+  无法拿来当出口），系统代理开关全关，DNS 走 fake-IP（github.com → 198.18.0.130）。
+  SSH 的 **:443 与 :22 都被丢弃**，而同一时刻 HTTPS 正常，说明是代理规则只放行 TLS。
+  keychain 经 `security find-internet-password -s github.com` 确认**没有**任何 GitHub 凭据，
+  故 HTTPS 推送同样不可行。解开需要用户侧二选一：放行到 github.com 的 SSH，
+  或存一条 HTTPS token 凭据。
+- Unresolved: **Phase 3 的完成判定（同 commit 三平台 hosted 全绿 + artifacts）在推送成功前
+  无法满足**，这一条不能用本地结果替代。恢复后需要：推送 → 轮询 run 的三个 job 与逐步骤
+  结论 → 全绿则把 M5 与 Phase 3 标记完成、更新 roadmap；失败则自底向上修复。
+  注意本轮改了 CI 矩阵（新增 `template-instrument-binary`）与 runner 的 synth note-off 断言，
+  Windows/Linux 首次打包并 exercise instrument 模板。

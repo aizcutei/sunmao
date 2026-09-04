@@ -291,12 +291,28 @@ pub trait SunmaoPlugin: Default + Send + 'static {
     /// processing error instead of growing it on the audio thread.
     const MAX_EVENTS_PER_BLOCK: usize = 4096;
 
+    /// Whether this plugin generates sound from notes rather than processing
+    /// an input signal.
+    ///
+    /// This exists because "instrument" is not one switch to a host, it is two
+    /// that must agree: no audio input, and MIDI accepted. Setting them
+    /// separately is easy to get half-right — an instrument that forgets
+    /// `accepts_midi` loads as a silent effect — so declaring the intent once
+    /// and deriving both is the safer default. Either method can still be
+    /// overridden for the unusual cases (an effect that wants MIDI, an
+    /// instrument with a side-chain input).
+    const IS_INSTRUMENT: bool = false;
+
     /// The parameter struct type.
     type Params: Params;
 
     /// Number of input channels (0 for synths).
     fn input_channels(&self) -> u32 {
-        2
+        if Self::IS_INSTRUMENT {
+            0
+        } else {
+            2
+        }
     }
     /// Number of output channels.
     fn output_channels(&self) -> u32 {
@@ -304,7 +320,7 @@ pub trait SunmaoPlugin: Default + Send + 'static {
     }
     /// Whether this plugin accepts MIDI input.
     fn accepts_midi(&self) -> bool {
-        false
+        Self::IS_INSTRUMENT
     }
 
     /// Get the plugin's parameters.
@@ -510,5 +526,128 @@ pub trait SunmaoPlugin: Default + Send + 'static {
     /// CLAP-specific metadata.
     fn clap_info() -> ClapInfo {
         ClapInfo::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::params::{ParamDescriptor, Params};
+
+    struct NoParams;
+
+    impl Params for NoParams {
+        fn get_normalized(&self, _id: &str) -> Option<f32> {
+            None
+        }
+        fn set_normalized(&self, _id: &str, _value: f32) {}
+        fn descriptors(&self) -> Vec<ParamDescriptor> {
+            Vec::new()
+        }
+    }
+
+    /// Spells out the parts of `SunmaoPlugin` these tests do not care about.
+    /// Written as a declarative macro producing whole items — not one taking a
+    /// body as token soup, which rustfmt reformats into invalid code.
+    macro_rules! boilerplate {
+        () => {
+            type Params = NoParams;
+
+            fn params(&self) -> Arc<Self::Params> {
+                Arc::new(NoParams)
+            }
+
+            fn process(
+                &mut self,
+                _buffer: &mut AudioBuffer,
+                _events: &EventQueue,
+                _context: &ProcessContext,
+            ) -> ProcessStatus {
+                ProcessStatus::Normal
+            }
+        };
+    }
+
+    #[derive(Default)]
+    struct DefaultEffect;
+
+    impl SunmaoPlugin for DefaultEffect {
+        const NAME: &'static str = "DefaultEffect";
+        const VENDOR: &'static str = "Test";
+        const URL: &'static str = "https://example.com";
+        boilerplate!();
+    }
+
+    #[derive(Default)]
+    struct Instrument;
+
+    impl SunmaoPlugin for Instrument {
+        const NAME: &'static str = "Instrument";
+        const VENDOR: &'static str = "Test";
+        const URL: &'static str = "https://example.com";
+        const IS_INSTRUMENT: bool = true;
+        boilerplate!();
+    }
+
+    #[derive(Default)]
+    struct MidiEffect;
+
+    impl SunmaoPlugin for MidiEffect {
+        const NAME: &'static str = "MidiEffect";
+        const VENDOR: &'static str = "Test";
+        const URL: &'static str = "https://example.com";
+        boilerplate!();
+
+        fn accepts_midi(&self) -> bool {
+            true
+        }
+    }
+
+    #[derive(Default)]
+    struct InstrumentWithSidechain;
+
+    impl SunmaoPlugin for InstrumentWithSidechain {
+        const NAME: &'static str = "InstrumentWithSidechain";
+        const VENDOR: &'static str = "Test";
+        const URL: &'static str = "https://example.com";
+        const IS_INSTRUMENT: bool = true;
+        boilerplate!();
+
+        fn input_channels(&self) -> u32 {
+            2
+        }
+    }
+
+    #[test]
+    fn an_effect_takes_audio_and_no_midi_by_default() {
+        assert_eq!(DefaultEffect.input_channels(), 2);
+        assert_eq!(DefaultEffect.output_channels(), 2);
+        assert!(!DefaultEffect.accepts_midi());
+    }
+
+    #[test]
+    fn declaring_an_instrument_sets_both_switches_a_host_reads() {
+        // The two have to agree: an instrument with audio inputs loads in the
+        // wrong slot, and one without MIDI is a silent effect. Declaring the
+        // intent once is what keeps them from drifting apart.
+        assert_eq!(Instrument.input_channels(), 0);
+        assert!(Instrument.accepts_midi());
+        assert_eq!(Instrument.output_channels(), 2);
+    }
+
+    #[test]
+    fn either_switch_can_still_be_overridden() {
+        assert!(MidiEffect.accepts_midi());
+        assert_eq!(MidiEffect.input_channels(), 2, "an effect keeps its input");
+        assert_eq!(InstrumentWithSidechain.input_channels(), 2);
+        assert!(InstrumentWithSidechain.accepts_midi());
+    }
+
+    #[test]
+    fn the_default_input_bus_follows_the_instrument_declaration() {
+        // `input_buses` derives from `input_channels`, so an instrument must
+        // publish no input bus at all rather than a zero-channel one.
+        assert!(Instrument.input_buses().is_empty());
+        assert_eq!(DefaultEffect.input_buses().len(), 1);
     }
 }

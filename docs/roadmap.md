@@ -22,8 +22,8 @@ Phase 1 已完成：扩展后的 VST3 + CLAP + standalone gate 由 run #25（com
 filters/envelopes/oscillators/oversampling/mixing/metering 均已落地，各里程碑分别在独立
 commit 上取得三平台 hosted 绿（run #42/#44/#47/#49/#51/#53/#55/#57/#59/#61/#63/#66/#68）。
 API 与 state 的兼容策略见 [`docs/phase3/compatibility.md`](phase3/compatibility.md)，
-验收状态与证据见 `docs/phase3/status.md`。**尚未达标**：instrument 模板 81 行未达
-"新插件样板 ≤50 行"的目标（由 `sunmao/tests/template_size.rs` 机械盯住，不会悄悄增长）。
+验收状态与证据见 `docs/phase3/status.md`。"新插件样板 ≤50 行"已达标（effect 42 行、
+instrument 49 行，由 `sunmao/tests/template_size.rs` 机械强制）。
 
 ## Phase 4：GUI 组件库与平台完善
 

@@ -162,6 +162,71 @@ impl<'a> AudioBuffer<'a> {
         }
     }
 
+    /// Writes one generated sample per frame to every output channel.
+    ///
+    /// The closure is called exactly once per frame, in order, and its value
+    /// is copied to all channels — the shape almost every mono voice or test
+    /// tone wants. Calling it once per frame rather than once per channel per
+    /// frame is the point: an oscillator advanced per channel would run at
+    /// twice its frequency in stereo, which is a mistake worth making
+    /// impossible rather than documenting.
+    ///
+    /// ```
+    /// # use sunmao_core::audio::AudioBuffer;
+    /// let mut left = [0.0f32; 4];
+    /// let mut right = [0.0f32; 4];
+    /// let mut outputs: Vec<&mut [f32]> = vec![&mut left, &mut right];
+    /// let mut buffer = AudioBuffer::new(&[], &mut outputs, 4);
+    ///
+    /// let mut phase = 0.0f32;
+    /// buffer.fill_mono(|| {
+    ///     phase += 0.25;
+    ///     phase
+    /// });
+    /// drop(buffer);
+    /// assert_eq!(left, [0.25, 0.5, 0.75, 1.0]);
+    /// assert_eq!(right, left);
+    /// ```
+    pub fn fill_mono(&mut self, next: impl FnMut() -> f32) {
+        self.fill_mono_range(0..self.num_samples, next);
+    }
+
+    /// [`AudioBuffer::fill_mono`] over part of the block.
+    ///
+    /// This is what makes sample-accurate note timing possible without
+    /// allocating: a voice renders up to an event's offset, applies the event,
+    /// and renders on. The range is clamped to the block, so an offset past
+    /// the end of the buffer — which a host can send — writes nothing instead
+    /// of panicking.
+    ///
+    /// ```
+    /// # use sunmao_core::audio::AudioBuffer;
+    /// let mut channel = [0.0f32; 6];
+    /// let mut outputs: Vec<&mut [f32]> = vec![&mut channel];
+    /// let mut buffer = AudioBuffer::new(&[], &mut outputs, 6);
+    ///
+    /// buffer.fill_mono_range(2..4, || 1.0);
+    /// // Out-of-range offsets are ignored rather than fatal.
+    /// buffer.fill_mono_range(5..99, || -1.0);
+    /// drop(buffer);
+    /// assert_eq!(channel, [0.0, 0.0, 1.0, 1.0, 0.0, -1.0]);
+    /// ```
+    pub fn fill_mono_range(
+        &mut self,
+        range: std::ops::Range<usize>,
+        mut next: impl FnMut() -> f32,
+    ) {
+        let channels = self.num_output_channels();
+        let start = range.start.min(self.num_samples);
+        let end = range.end.min(self.num_samples);
+        for index in start..end {
+            let sample = next();
+            for channel in 0..channels {
+                self.output(channel)[index] = sample;
+            }
+        }
+    }
+
     /// Copy input to output (passthrough).
     pub fn copy_input_to_output(&mut self) {
         let num_samples = self.num_samples;

@@ -9,5 +9,6 @@ license = "MIT OR Apache-2.0"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+# `sunmao` re-exports the DSP components through its prelude, so a new plugin
+# needs exactly one dependency.
 sunmao = { path = "../../sunmao" }
-sunmao_dsp = { path = "../../sunmao/dsp" }

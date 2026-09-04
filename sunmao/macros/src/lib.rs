@@ -11,7 +11,7 @@ use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::token::Comma;
-use syn::{parse_macro_input, DeriveInput, Expr, Ident, Lit, Meta, Token, Type};
+use syn::{parse_macro_input, DeriveInput, Expr, ExprRange, Ident, Lit, Meta, Token, Type};
 
 fn core_crate_path() -> proc_macro2::TokenStream {
     if let Ok(found) = crate_name("sunmao_core") {
@@ -68,6 +68,28 @@ fn facade_crate_path() -> proc_macro2::TokenStream {
 /// constructor. This keeps host automation, DSP event matching, and GUI
 /// binding on one source of truth even when the Rust field is renamed.
 /// `#[unit = "LinearGain"]` sets the optional AU unit (defaults to `Generic`).
+///
+/// # Declaring parameters in attributes
+///
+/// A field can describe itself instead of being built in a hand-written
+/// `Default`:
+///
+/// ```ignore
+/// #[derive(Params)]
+/// struct MyParams {
+///     #[param(name = "Room Size", range = 0.0..=1.0, default = 0.7)]
+///     size: FloatParam,
+///     #[param(name = "Freeze", default = false)]
+///     freeze: BoolParam,
+/// }
+/// ```
+///
+/// When every field declares a `default`, the derive also writes
+/// `impl Default`, and the parameter's string id is the field name. `range`
+/// must be inclusive and is required for `FloatParam`/`IntParam`; `name`
+/// defaults to the field name. Declaring `default` on only some fields is an
+/// error — see the message it produces. A struct that declares none behaves
+/// exactly as before and must supply its own `Default`.
 #[proc_macro_derive(
     Params,
     attributes(id, unit, group, param, name, nested, persist, sunmao_au)
@@ -101,6 +123,8 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
     let mut set_branches = Vec::new();
     let mut descriptor_exprs = Vec::new();
     let mut au_param_exprs = Vec::new();
+    let mut constructor_exprs = Vec::new();
+    let mut fields_without_default = 0usize;
     let core = core_crate_path();
 
     for (index, field) in fields.iter().enumerate() {
@@ -112,6 +136,9 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
 
         let mut unit_value: Option<String> = None;
         let mut group_value: Option<String> = None;
+        let mut name_value: Option<String> = None;
+        let mut default_expr: Option<Expr> = None;
+        let mut range_expr: Option<ExprRange> = None;
 
         for attr in &field.attrs {
             match &attr.meta {
@@ -165,12 +192,128 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                                         }
                                     }
                                 }
+                                if nv.path.is_ident("name") {
+                                    if let Expr::Lit(expr) = &nv.value {
+                                        if let Lit::Str(lit) = &expr.lit {
+                                            name_value = Some(lit.value());
+                                        }
+                                    }
+                                }
+                                if nv.path.is_ident("default") {
+                                    default_expr = Some(nv.value.clone());
+                                }
+                                if nv.path.is_ident("range") {
+                                    match &nv.value {
+                                        Expr::Range(range) => range_expr = Some(range.clone()),
+                                        other => {
+                                            return syn::Error::new_spanned(
+                                                other,
+                                                "`range` takes an inclusive range, as in \
+                                                 `range = 0.0..=1.0`",
+                                            )
+                                            .to_compile_error()
+                                            .into();
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
                 _ => {}
             }
+        }
+
+        // A declared range must be inclusive: `0.0..1.0` would silently make
+        // the maximum unreachable, which is not what a parameter range means.
+        let bounds = match &range_expr {
+            Some(range) => match (&range.start, &range.limits, &range.end) {
+                (Some(start), syn::RangeLimits::Closed(_), Some(end)) => {
+                    Some((start.clone(), end.clone()))
+                }
+                _ => {
+                    return syn::Error::new_spanned(
+                        range,
+                        "`range` must be an inclusive range with both ends, as in \
+                         `range = 0.0..=1.0`",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+            },
+            None => None,
+        };
+
+        let field_id = ident.to_string();
+        let display_name = name_value.clone().unwrap_or_else(|| field_id.clone());
+        let type_name = type_ident.map(|ident| ident.to_string());
+
+        // A field that declares a default can be constructed by the derive,
+        // which is what lets a plugin skip writing `Default` by hand. The id
+        // is the field name: it is already the thing a rename must not change
+        // (see `stable_param_id`), so deriving it from the field keeps one
+        // source of truth instead of two that can drift.
+        match (type_name.as_deref(), &default_expr, &bounds) {
+            (Some("FloatParam"), Some(default), Some((min, max))) => {
+                constructor_exprs.push(quote! {
+                    #ident: #core::params::FloatParam::new(
+                        #field_id, #display_name, #default, #min, #max,
+                    )
+                });
+            }
+            (Some("IntParam"), Some(default), Some((min, max))) => {
+                constructor_exprs.push(quote! {
+                    #ident: #core::params::IntParam::new(
+                        #field_id, #display_name, #default, #min, #max,
+                    )
+                });
+            }
+            (Some("BoolParam"), Some(default), None) => {
+                constructor_exprs.push(quote! {
+                    #ident: #core::params::BoolParam::new(#field_id, #display_name, #default)
+                });
+            }
+            (Some("BoolParam"), Some(_), Some(_)) => {
+                return syn::Error::new_spanned(
+                    field,
+                    "a `BoolParam` has no range; remove `range = ...`",
+                )
+                .to_compile_error()
+                .into();
+            }
+            (Some("FloatParam") | Some("IntParam"), Some(_), None) => {
+                return syn::Error::new_spanned(
+                    field,
+                    "`default` needs a `range` too, as in \
+                     `#[param(default = 0.5, range = 0.0..=1.0)]`",
+                )
+                .to_compile_error()
+                .into();
+            }
+            // `range` and `name` only reach the parameter through the
+            // constructor the derive writes, so without `default` they would
+            // be silently ignored — the declared display name would simply not
+            // appear in the host. Reject that instead.
+            (_, None, Some(_)) => {
+                return syn::Error::new_spanned(
+                    field,
+                    "`range` only takes effect together with `default`; either add \
+                     `default = ...` or construct this parameter in your own `Default` impl",
+                )
+                .to_compile_error()
+                .into();
+            }
+            (_, None, None) if name_value.is_some() => {
+                return syn::Error::new_spanned(
+                    field,
+                    "`name` only takes effect together with `default`; either add \
+                     `default = ...` or pass the name to the constructor in your own \
+                     `Default` impl",
+                )
+                .to_compile_error()
+                .into();
+            }
+            _ => fields_without_default += 1,
         }
 
         let group_literal = group_value.clone().unwrap_or_default();
@@ -318,6 +461,34 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
         }
     }
 
+    // Either the struct declares every parameter's default and the derive
+    // writes `Default`, or it declares none and the plugin writes it. A struct
+    // where only some fields declare one is rejected rather than half-derived:
+    // the alternative is a `Default` impl that silently omits the parameters
+    // whose attributes the author forgot.
+    let default_impl = if constructor_exprs.is_empty() {
+        quote! {}
+    } else if fields_without_default > 0 {
+        return syn::Error::new_spanned(
+            &input,
+            "some parameters declare `#[param(default = ...)]` and some do not. \
+             Declare it on all of them so the derive can write `Default`, or on \
+             none and write `Default` yourself",
+        )
+        .to_compile_error()
+        .into();
+    } else {
+        quote! {
+            impl Default for #name {
+                fn default() -> Self {
+                    Self {
+                        #(#constructor_exprs),*
+                    }
+                }
+            }
+        }
+    };
+
     let au_impl = if generate_au {
         quote! {
             #[cfg(target_os = "macos")]
@@ -351,6 +522,8 @@ pub fn derive_params(input: TokenStream) -> TokenStream {
                 vec![#(#descriptor_exprs),*]
             }
         }
+
+        #default_impl
 
         #au_impl
     };
