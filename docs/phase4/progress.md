@@ -461,3 +461,24 @@
   受阻项，且 baseview 的 Linux 后端本身 X11 独占（`baseview/src/lib.rs:6` 只有 `mod x11`，
   全树零 Wayland 引用）。**现状不是"不能在 Wayland 上用"**：经 XWayland，X11 路径
   在 Wayland 桌面上照常工作。
+
+### 2026-09-06 — run #87 Linux 失败：我自己写的并发测试是 flaky 的
+
+- Command/platform: push `fdc5869` 触发 GitHub Actions #87：
+  https://github.com/aizcutei/sunmao/actions/runs/33982600495
+- Result: **Linux job failure**，步骤 "Test format adapters and host"。
+  `sunmao_core` 41 passed / **1 failed**：`viz::tests::frames_survive_crossing_a_real_thread_boundary`
+  在 `viz.rs:281` panic，消息 `the consumer never saw a frame`。
+- 根因（是测试的缺陷，不是 `VizChannel` 的）: 该测试 spawn 一个发布 5000 帧的生产者线程，
+  消费者则**固定轮询 50000 次**后断言 `seen > 0`。消费者每次轮询只是一次原子 load，
+  在负载高的 runner 上它可以在被 spawn 的线程**尚未被调度**之前就把 50000 次跑完，
+  于是一帧也没看到。**断言依赖的是线程调度而不是通道行为。**
+- 修法（不是重试，也不是加 sleep）: 改成轮询到生产者置位 `finished` 为止（不再是固定次数），
+  join 之后再做**一次收尾 take**。这让 `seen > 0` 成为关于通道的事实而非关于调度的事实：
+  要么消费者在过程中取到过帧，要么最后一次 publish 留下的 FRESH 位仍在、收尾 take 必然取到。
+  同时新增 `last == 4999` 断言——最终看到的必须是最新帧。本地连跑 10 次全绿。
+- **诚实说明**：同一个 flaky 测试在 **run #86 三平台都通过了**。这不改变 #86 对 M4 其余断言的
+  验收效力（`the_editor_describes_itself_to_assistive_technology`、accessibility proptest、
+  scale 协商 18 次等均为确定性断言），但**这一条并发断言在 #86 的通过是运气**，
+  据此不能声称"跨线程行为已在三平台验证"——该结论要等修复后的版本取得绿才成立。
+- Unresolved: 修复后需重新取三平台绿。

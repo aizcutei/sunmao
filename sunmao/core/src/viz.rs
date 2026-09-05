@@ -254,30 +254,53 @@ mod tests {
 
     #[test]
     fn frames_survive_crossing_a_real_thread_boundary() {
+        use std::sync::atomic::AtomicBool;
+
         let (mut publisher, mut consumer) = viz_channel::<[f32; 8]>();
+        let finished = Arc::new(AtomicBool::new(false));
+        let producer_finished = Arc::clone(&finished);
         let producer = std::thread::spawn(move || {
             for round in 0..5_000u32 {
                 publisher.publish([round as f32; 8]);
             }
+            producer_finished.store(true, Ordering::Release);
             publisher
         });
+
         let mut seen = 0usize;
         let mut last = -1.0f32;
-        for _ in 0..50_000 {
+        let mut check = |frame: [f32; 8], last: &mut f32| {
+            // Every element of a frame must come from the same publish: a torn
+            // read would mix two rounds.
+            assert!(
+                frame.iter().all(|value| *value == frame[0]),
+                "torn frame: {frame:?}"
+            );
+            // Frames may be skipped, but never go backwards.
+            assert!(frame[0] >= *last, "{} went backwards from {last}", frame[0]);
+            *last = frame[0];
+        };
+
+        // Poll until the producer says it is done rather than for a fixed
+        // number of iterations. A fixed count races the scheduler: the consumer
+        // loop is a single atomic load, so on a loaded machine it can burn
+        // through every iteration before the spawned thread is ever scheduled.
+        while !finished.load(Ordering::Acquire) {
             if let Some(frame) = consumer.take_fresh() {
-                // Every element of a frame must come from the same publish:
-                // a torn read would mix two rounds.
-                assert!(
-                    frame.iter().all(|value| *value == frame[0]),
-                    "torn frame: {frame:?}"
-                );
-                // Frames may be skipped, but never go backwards.
-                assert!(frame[0] >= last, "{} went backwards from {last}", frame[0]);
-                last = frame[0];
+                check(frame, &mut last);
                 seen += 1;
             }
         }
         let _ = producer.join().unwrap();
+
+        // Whatever the interleaving was, the last publish left a fresh frame
+        // behind unless the consumer already collected one — so this makes
+        // `seen > 0` a fact about the channel rather than about scheduling.
+        if let Some(frame) = consumer.take_fresh() {
+            check(frame, &mut last);
+            seen += 1;
+        }
         assert!(seen > 0, "the consumer never saw a frame");
+        assert_eq!(last, 4_999.0, "the final frame was not the newest one");
     }
 }
