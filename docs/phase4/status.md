@@ -58,7 +58,7 @@ Linux GUI 面的风险。计划在 **M2 真控件落地时接入**——Phase 3 
 
 | Milestone | 范围 | 当前判断 | 权威证据 | 下一步 |
 |---|---|---|---|---|
-| M0 脚手架与清理收口 | 文档、GUI fixture、workspace/CI 骨架；ABI 去重取得三平台绿 | **进行中**：清理收口部分**已完成**（见右列 run #71/#72）；docs、fixture、CI 步骤本地全绿，待 hosted 验证 | 清理：[run #71](https://github.com/aizcutei/sunmao/actions/runs/33956858763)（commit `7dabb3d`，三 job 25 步零非成功）与 run #72（commit `e844215`，同样零非成功），artifacts 各 3 份可下载 | 推送本 commit，等待三平台 hosted 绿；绿后 M0 完成，进入 M1 |
+| M0 脚手架与清理收口 | 文档、GUI fixture、workspace/CI 骨架；ABI 去重取得三平台绿 | **完成**（三平台 hosted 全绿）：清理收口由 run #71/#72 完成；GUI fixture 与新 blocking 步骤 "Test Phase 4 acceptance fixtures" 由 run #73 验收，每 job **26 步零非成功**。已下载 Linux job 日志核实该步骤**非空转**：`running 9 tests ... 9 passed; 0 failed`，其中零分配断言在 glibc 分配器下同样通过 | 脚手架：[run #73](https://github.com/aizcutei/sunmao/actions/runs/33959635350)（commit `d37a46f`）三 job success，artifacts `phase1-macOS-ARM64`（49.9MB）、`phase1-Windows-X64`（74.5MB）、`phase1-Linux-X64`（901.4MB）可下载。清理：[run #71](https://github.com/aizcutei/sunmao/actions/runs/33956858763)（commit `7dabb3d`，25 步零非成功）与 run #72（commit `e844215`，同样零非成功） | — （M0 完成；进入 M1） |
 | M1 renderer 资源与线程归属 | 三后端归属与销毁顺序文档、scale/DPI 协商两格式落地 | 未开始 | — | — |
 | M2 布局与主题 | `Column`/`Row`/gap/padding、五个控件、参数双向绑定、主题 token | 未开始 | — | — |
 | M3 text rendering 与输入 | 字体栅格化/度量、clipboard、IME/国际键盘、cursor/focus | 未开始 | — | — |

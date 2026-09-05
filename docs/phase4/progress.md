@@ -57,3 +57,21 @@
   - M0 的"清理收口"一项在开 Phase 4 之前即已完成：[run #71](https://github.com/aizcutei/sunmao/actions/runs/33956858763)
     （commit `7dabb3d`，ABI 去重 −1567 行）与 run #72（commit `e844215`，CLAUDE.md 精简）
     各自三平台 25 步零非成功、artifacts 齐备。
+
+### 2026-09-05 — M0 完成：hosted run #73 三平台全绿
+
+- Command/platform: push `d37a46f` 触发 GitHub Actions #73：
+  https://github.com/aizcutei/sunmao/actions/runs/33959635350
+- Result: macOS ARM64、Windows x86_64、Ubuntu x86_64 三个 job 同一 commit 全部 success，
+  每 job **26 步零非成功**（skip 仅为平台不适用项与未触发的失败诊断上传）。新增的 blocking
+  步骤 "Test Phase 4 acceptance fixtures" 三平台均 success；Phase 1/2/3 既有 gate
+  （GUI matrix、standalone、packager、runner、Phase 2/3 fixture、realtime 分配矩阵、
+  proptest）保持绿色。Windows WGPU 收尾段错误未复现（自 run #66 起连续第 6 次）。
+- Evidence/artifact: run #73 上传 `phase1-macOS-ARM64`（49.9MB）、`phase1-Windows-X64`
+  （74.5MB）、`phase1-Linux-X64`（901.4MB），均可下载且未过期。
+  **另下载 Linux job 原始日志核实新步骤非空转**：`running 9 tests` → `9 passed; 0 failed`，
+  九项逐条列出，其中 `process_and_spectrum_publish_do_not_allocate` 在 glibc 分配器下
+  同样通过——零分配结论不只在 macOS 成立。一个只会 success 而不真正跑测试的 gate，
+  会让后面每个 milestone 的证据失效，所以这一步单独核实。
+- Unresolved: M0 完成，进入 M1（renderer 资源与线程归属、scale/DPI 协商）。
+  fixture 进打包矩阵推迟到 M2（理由见 status.md）。
