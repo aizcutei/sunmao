@@ -743,3 +743,23 @@
 - Result: `cargo check --target x86_64-pc-windows-msvc --features accessibility` exit 0；
   fmt / diff 全过。
 - Unresolved: 下一轮看 Windows 日志里是否出现 `UIA VERIFIED`。
+
+### 2026-09-06 — 第二个真缺陷：Windows 走的是 WGPU 回退，而那条路径没转发 accessibility
+
+- Command/platform: run #98 的 Windows job 仍报同一读数——`type=50033 name="SunMao Widgets"`
+  （窗口标题＝默认 HWND pane）。eager 创建适配器**没有**改变 UIA 看到的东西，说明还有第二个原因。
+- **根因**：`install_accessibility` 先问 handler "你描述自己吗"，`None` 就跳过。
+  而 handler 的具体类型在 Windows 上**不是** `GlHandler`——`sunmao_fx_widgets_gui_gl` 在
+  Windows runner 上 GL 初始化失败（该回退本来就是为此存在的：Windows 基础驱动可能没有
+  sRGB framebuffer），于是跑的是 `BaseviewHandler::Wgpu(WgpuHandler<WgpuFallbackState<..>>)`。
+  我只在 `GlHandler` 上实现了 `accessibility_tree`，**WGPU 那条路径拿的是默认的 `None`**，
+  于是整扇窗口静默失去可访问性。
+- Change: `WgpuViewState` trait 补上同名钩子（默认 `None`）、`WgpuFallbackState` 转发给内层
+  `ViewState`、`WgpuHandler` 转发给它的 state。
+- **两个缺陷的共同点**：都不是"编译不过"或"单测不过"，而是**只有拿屏幕阅读器用的同一套 API
+  去真机问一次才暴露**。三平台编译绿、全部单测与 proptest 绿的情况下，真实 UIA 客户端
+  看到的仍是一个不透明矩形。
+- Result: Windows target check（含 tests）exit 0；macOS 上 fixture feature 版 9 测试通过；
+  fmt / diff 全过。
+- Unresolved: 下一轮再看 `UIA VERIFIED`。若仍失败，下一个怀疑点是 UIA 对无名 pane 的
+  过滤，或适配器需要 `update_if_active` 先跑过一帧。

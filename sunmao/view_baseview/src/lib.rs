@@ -883,6 +883,14 @@ mod gl_backend {
         fn on_resize(&mut self, width: f32, height: f32) {
             self.0.on_resize(width, height);
         }
+
+        /// Forwarding this is not optional on Windows: when GL initialization
+        /// fails there the editor runs through this fallback, and a missing
+        /// override here silently costs the whole window its accessibility.
+        #[cfg(feature = "accessibility")]
+        fn accessibility_tree(&mut self) -> Option<accesskit::TreeUpdate> {
+            self.0.accessibility_tree()
+        }
     }
 
     struct GlHandler<S: ViewState> {
@@ -1065,6 +1073,13 @@ pub(crate) mod wgpu_backend {
             false
         }
         fn on_resize(&mut self, _width: f32, _height: f32) {}
+
+        /// Describe this editor to assistive technology. See
+        /// [`ViewState::accessibility_tree`].
+        #[cfg(feature = "accessibility")]
+        fn accessibility_tree(&mut self) -> Option<accesskit::TreeUpdate> {
+            None
+        }
     }
 
     /// A SunmaoView implementation using baseview + wgpu.
@@ -1421,6 +1436,11 @@ pub(crate) mod wgpu_backend {
     }
 
     impl<S: WgpuViewState> WindowHandler for WgpuHandler<S> {
+        #[cfg(feature = "accessibility")]
+        fn accessibility_tree(&mut self) -> Option<accesskit::TreeUpdate> {
+            self.state.accessibility_tree()
+        }
+
         fn on_frame(&mut self, _window: &mut Window) {
             let output = match self.surface.get_current_texture() {
                 Ok(t) => t,
