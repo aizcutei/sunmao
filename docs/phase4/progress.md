@@ -657,3 +657,27 @@
     机制反查插件暴露的元素需要先把 fixture 以该 feature 打包进矩阵。
   - macOS 的 AXUIElement 验收在 CI 上受 TCC 权限限制，Windows UIA 无此限制，
     因此**宿主侧断言优先做 Windows**。
+
+### 2026-09-06 — accessibility 的宿主侧运行时断言（Windows UIA 往返）
+
+- Command/platform: macOS ARM64（该测试只在 Windows 编译与运行，本地只能交叉编译检查）。
+- Change: 新增 `examples/sunmao_fx_widgets_gui_gl/tests/windows_uia.rs`
+  ——**树里其余所有 accessibility 测试查的都是数据结构，这一条查的是真东西**：
+  开一个真实窗口，然后用**屏幕阅读器所用的同一套 API（UI Automation）**问里面有什么，
+  断言旋钮/下拉/开关分别以 Slider / ComboBox / CheckBox 出现。
+  - **只做 Windows，理由具体**：UIA 不需要额外权限；macOS 的 AXUIElement 在 CI 上受 TCC
+    限制拿不到授权，AT-SPI 需要 runner 并未运行的 a11y 总线。这是唯一能**断言**而非假定
+    这条往返的平台。
+  - 这个测试之所以现在写得出来，是因为**本 phase 早先补的 `open_floating`**：
+    嵌入式窗口需要一个宿主父窗口，而浮动窗口自己就是顶层窗口。
+  - 必须自己泵消息：UIA 经 `WM_GETOBJECT` 应答，不泵的话查询会超时，看起来像"树不存在"
+    而不是"卡住了"。并带 20s 重试——UIA 是异步挂载的，首查可能早于 provider 注册。
+  - `ViewHandle` 有意隐藏平台句柄，为一个测试加访问器会把 Win32 漏进核心抽象；
+    浮动窗口建在本线程上，所以改用 `EnumThreadWindows` 向系统要。
+  - 窗口开不出来（无窗口站的会话）时**跳过而不是失败**：那会把窗口问题报成 accessibility 问题。
+- Result: 默认 `cargo test --locked` exit 0，**130 套件 / 662 测试**（新增该测试目标）；
+  `cargo check --tests --target x86_64-pc-windows-msvc --features accessibility` exit 0；
+  fmt / diff / metadata 全过。
+- Evidence/artifact: `/tmp/uia2.log`。
+- Unresolved: **该断言的真实执行证据只能来自 Windows hosted job**——本地无法运行。
+  下一轮核实日志里它是否真的跑了并通过（run #82 的教训：绿不等于断言执行过）。

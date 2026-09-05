@@ -4967,6 +4967,7 @@ name = "sunmao_fx_widgets_gui_gl"
 version = "0.1.0"
 dependencies = [
  "sunmao",
+ "windows 0.61.3",
 ]
 
 [[package]]

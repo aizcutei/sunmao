@@ -199,10 +199,13 @@ AccessKit 明确允许的（只要树在下一次刷新前送达，而那正是�
 **三平台的共同降级**：action 未接——屏幕阅读器能读、不能改。`ActionHandler` 如实
 什么都不做（trait 要求不支持的 action 必须无动作），这样只读支持不必等 action 管线。
 
-**尚未做到的验收**：hosted job 目前只证明这条链在三平台**编译并通过单测**
-（新增 CI 步骤同时构建 `sunmao_gui`、`sunmao` facade 与 fixture 的 feature 版本）。
-真正的宿主侧断言——用 runner 既有的 UIA 机制反查插件暴露的元素——还需要把 fixture
-以该 feature 打包进矩阵，是下一轮的事。
+**验收现状**：[run #94](https://github.com/aizcutei/sunmao/actions/runs/33994329903)
+（commit `fd81437`）三平台 success、27 步零非成功。已下载三平台日志核实**每个原生适配器
+都在自己的平台上真的被编译**：macOS `accesskit_macos`、Linux `accesskit_unix` +
+`accesskit_atspi_common`、Windows `accesskit_windows`，三平台零 FAILED 套件。
+
+**但"编译通过"不等于"屏幕阅读器真能读到"**。下一步是宿主侧运行时断言：
+Windows 优先（UIA 无权限门槛，而 macOS 的 AXUIElement 在 CI 上受 TCC 限制）。
 
 ## M5 Wayland：受阻链已缩短为一条
 
