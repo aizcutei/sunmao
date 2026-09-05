@@ -357,3 +357,18 @@
     但要真正看到字，调用方需经 `GlContext::set_font` 提供字体。捆绑字体是许可与体积决策，
     留给发行插件的人——这一条从 M3 上半起就是这样，此处再次点明以免误读。
   - wgpu / WebView 后端仍不排空宿主键盘队列（如实回"未使用"）。
+
+### 2026-09-06 — M3 完成：hosted run #84 三平台全绿且断言非空转
+
+- Command/platform: push `8f959ba` 触发 GitHub Actions #84：
+  https://github.com/aizcutei/sunmao/actions/runs/33976552655
+- Result: 三个 job 同一 commit 全部 success，每 job **26 步零非成功**，artifacts 3 份。
+  Windows WGPU 收尾段错误未复现（自 run #66 起连续第 14 次，其间 #81 的失败是本轮
+  自身的断言错误，与该 flake 无关）。
+- Evidence/artifact: **判定依据不是 job success，而是断言确实执行**：三平台各
+  `GUI key verified` **1 次**（VST3 路径，`Gain moved 0 -> 1`）与格式跳过 **1 次**（CLAP）。
+  对照 run #82：同样三平台全绿、26 步零非成功，但该断言 **0 次**执行。
+- Unresolved: M3 完成，进入 M4（`VizChannel` 无锁 audio→GUI、`SpectrumAnalyzer`/meter、
+  accessibility 树、floating CLAP editor）。M3 遗留两项已记在 status.md：
+  (1) 无默认字体，`draw_text` 在调用方经 `GlContext::set_font` 提供字体前不出字形；
+  (2) wgpu/WebView 后端不排空宿主键盘队列。
