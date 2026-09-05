@@ -990,3 +990,69 @@
   结论 → 全绿则把 M5 与 Phase 3 标记完成、更新 roadmap；失败则自底向上修复。
   注意本轮改了 CI 矩阵（新增 `template-instrument-binary`）与 runner 的 synth note-off 断言，
   Windows/Linux 首次打包并 exercise instrument 模板。
+
+### 2026-09-05 — 解除推送阻断，run #69 三平台全绿：Phase 3 总验收通过
+
+- Command/platform: macOS ARM64 本地 + hosted run #69。上一轮把推送失败归因为
+  "Clash TUN + fake-IP 丢弃 SSH，且无可用代理出口"，并据此重试了 5 小时以上。
+  重新自底向上查，前半句对、后半句错，错得很具体：
+  - `lsof -nP -iTCP -sTCP:LISTEN` 只列出 `clash-ver:33331`（Verge 应用自身的端口），
+    于是上一轮判定"没有 HTTP/SOCKS 出口"。但 **`verge-mihomo` 以 root 运行**，
+    非特权 `lsof` 根本列不出 root 进程的监听端口。直接读
+    `io.github.clash-verge-rev.../config.yaml` 就能看到 `mixed-port: 7897`，
+    `nc -z 127.0.0.1 7897` 确认它一直开着。教训：进程枚举类命令的**权限边界**
+    会把"没找到"伪装成"不存在"。
+  - 经 7897 的 HTTP CONNECT 与 SOCKS5 **都能连通** `ssh.github.com:443`
+    （`nc -v` 报 succeeded），但 `ssh -T` 仍 `Connection timed out during banner exchange`
+    ——TCP 通、SSH banner 不来。对 `gitlab.com:22` 现象完全一致，**故这不是
+    GitHub 专属封锁，而是当前出口节点丢弃 SSH 协议流量本身**；把成因归给 TUN 或
+    fake-IP 是错的（那两者只影响寻址，不会选择性地杀掉一种应用层协议）。
+  - mihomo 的 `/rules`、`/connections`（经 `--unix-socket /tmp/verge/verge-mihomo.sock`）
+    证实全部 github 域名走 `DomainKeyword,github → 🔰 选择节点 → 🇺🇲 美国Z01 | IEPL`，
+    同一节点的 HTTPS 一切正常（`api.github.com` 200）。
+  - **结论：`git@github.com:` 这个 remote 在此网络下不可能工作，HTTPS 是唯一通道。**
+    这是一条只能由用户解开的依赖（需要凭据），故按"不能用任何假设代替"的原则上报，
+    由用户提供一次性 fine-grained PAT。推送用
+    `git -c credential.helper='!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'`
+    经环境变量传入，**不写 remote URL、不写 `.git/config`**；git 的全局 `osxkeychain`
+    helper 仍会在成功后 `approve` 一次把它存进 keychain，已用
+    `security delete-internet-password -s github.com -a x-access-token` 清除并复查确认。
+- Result: `04d036a..b45efea` 推送成功，hosted **run #69**（commit `b45efea`）
+  **三平台 native jobs 全绿**：每 job 25 步、**零非成功步骤**（skip 仅为平台不适用项
+  与未触发的失败诊断上传）；Phase 1+2 全部既有 gate 保持 blocking 且 success；
+  "Test Phase 3 acceptance fixtures"、"Test Phase 2 acceptance fixtures"、
+  "Test realtime callback allocation matrix"、"Package and exercise VST3 + CLAP + standalone"、
+  "Package and exercise native GUI backends" 三平台均 success。
+  拉取 Windows/Linux 完整 job 日志复核：零 `FAILED` / `panicked at` / `error: test failed`，
+  打包 **30 套件各 20/20**。两项**首次覆盖**如期通过：
+  (a) Windows/Linux 首次打包并 exercise instrument 模板（产物含
+  `sunmao_template_instrument.dll` / `.so`，两格式各一个 runner 套件）；
+  (b) 收紧后的 note-off 契约首次在三平台运行。模板的
+  `synth_note_on (peak: 0.491497, offset: 17)` 在 Windows 与 Linux 上与 macOS 本地
+  **逐位相同**，说明 `MonoVoice::render` 的按事件 sample offset 分段渲染跨平台一致。
+  另：本轮同时在本地重跑了整套 `RUSTFLAGS=-Awarnings cargo test --locked`，exit 0。
+- Evidence/artifact: https://github.com/aizcutei/sunmao/actions/runs/33940874765 ——
+  三 job 全 success，artifacts `phase1-macOS-ARM64`（49.9MB）、`phase1-Windows-X64`（74.5MB）、
+  `phase1-Linux-X64`（916.3MB）均 `expired=false` 可下载。**hosted 证据等级**。
+- Unresolved: 无阻塞项。**Phase 3 完成规则已全部满足**（同 commit 三平台 hosted 全绿 +
+  Phase 2 遗留表 7/7 关闭 + 4 个 fixture 完成各自 milestone 演进 + semantics.md 覆盖
+  已落地能力 + artifacts 可下载），`status.md` 与 `roadmap.md` 已标记完成。
+  两点留给后续阶段而非挂账：(1) Windows WGPU 收尾段错误在 #66/#68/#69 连续三次未复现，
+  **仍不改判为"已修复"**——三次绿不构成对间歇性失败的证明，只记为"自 run #66 起未再观察到"；
+  (2) 本机 SSH 推送通道依旧不通，后续轮次若需推送应直接走 token+HTTPS，
+  不要在 SSH 上重试（判定命令见 status.md 末尾）。
+- **本轮踩到的协作事故，记下来避免重演**：推送 `b45efea` 成功、CI 已在跑之后，
+  第二次推送被拒（"tip of your current branch is behind"）。查 reflog 发现
+  **同一仓库上还有另一个 agent 会话在跑**（`claude -p`，与本会话同为 Mirasim 子进程，
+  cwd 相同），它在 11:07:51 对 HEAD 做了 `git commit --amend`，把经 CI 验证的
+  `b45efea` 改写成同父的兄弟 commit `8161c0e`（内容仅 `docs/phase3/status.md`）。
+  症状很隐蔽：**同一份文件在会话中途被换掉**——本轮先读到的 M5 行是
+  "123 套件 / 504 测试、28 套件"，后来再读同一行变成 "124 套件 / 527 测试、30 套件"。
+  处理方式是**不 force-push**：`b45efea` 是验收证据所指向的 commit，把它从分支上抹掉
+  会让 status/roadmap 里的链接失去意义。改为 `git reset --hard b45efea` 后用
+  `git checkout <我的 commit> -- docs/` 取回全部文档改动（同时保留了另一会话对
+  M2/M3 行的措辞订正），重新落成一个线性的后继 commit，两个被弃用的 commit
+  各留一个 `backup/*` 分支。**结论：并发 agent 会话共用一个工作树时，
+  `git commit --amend` 是最危险的操作**——它既改写别人正在引用的 commit，
+  又不留下任何工作树痕迹。后续若仍需并发，应约定各自用独立 worktree/分支，
+  或至少禁止对已推送/已进 CI 的 commit 做 amend。

@@ -14,13 +14,15 @@ Phase 1 已完成：扩展后的 VST3 + CLAP + standalone gate 由 run #25（com
 
 进展：transport/timing、latency/tail/offline render、多 bus/sidechain、modulation/per-note expression/voice-info、版本化 state 与迁移已落地，六个里程碑各自在独立 commit 上取得三平台 hosted 绿（run #27/#29/#31/#33/#35/#38），property tests 已进 gate；验收状态与证据见 `docs/phase2/status.md`，两格式语义差异与降级见 `docs/phase2/semantics.md`。**尚未覆盖**：bus 激活/去激活回调、speaker layout 动态协商、runner 宿主侧断言、`migrate_state` 的 backend 接线、`clap.preset-load`/VST3 program list、无界 fuzz——见 status.md 的"M6 遗留项"表，需在 Phase 3 之前单独立项或并入 Phase 3。
 
-## Phase 3：框架、DSP 与组件库
+## Phase 3：框架、DSP 与组件库（已完成）
 
 稳定插件构造 API、参数分组/嵌套/smoothing、effect/instrument templates；建立 filters、envelopes、oscillators、oversampling、mixing、metering 等可组合 DSP 组件，并定义版本兼容策略。
 
-进展：Phase 2 的 7 项遗留已全部收口，参数分组/嵌套与 smoothing、`sunmao/dsp` 的
-filters/envelopes/oscillators/oversampling/mixing/metering 均已落地，各里程碑分别在独立
-commit 上取得三平台 hosted 绿（run #42/#44/#47/#49/#51/#53/#55/#57/#59/#61/#63/#66/#68）。
+进展：**Phase 3 完成**——总验收 [run #69](https://github.com/aizcutei/sunmao/actions/runs/33940874765)
+（commit `b45efea`）在同一 commit 上三平台 hosted native jobs 全绿、每 job 25 步零非成功、
+artifacts 可下载。Phase 2 的 7 项遗留已全部收口，参数分组/嵌套与 smoothing、`sunmao/dsp` 的
+filters/envelopes/oscillators/oversampling/mixing/metering 均已落地，五个里程碑分别在独立
+commit 上取得三平台 hosted 绿（run #41/#42/#44/#47/#49/#51/#53/#55/#57/#59/#61/#63/#66/#68/#69）。
 API 与 state 的兼容策略见 [`docs/phase3/compatibility.md`](phase3/compatibility.md)，
 验收状态与证据见 `docs/phase3/status.md`。"新插件样板 ≤50 行"已达标（effect 42 行、
 instrument 49 行，由 `sunmao/tests/template_size.rs` 机械强制）。

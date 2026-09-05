@@ -1,6 +1,6 @@
 # Phase 3 状态
 
-更新时间：2026-09-04
+更新时间：2026-09-05
 
 ## 目标与边界
 
@@ -52,10 +52,10 @@ M2 的验收方式是 grouped synth 换用分组 + smoothing + template 后测�
 |---|---|---|---|---|
 | M0 脚手架 | 文档、4 fixtures、workspace/CI 骨架 | **完成**（三平台 hosted 全绿） | [run #41](https://github.com/aizcutei/sunmao/actions/runs/33167456623)（commit `9f65af5`）三 job success，"Test Phase 3 acceptance fixtures" 三平台均 success，artifacts 齐备 | — |
 | M1 Phase 2 收口 | 7 项遗留（见 phase2/status.md 遗留表），每项完成即更新该表 | **完成**：7/7 项全部验收（各自三平台 hosted 绿）（第 1 项 bus 激活/去激活回调 11 测试；第 2 项 speaker layout 动态协商 12 测试；第 3 项 runner 宿主侧断言 3 测试 + 套件 16→19、打包 20→24 套件；各自三平台 hosted 全绿）。原盘点（2026-08-28）已确认 `_sys` 层无缺口（`clap_sys::clap_plugin_audio_ports_activation_t`、`audio_ports_config` 全家族、`vst3_sys::IComponent::activate_bus`），缺口在 `_rs`/core，activation 与 `audio_ports_config`（layout 协商）两侧现均已补齐 | 第 1 项：[run #42](https://github.com/aizcutei/sunmao/actions/runs/33171119003)（commit `b78aca6`）；第 2 项：[run #44](https://github.com/aizcutei/sunmao/actions/runs/33174187893)（commit `1478189`）；第 3 项：[run #47](https://github.com/aizcutei/sunmao/actions/runs/33177884493)（commit `0e79bd2`）。三次均三 job success、全部 blocking 步骤零非成功、artifacts 齐备 | M1 七项全部落地后进入 M2（参数分组/smoothing/template） |
-| M2 参数系统与构造 API | 分组/嵌套、smoothing、effect/instrument template | **完成**（三项均三平台 hosted 全绿）（各自三平台 hosted 全绿）。smoothing 的指数 ramp 不终止与 `is_smoothing` 残余偏移两个缺陷由新增 proptest 抓出并修正（详见 progress.md）。自 `_sys` 补起：`vst3_sys` 新增 `IUnitInfo` 绑定（IID 自上游头文件转录），并修正 `clap_rs` 把 `info.module` 无条件清零的既有缺陷 | 分组：[run #57](https://github.com/aizcutei/sunmao/actions/runs/33189876572)（commit `94b3542`）；smoothing：[run #59](https://github.com/aizcutei/sunmao/actions/runs/33192422381)（commit `d0a13d3`）；template：[run #61](https://github.com/aizcutei/sunmao/actions/runs/33194134348)（commit `3374c5f`）。三次均三 job success、零非成功步骤、artifacts 齐备 | — （M2 完成；instrument 模板 86 行未达 ≤50，待 M3 的 oscillator/envelope 落地后重测） |
-| M3 DSP 基础组件 | `sunmao/dsp`：filters/envelopes/oscillators | **完成**：filters/envelopes/oscillators 三家族齐备且三平台 hosted 全绿。filters（三平台 hosted 全绿；一阶/SVF/biquad + 4 proptest；SVF fixture 已换组件实现且**测试零改动**通过；顺带修掉 f32 biquad 低 cutoff DC 增益 14% 失准）。**envelopes/oscillators 已验收**（ADSR/follower、PolyBLEP sine/saw/pulse，+3 proptest；instrument 模板换用组件后 86→81 行，**仍未达 ≤50**，原因见 progress.md） | filters：[run #63](https://github.com/aizcutei/sunmao/actions/runs/33196120193)（commit `9db6ff0`）三 job success、零非成功步骤、artifacts 齐备 | — （M3 完成；进入 M4） |
+| M2 参数系统与构造 API | 分组/嵌套、smoothing、effect/instrument template | **完成**（三项均三平台 hosted 全绿）（各自三平台 hosted 全绿）。smoothing 的指数 ramp 不终止与 `is_smoothing` 残余偏移两个缺陷由新增 proptest 抓出并修正（详见 progress.md）。自 `_sys` 补起：`vst3_sys` 新增 `IUnitInfo` 绑定（IID 自上游头文件转录），并修正 `clap_rs` 把 `info.module` 无条件清零的既有缺陷 | 分组：[run #57](https://github.com/aizcutei/sunmao/actions/runs/33189876572)（commit `94b3542`）；smoothing：[run #59](https://github.com/aizcutei/sunmao/actions/runs/33192422381)（commit `d0a13d3`）；template：[run #61](https://github.com/aizcutei/sunmao/actions/runs/33194134348)（commit `3374c5f`）。三次均三 job success、零非成功步骤、artifacts 齐备 | — （M2 完成。当时 instrument 模板 86 行未达 ≤50；该目标已在 M5 期间收口至 49 行，见 fixture 表与本文件末尾） |
+| M3 DSP 基础组件 | `sunmao/dsp`：filters/envelopes/oscillators | **完成**：filters/envelopes/oscillators 三家族齐备且三平台 hosted 全绿。filters（三平台 hosted 全绿；一阶/SVF/biquad + 4 proptest；SVF fixture 已换组件实现且**测试零改动**通过；顺带修掉 f32 biquad 低 cutoff DC 增益 14% 失准）。**envelopes/oscillators 已验收**（ADSR/follower、PolyBLEP sine/saw/pulse，+3 proptest；instrument 模板换用组件后 86→81 行，当时仍未达 ≤50——**该目标已在 M5 期间收口至 49 行**，靠的是参数默认值 derive、`IS_INSTRUMENT` 与 `MonoVoice`，而不是继续压 DSP） | filters：[run #63](https://github.com/aizcutei/sunmao/actions/runs/33196120193)（commit `9db6ff0`）三 job success、零非成功步骤、artifacts 齐备 | — （M3 完成；进入 M4） |
 | M4 oversampling/mixing/metering | 2x/4x oversampling、dry-wet/增益、peak/RMS metering | **完成**（三平台 hosted 全绿）：`sunmao/dsp` 新增 `oversampling`（2x/4x 级联半带 FIR，33 tap 使 4x 群延迟为整数 24）、`mixing`（dB 换算、`apply_gain`、线性/等功率 `DryWet`）、`metering`（`Meter`/`MeterHandle` 原子发布）三模块 + 7 proptest；两个 fixture 换组件实现；runner 新增第 19 项 `latency_alignment`（两格式读 latency 后以冲激实测峰值帧，容差 1）。proptest 抓出 `EqualPower` 全湿时 `cos(π/2)` 为 -4.4e-8 的负 dry 增益并修正 | [run #68](https://github.com/aizcutei/sunmao/actions/runs/33867319967)（commit `04d036a`）三 job success，每 job 25 步零非成功，"Test Phase 3 acceptance fixtures" 与两个 "Package and exercise ..." 步骤三平台均 success，artifacts `phase1-macOS-ARM64`（52.3MB）、`phase1-Windows-X64`（78.1MB）、`phase1-Linux-X64`（960.1MB）可下载 | — （M4 完成；进入 M5） |
-| M5 版本兼容策略与总验收 | semver/state 兼容文档、proptest/文档收尾 | **进行中**：`docs/phase3/compatibility.md` 落地（API 面 / 破坏性定义 / `sunmao_dsp` 数值语义承诺 / 弃用流程 / state 格式与载入规则 / 何时升 `STATE_VERSION` / 验证方式），README 与 roadmap 已链接；proptest +8 把该文件的 state 与 id 承诺机械钉住（两 `_rs` 各 4 / 3 项 + core 3 项，含 CLAP 端到端"被拒的 state 不触达插件"）。核对代码时修正文档两处失实（CLAP blob 存 plain value 而非归一化值，stepped 参数写步进索引；因此两格式 blob 不通用不只因 magic）。**并修掉一个由 proptest 抓出的真实 DSP 缺陷**：`flush_denormal` 被独立施加到耦合递推的每个状态上会破坏其衰减——`Svf` 归零由 43k 样本劣化到 683 万样本（慢 158 倍），`Biquad` 永久停在 6.2e-20 极限环；两者改为成组 flush（阈值提为 prelude 里的 `DENORMAL_FLOOR`，带 doc-test），并把该测试从"400k 样本后残留 < 1e-18"改写为按各滤波器离散极点半径算预算的 `every_filter_settles_within_its_own_time_constant`，cutoff 改对数均匀采样（原均匀采样命中该角落的概率约 1/4000，这正是缺陷长期潜伏的原因） | 本地：macOS ARM64 123 套件 / 504 测试全绿、Windows 交叉 check、打包 28 套件各 20/20（见 progress.md）——本地证据等级 | 推送后等待三平台 hosted；随后收口 instrument 模板行数目标再做总验收 |
+| M5 版本兼容策略与总验收 | semver/state 兼容文档、proptest/文档收尾 | **完成**（三平台 hosted 全绿）：`docs/phase3/compatibility.md` 落地（API 面 / 破坏性定义 / `sunmao_dsp` 数值语义承诺 / 弃用流程 / state 格式与载入规则 / 何时升 `STATE_VERSION` / 验证方式），README 与 roadmap 已链接；proptest +8 把该文件的 state 与 id 承诺机械钉住（两 `_rs` 各 4 / 3 项 + core 3 项，含 CLAP 端到端"被拒的 state 不触达插件"）。核对代码时修正文档两处失实（CLAP blob 存 plain value 而非归一化值，stepped 参数写步进索引；因此两格式 blob 不通用不只因 magic）。**并修掉一个由 proptest 抓出的真实 DSP 缺陷**：`flush_denormal` 被独立施加到耦合递推的每个状态上会破坏其衰减——`Svf` 归零由 43k 样本劣化到 683 万样本（慢 158 倍），`Biquad` 永久停在 6.2e-20 极限环；两者改为成组 flush（阈值提为 prelude 里的 `DENORMAL_FLOOR`，带 doc-test），并把该测试从"400k 样本后残留 < 1e-18"改写为按各滤波器离散极点半径算预算的 `every_filter_settles_within_its_own_time_constant`，cutoff 改对数均匀采样（原均匀采样命中该角落的概率约 1/4000，这正是缺陷长期潜伏的原因） | [run #69](https://github.com/aizcutei/sunmao/actions/runs/33940874765)（commit `b45efea`）三 job success，每 job 25 步**零非成功**（skip 仅为平台不适用项与未触发的失败诊断上传），"Test Phase 3 acceptance fixtures"、"Test Phase 2 acceptance fixtures"、"Test realtime callback allocation matrix"、两个 "Package and exercise ..." 步骤三平台均 success，artifacts `phase1-macOS-ARM64`（49.9MB）、`phase1-Windows-X64`（74.5MB）、`phase1-Linux-X64`（916.3MB）可下载 | — （M5 完成；**Phase 3 完成**）|
 
 ## 完成规则
 
@@ -98,7 +98,24 @@ artifacts 可下载后，才把本文件状态改为 "Phase 3 完成"。任何�
   Windows WGPU 收尾段错误在本 run 的 "Package and exercise native GUI backends" 上**再次
   未复现**（连续两次绿）——但仍按"间歇性失败单次绿不构成证明"处理，留待 M5 收尾时决定是否
   把该项从"已知 flake"降级为"已修复"。
-- M5 进行中：兼容策略文档与其 proptest 守卫已落地（见 M5 行），等待三平台 hosted。
+- **Phase 3 完成（按上述完成规则）。** Hosted [run #69](https://github.com/aizcutei/sunmao/actions/runs/33940874765)
+  （commit `b45efea`）在同一 commit 上三平台 native jobs 全绿：三个 job 各 25 步、
+  **零非成功步骤**（skip 仅为平台不适用项——Linux GUI 依赖在 macOS/Windows 上跳过、
+  macOS 专属的 AU 符号检查与 system-capture 链接检查在 Linux/Windows 上跳过——
+  以及未触发的 "Upload Phase 1 failure diagnostics"）；Phase 1+2 全部既有 gate 保持
+  blocking 且 success，Phase 3 的 "Test Phase 3 acceptance fixtures" 三平台 success；
+  artifacts `phase1-macOS-ARM64`（49.9MB）、`phase1-Windows-X64`（74.5MB）、
+  `phase1-Linux-X64`（916.3MB）可下载。五个 milestone 各自在**独立 commit** 上取得过
+  三平台 hosted 绿（run #41 / #42–#55 / #57–#61 / #63–#66 / #68 / #69），不是一次性合并验收。
+- run #69 的两项首次覆盖：(a) Windows/Linux **首次**打包并 exercise instrument 模板
+  （`sunmao_template_instrument.dll` / `.so` 均在打包产物中，两格式各一个 runner 套件，
+  打包共 **30 套件各 20/20**，三平台日志零 `FAILED`/`panicked at`）；
+  (b) 收紧后的 note-off 契约（尾巴不得比音本身更响、必须到达静音并保持）在三平台首次运行即通过。
+  模板的 `synth_note_on (peak: 0.491497, offset: 17)` 在 Windows 与 Linux 上与 macOS 本地
+  **逐位相同**，说明 `MonoVoice::render` 的按事件 sample offset 分段渲染跨平台一致。
+- 已知 flake 的处置：Windows WGPU 收尾段错误（run #37）在 run #66/#68/#69 连续**三次**未复现。
+  仍不改判为"已修复"——三次绿不构成对间歇性失败的证明，只把它记为"自 run #66 的
+  不卸载插件库修复以来未再观察到"。若再现，按原计划深入 WGPU/D3D 析构路径，不盲目重试。
 - **M2 的"新插件样板 ≤50 行"已收口**（Phase 3 唯一一条写进 milestone 却长期未满足的目标）：
   instrument 从 81 行降到 **49 行**、effect 从 50 降到 42，靠的是四个对任何插件都有用的
   API 而非删注释——`#[param(default/range/name)]`（derive 据此生成 `Default`）、
@@ -107,4 +124,21 @@ artifacts 可下载后，才把本文件状态改为 "Phase 3 完成"。任何�
   直接断言两者都在预算内。把 instrument 接进打包矩阵后，runner 立刻在真实宿主里抓出两个
   单测看不到的缺陷（模板从未实现 `reset()`；runner 自己的 note-off 断言只接受"瞬间静音"
   的无包络合成器），详见 progress.md。
+- **曾阻塞 ~17 小时的推送问题已解除**（环境，非代码）。此前的诊断"SSH 被丢弃、HTTPS 正常"
+  是对的，但把成因归给 TUN/fake-IP 并不准确，且漏了一条可用通道：Clash Verge 的
+  **mixed-port 7897 一直开着**（`lsof` 看不到它，因为 `verge-mihomo` 以 root 运行，
+  非特权 `lsof` 列不出 root 进程的监听端口——上一轮据此误判"无可用代理出口"）。
+  经该端口的 HTTP CONNECT 与 SOCKS5 都能连通 `ssh.github.com:443`（TCP 握手成功），
+  但 **SSH banner 永不到达**；对 `gitlab.com:22` 现象完全相同，故这不是 GitHub 专属封锁，
+  而是当前出口节点丢弃 SSH 协议流量本身。mihomo 的 `/rules` 与 `/connections` 证实
+  全部 github 域名经 `DomainKeyword,github → 🔰 选择节点 → 🇺🇲 美国Z01 | IEPL`，
+  而同一节点的 HTTPS 完全正常。**结论：`git@github.com:` 这个 remote 在此网络下不可能工作，
+  HTTPS 才是唯一通道。** 最终由用户提供一次性 fine-grained PAT，经环境变量传入
+  credential helper 完成推送（不写入 remote URL、不写入 `.git/config`）；git 的全局
+  `osxkeychain` helper 会顺带把它存进 keychain，已 `security delete-internet-password`
+  清除，`.git/config` 亦确认无 token 残留。
+  **给后续轮次的可执行结论**：若再遇推送失败，先判 SSH 与 HTTPS 哪条通
+  （`curl -o /dev/null -w '%{http_code}' https://api.github.com` 对比 `ssh -T git@github.com`），
+  HTTPS 通则直接走 token+HTTPS，不要在 SSH 上重试数小时；查代理端口用
+  `sudo lsof` 或直接读 Clash 配置里的 `mixed-port`，不要只信非特权 `lsof`。
 - 分支：`phase3/framework-dsp-library`（自 main `2df01ce` 切出）。
