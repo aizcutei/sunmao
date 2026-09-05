@@ -3,7 +3,7 @@
 //! Widgets are the building blocks of the GUI. They handle events,
 //! maintain state, and draw themselves using the GuiContext.
 
-use crate::{Event, GuiContext, Rect};
+use crate::{AccessibleRole, Event, GuiContext, Rect};
 
 /// Unique identifier for a widget
 pub type WidgetId = u64;
@@ -107,6 +107,15 @@ pub trait ParameterWidget: Widget {
 
     /// Register a callback for value changes caused by user interaction.
     fn on_value_changed(&mut self, _callback: Box<dyn Fn(f32) + Send>) {}
+
+    /// How assistive technology should describe this control.
+    ///
+    /// Declared rather than inferred from [`Self::display_value`]: a dropdown
+    /// whose options happen to be `"1"` and `"2"` is still a dropdown, and a
+    /// screen reader that calls it a slider tells the user something false.
+    fn accessible_role(&self) -> AccessibleRole {
+        AccessibleRole::Slider
+    }
 }
 
 /// Container for multiple widgets

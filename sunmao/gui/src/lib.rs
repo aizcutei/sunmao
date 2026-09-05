@@ -22,6 +22,7 @@
 //! └─────────────────────────────────────────────┘
 //! ```
 
+mod accessibility;
 mod binding;
 mod clipboard;
 mod context;
@@ -35,6 +36,7 @@ mod theme;
 mod widget;
 mod widgets;
 
+pub use accessibility::*;
 pub use binding::*;
 pub use clipboard::*;
 pub use context::*;

@@ -118,6 +118,9 @@ pub mod prelude {
 
     #[cfg(feature = "gui")]
     pub use crate::binding::ViewContextHost;
+    pub use sunmao_core::viz::{viz_channel, VizConsumer, VizFrame, VizPublisher};
+    #[cfg(feature = "gui")]
+    pub use sunmao_gui::{accessibility_tree, AccessibleNode, AccessibleRole};
     #[cfg(feature = "gui")]
     pub use sunmao_gui::{
         Alignment, Axis, Button, ButtonType, Color, Column, Direction, Dropdown, Event as GuiEvent,
@@ -127,7 +130,10 @@ pub mod prelude {
         TextVAlign, Theme, Toggle, TtfFont, Widget, WidgetContainer,
     };
     #[cfg(feature = "gui")]
-    pub use sunmao_gui::{Font, GlyphBitmap, GlyphMetrics, GlyphSource, LineMetrics};
+    pub use sunmao_gui::{
+        Clipboard, Font, GlyphBitmap, GlyphMetrics, GlyphSource, LineMetrics, MemoryClipboard,
+        SpectrumAnalyzer, SpectrumSource, StaticSpectrum, MAX_SPECTRUM_BARS,
+    };
 
     #[cfg(feature = "gui-wgpu")]
     pub use sunmao_gui::wgpu::WgpuContext;

@@ -4,15 +4,16 @@
 //! (continuous), a dropdown (discrete), a toggle (boolean), and a spectrum
 //! display (audio→GUI data, not a control).
 //!
-//! Only the knob is a framework widget today. The dropdown, the toggle and the
-//! spectrum are **skeletons living in this crate**, exactly like the Phase 3
-//! fixtures carried inline DSP before `sunmao/dsp` existed. M2 replaces the
-//! dropdown and toggle with framework widgets and declarative layout; M4
-//! replaces `SpectrumPublisher` with the lock-free `VizChannel` and a
-//! `SpectrumAnalyzer` widget. **The acceptance rule is that these tests keep
-//! passing unchanged across those swaps.**
+//! All four now come from the framework. They did not start that way: M0 built
+//! the dropdown, toggle and spectrum as skeletons inside this crate, M2
+//! replaced the first two with framework widgets and declarative layout, and M4
+//! replaced the crate-local publisher with the lock-free `VizChannel` plus a
+//! `SpectrumAnalyzer`. **The acceptance rule was that these tests keep passing
+//! unchanged across those swaps, and they did** — which is what makes the
+//! framework widgets a real substitute for hand-written ones rather than a
+//! parallel implementation that merely compiles.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
 use sunmao::prelude::*;
 
 /// Number of spectrum bands published from the audio thread.
@@ -26,49 +27,13 @@ const BAND_CENTRES_HZ: [f64; SPECTRUM_BANDS] = [
 /// Discrete tone modes, selected by the dropdown.
 pub const MODE_NAMES: [&str; 4] = ["Clean", "Warm", "Bright", "Crush"];
 
-// ============ audio → GUI transport (M4 replaces with VizChannel) ============
+// ============ audio → GUI transport ============
 
-/// Lock-free, allocation-free publisher for spectrum magnitudes.
+/// One frame of spectrum magnitudes.
 ///
-/// One relaxed atomic store per band per block on the audio side; the GUI reads
-/// whenever it paints. A torn read across bands is acceptable here — the values
-/// are for display and the next block corrects it — which is precisely why this
-/// is a skeleton rather than the real `VizChannel`.
-#[derive(Debug)]
-pub struct SpectrumPublisher {
-    bands: [AtomicU32; SPECTRUM_BANDS],
-}
-
-impl Default for SpectrumPublisher {
-    fn default() -> Self {
-        Self {
-            bands: std::array::from_fn(|_| AtomicU32::new(0)),
-        }
-    }
-}
-
-impl SpectrumPublisher {
-    /// Publish one band's magnitude. Called from the audio thread; no
-    /// allocation, no locking.
-    pub fn publish(&self, band: usize, magnitude: f32) {
-        if let Some(slot) = self.bands.get(band) {
-            slot.store(magnitude.to_bits(), Ordering::Relaxed);
-        }
-    }
-
-    /// Read one band's magnitude. Called from the GUI thread.
-    pub fn read(&self, band: usize) -> f32 {
-        self.bands
-            .get(band)
-            .map(|slot| f32::from_bits(slot.load(Ordering::Relaxed)))
-            .unwrap_or(0.0)
-    }
-
-    /// Read every band into a caller-owned array, so the GUI never allocates.
-    pub fn snapshot(&self) -> [f32; SPECTRUM_BANDS] {
-        std::array::from_fn(|band| self.read(band))
-    }
-}
+/// A plain array so `VizChannel` can pre-allocate its slots: the audio thread
+/// must never allocate one.
+pub type SpectrumFrame = [f32; SPECTRUM_BANDS];
 
 // ============ Parameters ============
 
@@ -94,7 +59,14 @@ pub struct WidgetsPlugin {
     params: Arc<WidgetsParams>,
     /// One bandpass per spectrum band, shared across channels.
     analysis: [Svf; SPECTRUM_BANDS],
-    spectrum: Arc<SpectrumPublisher>,
+    /// Audio side of the lock-free display channel. `None` once the editor has
+    /// taken the consumer and the plugin has handed the publisher over.
+    spectrum: VizPublisher<SpectrumFrame>,
+    /// Consumer, parked here until an editor opens. An editor may open before
+    /// or after activation, so the pair is built up front rather than on demand.
+    /// Behind a mutex only because `SunmaoPlugin::view` takes `&self`; the audio
+    /// thread never touches it.
+    spectrum_consumer: Mutex<Option<VizConsumer<SpectrumFrame>>>,
     /// Per-band tone shaping for the `Crush`/`Warm`/`Bright` modes.
     tone: OnePole,
     sample_rate: f64,
@@ -102,10 +74,12 @@ pub struct WidgetsPlugin {
 
 impl Default for WidgetsPlugin {
     fn default() -> Self {
+        let (publisher, consumer) = viz_channel::<SpectrumFrame>();
         Self {
             params: Arc::new(WidgetsParams::default()),
             analysis: std::array::from_fn(|_| Svf::new()),
-            spectrum: Arc::new(SpectrumPublisher::default()),
+            spectrum: publisher,
+            spectrum_consumer: Mutex::new(Some(consumer)),
             tone: OnePole::new(OnePoleKind::Lowpass),
             sample_rate: 48_000.0,
         }
@@ -113,10 +87,13 @@ impl Default for WidgetsPlugin {
 }
 
 impl WidgetsPlugin {
-    /// The publisher handle, obtainable before `initialize` so an editor opened
-    /// ahead of activation still has something to read.
-    pub fn spectrum(&self) -> Arc<SpectrumPublisher> {
-        Arc::clone(&self.spectrum)
+    /// Take the display side of the channel, if it has not been taken already.
+    ///
+    /// Only one editor can read a triple buffer at a time, so a second call
+    /// yields `None` and that editor simply shows nothing rather than racing
+    /// the first for frames.
+    pub fn take_spectrum(&self) -> Option<VizConsumer<SpectrumFrame>> {
+        self.spectrum_consumer.lock().ok()?.take()
     }
 
     fn configure_analysis(&mut self) {
@@ -172,9 +149,7 @@ impl SunmaoPlugin for WidgetsPlugin {
             filter.reset();
         }
         self.tone.reset();
-        for band in 0..SPECTRUM_BANDS {
-            self.spectrum.publish(band, 0.0);
-        }
+        self.spectrum.publish([0.0; SPECTRUM_BANDS]);
     }
 
     fn process(
@@ -227,9 +202,9 @@ impl SunmaoPlugin for WidgetsPlugin {
             }
         }
 
-        for (band, peak) in band_peaks.iter().enumerate() {
-            self.spectrum.publish(band, *peak);
-        }
+        // One publish per block: a display wants the newest frame, and the
+        // triple buffer makes this a store plus a swap with no allocation.
+        self.spectrum.publish(band_peaks);
 
         ProcessStatus::Normal
     }
@@ -242,11 +217,14 @@ impl SunmaoPlugin for WidgetsPlugin {
             scale_policy: WindowScalePolicy::SystemScaleFactor,
             background: Color::rgb(0.10, 0.10, 0.15),
         };
-        let spectrum = self.spectrum();
-        // The builder may run more than once, so each call gets its own handle
-        // onto the same publisher.
+        // `view()` takes `&self`, so the consumer is handed over through a
+        // slot the builder drains. The builder may run more than once; only the
+        // first call gets the consumer, and a second editor shows a static
+        // display rather than racing the first for frames.
+        let slot = Arc::new(Mutex::new(self.take_spectrum()));
         let view = BaseviewView::new(config, move |context| {
-            WidgetsViewState::new(context, Arc::clone(&spectrum), 420.0, 260.0)
+            let consumer = slot.lock().ok().and_then(|mut slot| slot.take());
+            WidgetsViewState::new(context, consumer, 420.0, 260.0)
         });
         Some(Box::new(view))
     }
@@ -267,33 +245,23 @@ impl SunmaoPlugin for WidgetsPlugin {
     }
 }
 
-// ============ Spectrum display (M4 replaces with VizChannel) ============
-
-/// Spectrum display. M4 replaces this with `SpectrumAnalyzer` + `VizChannel`.
+/// Bridges the lock-free channel to the widget's pull-based source.
 ///
-/// The toggle and dropdown that used to live here alongside it are gone: M2
-/// landed real framework widgets, so the editor below uses `Toggle` and
-/// `Dropdown` from `sunmao_gui` instead.
-pub struct SpectrumSkeleton {
-    pub bounds: Rect,
-    source: Arc<SpectrumPublisher>,
-}
+/// Holding `None` is legal: a second editor, or one opened after the consumer
+/// was taken, shows an empty display instead of racing the first for frames.
+struct ChannelSource(Option<VizConsumer<SpectrumFrame>>);
 
-impl SpectrumSkeleton {
-    pub fn new(source: Arc<SpectrumPublisher>) -> Self {
-        Self {
-            bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
-            source,
-        }
-    }
-
-    /// Bar heights in the range `0.0..=1.0`, newest values each call.
-    pub fn bars(&self) -> [f32; SPECTRUM_BANDS] {
-        let mut bars = self.source.snapshot();
-        for bar in &mut bars {
-            *bar = bar.clamp(0.0, 1.0);
-        }
-        bars
+impl SpectrumSource for ChannelSource {
+    fn fill(&mut self, out: &mut [f32]) -> usize {
+        let Some(consumer) = self.0.as_mut() else {
+            return 0;
+        };
+        // `latest` keeps returning the last frame when the audio thread has
+        // published nothing new, so the display holds rather than blinking.
+        let frame = consumer.latest();
+        let count = frame.len().min(out.len());
+        out[..count].copy_from_slice(&frame[..count]);
+        count
     }
 }
 
@@ -309,14 +277,14 @@ struct WidgetsViewState {
     /// there is no per-control callback code in this file at all.
     controls: Stack,
     binder: ParamBinder,
-    spectrum: SpectrumSkeleton,
+    spectrum: SpectrumAnalyzer,
     theme: Theme,
 }
 
 impl WidgetsViewState {
     fn new(
         context: Arc<dyn ViewContext>,
-        spectrum: Arc<SpectrumPublisher>,
+        consumer: Option<VizConsumer<SpectrumFrame>>,
         width: f32,
         height: f32,
     ) -> Self {
@@ -340,11 +308,21 @@ impl WidgetsViewState {
         let mut state = Self {
             controls,
             binder: ParamBinder::new(ViewContextHost::shared(context)),
-            spectrum: SpectrumSkeleton::new(spectrum),
+            spectrum: SpectrumAnalyzer::new(Box::new(ChannelSource(consumer))).with_theme(theme),
             theme,
         };
         state.relayout(width, height);
         state
+    }
+
+    /// Describe the editor to assistive technology.
+    ///
+    /// A platform bridge (UI Automation, NSAccessibility, AT-SPI) calls this
+    /// and walks the result; none is implemented yet, so today this is what
+    /// proves the description is correct for a real editor rather than a
+    /// synthetic one.
+    fn accessibility(&mut self) -> AccessibleNode {
+        accessibility_tree(&mut self.controls, WidgetsPlugin::NAME)
     }
 
     fn relayout(&mut self, width: f32, height: f32) {
@@ -353,12 +331,12 @@ impl WidgetsViewState {
         self.controls
             .layout(Rect::new(0.0, 0.0, width, control_height));
         let top = control_height;
-        self.spectrum.bounds = Rect::new(
+        self.spectrum.set_bounds(Rect::new(
             16.0,
             top,
             (width - 32.0).max(0.0),
             (height - top - 16.0).max(0.0),
-        );
+        ));
     }
 }
 
@@ -370,26 +348,8 @@ impl ViewState for WidgetsViewState {
         ctx.fill_rect(0.0, 0.0, width, height, Fill::Solid(self.theme.background));
 
         // Spectrum first, so an open dropdown paints over it.
-        let s = self.spectrum.bounds;
-        ctx.fill_rect(
-            s.x,
-            s.y,
-            s.width,
-            s.height,
-            Fill::Solid(Color::rgb(0.07, 0.07, 0.11)),
-        );
-        let bars = self.spectrum.bars();
-        let slot = s.width / SPECTRUM_BANDS as f32;
-        for (index, bar) in bars.iter().enumerate() {
-            let bar_height = s.height * bar;
-            ctx.fill_rect(
-                s.x + slot * index as f32 + 2.0,
-                s.y + s.height - bar_height,
-                (slot - 4.0).max(1.0),
-                bar_height,
-                Fill::Solid(self.theme.accent),
-            );
-        }
+        self.spectrum.refresh();
+        self.spectrum.draw(ctx);
 
         self.controls.draw(ctx);
     }
@@ -523,16 +483,18 @@ mod tests {
     fn spectrum_is_published_from_the_audio_thread() {
         let mut plugin = WidgetsPlugin::default();
         plugin.initialize(48_000.0, 2048);
-        let handle = plugin.spectrum();
+        let mut consumer = plugin
+            .take_spectrum()
+            .expect("the consumer is available once");
         // Silence first: nothing to show.
         render(&mut plugin, &[0.0; 2048]);
-        assert!(handle.snapshot().iter().all(|band| *band < 1e-4));
+        assert!(consumer.latest().iter().all(|band| *band < 1e-4));
 
         // A 4 kHz tone should light band 5 (centre 4 kHz) more than band 0
         // (centre 60 Hz).
         let tone = sine(4_000.0, 48_000.0, 4096);
         render(&mut plugin, &tone);
-        let bands = handle.snapshot();
+        let bands = consumer.latest();
         assert!(
             bands[5] > bands[0] * 4.0,
             "4 kHz tone did not concentrate in its band: {bands:?}"
@@ -543,22 +505,26 @@ mod tests {
     fn reset_clears_the_published_spectrum() {
         let mut plugin = WidgetsPlugin::default();
         plugin.initialize(48_000.0, 2048);
-        let handle = plugin.spectrum();
+        let mut consumer = plugin
+            .take_spectrum()
+            .expect("the consumer is available once");
         render(&mut plugin, &sine(1_800.0, 48_000.0, 2048));
-        assert!(handle.snapshot().iter().any(|band| *band > 1e-3));
+        assert!(consumer.latest().iter().any(|band| *band > 1e-3));
         plugin.reset();
-        assert!(handle.snapshot().iter().all(|band| *band == 0.0));
+        assert!(consumer.latest().iter().all(|band| *band == 0.0));
     }
 
+    /// Only one editor can read a triple buffer. A second must get nothing
+    /// rather than racing the first for frames — the display would then flicker
+    /// between two consumers, each stealing the other's newest frame.
     #[test]
-    fn spectrum_bars_are_clamped_for_display() {
-        let publisher = Arc::new(SpectrumPublisher::default());
-        publisher.publish(0, 4.0);
-        publisher.publish(1, -1.0);
-        let skeleton = SpectrumSkeleton::new(Arc::clone(&publisher));
-        let bars = skeleton.bars();
-        assert_eq!(bars[0], 1.0);
-        assert_eq!(bars[1], 0.0);
+    fn only_the_first_editor_receives_the_display_channel() {
+        let plugin = WidgetsPlugin::default();
+        assert!(plugin.take_spectrum().is_some());
+        assert!(
+            plugin.take_spectrum().is_none(),
+            "a second editor also took the consumer"
+        );
     }
 
     #[test]
@@ -602,10 +568,10 @@ mod tests {
             }
         }
 
-        let publisher = Arc::new(SpectrumPublisher::default());
+        let (_publisher, consumer) = viz_channel::<SpectrumFrame>();
         let mut state = WidgetsViewState::new(
             Arc::new(StubContext) as Arc<dyn ViewContext>,
-            publisher,
+            Some(consumer),
             420.0,
             260.0,
         );
@@ -635,7 +601,71 @@ mod tests {
         }
         // The spectrum sits below the controls, not on top of them.
         let last = rects.last().unwrap();
-        assert!(state.spectrum.bounds.y >= last.y + last.height - 16.0);
+        assert!(state.spectrum.bounds().y >= last.y + last.height - 16.0);
+    }
+
+    /// A custom-drawn editor is one opaque rectangle to a screen reader unless
+    /// it describes itself. This asserts the description a platform bridge
+    /// would publish for the real editor, not a synthetic one.
+    #[test]
+    fn the_editor_describes_itself_to_assistive_technology() {
+        struct StubContext;
+        impl ViewContext for StubContext {
+            fn get_param(&self, _id: &str) -> Option<f32> {
+                None
+            }
+            fn set_param(&self, _id: &str, _value: f32) {}
+            fn begin_edit(&self, _id: &str) {}
+            fn end_edit(&self, _id: &str) {}
+            fn request_resize(&self, _width: u32, _height: u32) -> bool {
+                false
+            }
+        }
+
+        let (_publisher, consumer) = viz_channel::<SpectrumFrame>();
+        let mut state = WidgetsViewState::new(
+            Arc::new(StubContext) as Arc<dyn ViewContext>,
+            Some(consumer),
+            420.0,
+            260.0,
+        );
+
+        let tree = state.accessibility();
+        assert_eq!(tree.label, WidgetsPlugin::NAME);
+        assert_eq!(tree.role, AccessibleRole::Group);
+
+        let described: Vec<(&str, AccessibleRole)> = tree
+            .children
+            .iter()
+            .map(|node| (node.label.as_str(), node.role))
+            .collect();
+        assert_eq!(
+            described,
+            vec![
+                ("gain", AccessibleRole::Slider),
+                ("mode", AccessibleRole::ComboBox),
+                ("bypass", AccessibleRole::CheckBox),
+            ],
+            "the editor would be announced wrongly"
+        );
+
+        // Every control reports a position a bridge can hit-test and a value it
+        // can speak.
+        for node in &tree.children {
+            assert!(node.bounds.width > 0.0 && node.bounds.height > 0.0);
+            assert!(
+                !node.value.is_empty(),
+                "{} has nothing to speak",
+                node.label
+            );
+            assert!(node.normalized.is_some_and(|v| (0.0..=1.0).contains(&v)));
+        }
+
+        // Focus is reported, so a screen reader can follow the keyboard.
+        state.controls.set_focus(Some(1));
+        let tree = state.accessibility();
+        assert!(tree.children[1].focused);
+        assert_eq!(tree.children.iter().filter(|n| n.focused).count(), 1);
     }
 
     #[test]

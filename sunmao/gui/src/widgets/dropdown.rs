@@ -354,6 +354,10 @@ impl ParameterWidget for Dropdown {
         self.selected_label().to_string()
     }
 
+    fn accessible_role(&self) -> crate::AccessibleRole {
+        crate::AccessibleRole::ComboBox
+    }
+
     /// Accepts an option label, so a value copied out of one dropdown pastes
     /// back meaningfully. A bare number is still accepted as the normalized
     /// form.

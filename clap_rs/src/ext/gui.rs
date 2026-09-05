@@ -125,6 +125,13 @@ pub trait GuiHandler {
         false
     }
 
+    /// The window title the host suggests for a floating editor.
+    ///
+    /// Hosts call this so a floating window can read "Track 3 — SunMao Reverb"
+    /// rather than just the plugin name. Ignoring it is allowed by the spec,
+    /// but the plugin has to be *told* before it can decide.
+    fn gui_suggest_title(&mut self, _title: &str) {}
+
     /// Show the GUI
     fn gui_show(&mut self) -> bool {
         false
@@ -364,10 +371,26 @@ pub(crate) unsafe extern "C" fn gui_set_transient<P: Plugin + GuiHandler>(
 }
 
 pub(crate) unsafe extern "C" fn gui_suggest_title<P: Plugin + GuiHandler>(
-    _plugin: *const clap_plugin_t,
-    _title: *const c_char,
+    plugin: *const clap_plugin_t,
+    title: *const c_char,
 ) {
-    // Optional: plugins can ignore this
+    // Previously a stub, so a host's suggested title was silently dropped and
+    // the plugin could never act on it.
+    if title.is_null() {
+        return;
+    }
+    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
+        return;
+    };
+    // A non-UTF-8 title is dropped rather than lossily converted: showing a
+    // mangled track name is worse than showing the plugin's own.
+    let Ok(title) = (unsafe { CStr::from_ptr(title) }).to_str() else {
+        return;
+    };
+    let instance = unsafe { &*instance_ptr };
+    ffi_guard((), || unsafe {
+        instance.controller_mut().gui_suggest_title(title)
+    });
 }
 
 pub(crate) unsafe extern "C" fn gui_show<P: Plugin + GuiHandler>(

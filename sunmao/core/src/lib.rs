@@ -9,6 +9,7 @@ pub mod params;
 pub mod plugin;
 pub mod smoothing;
 pub mod view;
+pub mod viz;
 
 // Re-exports for convenience
 pub use audio::AudioBuffer;
@@ -23,6 +24,7 @@ pub use view::{
     ParamsViewContext, ParentWindow, StandaloneViewOptions, StandaloneViewResult, SunmaoView,
     ViewContext, ViewHandle, ViewKey, ViewKeyCode,
 };
+pub use viz::{viz_channel, VizChannel, VizConsumer, VizFrame, VizPublisher};
 
 /// Common imports for SunMao plugins.
 pub mod prelude {

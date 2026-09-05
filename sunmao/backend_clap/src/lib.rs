@@ -559,6 +559,8 @@ pub struct SunmaoClapWrapper<P: SunmaoPlugin> {
     active_tail: u32,
     // GUI State
     view_handle: Option<MainThreadViewHandle>,
+    /// Title the host suggested for a floating editor, if it asked.
+    suggested_title: Option<String>,
     gui_api: Option<GuiApi>,
     host: HostHandle,
     param_descriptors: Vec<ParamDescriptor>,
@@ -664,6 +666,7 @@ impl<P: SunmaoPlugin> Plugin for SunmaoClapWrapper<P> {
             active_latency: 0,
             active_tail: 0,
             view_handle: None,
+            suggested_title: None,
             gui_api: None,
             host,
             param_descriptors,
@@ -1171,6 +1174,16 @@ impl<P: SunmaoPlugin> GuiHandler for SunmaoClapWrapper<P> {
             can_resize_vertically: self.gui_can_resize(),
             ..GuiResizeHints::default()
         }
+    }
+
+    /// Remember the title the host suggests.
+    ///
+    /// It has nowhere to be shown yet — SunMao declines floating editors, and
+    /// an embedded one has no title bar of its own — but recording it means a
+    /// floating window can adopt it the moment one exists, and it makes the
+    /// host's call observable instead of vanishing.
+    fn gui_suggest_title(&mut self, title: &str) {
+        self.suggested_title = Some(title.to_string());
     }
 
     fn gui_set_size(&mut self, width: u32, height: u32) -> bool {
@@ -3738,6 +3751,34 @@ mod tests {
     /// in `vst3_rs`, and both formats are exercised against real hosts by the
     /// runner's `gui_scale_negotiation` suite. CLAP is the only side that has to
     /// narrow, because it carries the factor as `f64` where VST3 uses `f32`.
+
+    /// `suggest_title` used to be a stub in `clap_rs`, so a host's title was
+    /// silently dropped. It now reaches the plugin, and a floating editor is
+    /// declined with the reason recorded in semantics.md rather than opened on
+    /// a path that would block the host's main thread.
+    #[test]
+    fn a_suggested_title_reaches_the_plugin_and_floating_is_declined() {
+        let mut host_state = NotificationHostState::default();
+        let raw_host = notification_host(&mut host_state);
+        let host = unsafe { HostHandle::from_raw(&raw_host) };
+        let mut wrapper = <SunmaoClapWrapper<PanickingViewPlugin> as Plugin>::new(host);
+
+        assert_eq!(wrapper.suggested_title, None);
+        wrapper.gui_suggest_title("Track 3 — SunMao");
+        assert_eq!(wrapper.suggested_title.as_deref(), Some("Track 3 — SunMao"));
+
+        // Floating is refused for every API, and refused consistently by both
+        // the query and the create call — a host must not be told yes and then
+        // handed a failure.
+        for api in [GuiApi::Cocoa, GuiApi::Win32, GuiApi::X11] {
+            assert!(
+                !wrapper.is_api_supported(api, true),
+                "{api:?} claimed floating support"
+            );
+            assert!(!wrapper.gui_create(api, true), "{api:?} opened floating");
+        }
+    }
+
     #[test]
     fn clap_scale_narrows_f64_and_reports_no_editor_as_unsupported() {
         let mut host_state = NotificationHostState::default();

@@ -372,3 +372,53 @@
   accessibility 树、floating CLAP editor）。M3 遗留两项已记在 status.md：
   (1) 无默认字体，`draw_text` 在调用方经 `GlContext::set_font` 提供字体前不出字形；
   (2) wgpu/WebView 后端不排空宿主键盘队列。
+
+### 2026-09-06 — M4 本地完成：VizChannel、SpectrumAnalyzer、accessibility 树；两项如实标记受阻
+
+- Command/platform: macOS ARM64 本地。`cargo fmt --all -- --check`、`git diff --check`、
+  `cargo metadata --locked`、`RUSTFLAGS=-Awarnings cargo test --locked`（不走管道）、
+  `cargo check --locked --workspace --target x86_64-pc-windows-msvc`、
+  `tools/package_examples.sh --debug --test`。
+- Change:
+  - **`sunmao_core::viz` 三缓冲 `VizChannel`**：生产者恒有空槽可写、消费者恒有完整槽可读，
+    `publish` 是一次 store + 一次 swap，无分配无锁无无界循环。`FRESH` 位与索引挤在同一个
+    原子字里，因此发布与消费各是**单次原子操作**。选三缓冲而不是队列是因为显示要的是
+    **最新帧**——GUI 以 60Hz 重绘而 audio 每块发布，丢掉中间帧是正确行为而非丢数据。
+    5 个测试：零分配（1000 次 publish）、最新帧胜出、三索引恒互异的不变量、
+    `latest()` 在无新帧时重复上一帧（而不是闪回 default）、**跨真实线程**的撕裂读检测。
+  - **`SpectrumAnalyzer`**：峰值即起、按 falloff 衰减（看不见的峰值等于没有），
+    NaN/越界收敛（削波显示为满刻度而不是空表——反过来正是最糟的失效方式），
+    源长于显示时截断。显示件**从不消费事件**，点击穿透到它背后的控件。
+  - **accessibility 树**：`accessibility_tree()` → `AccessibleNode`
+    （role/label/可朗读值/归一化值/bounds/focus/disabled）。这是 UIA、NSAccessibility、
+    AT-SPI 三家共同需要、也是唯一值得测试的那一层。role 由
+    `ParameterWidget::accessible_role()` **声明**而非从显示文本推断——
+    选项恰好是 `"1"`/`"2"` 的下拉仍是下拉。
+  - **`clap_rs` 的 `suggest_title` 由静默 stub 改为真实转发**：宿主建议的标题此前被
+    完全丢弃、插件永远无从知晓；现在解码后经 `GuiHandler::gui_suggest_title` 送达
+    （非 UTF-8 **丢弃而不做有损转换**）。
+  - fixture 从 crate 内 `SpectrumPublisher` 换成 `VizChannel` + `SpectrumAnalyzer`，
+    **M0 起的测试语义未改**，零分配断言现在覆盖 `VizPublisher::publish`。
+- Result: `cargo test --locked` **exit 0，128 套件 / 656 测试**（M3 为 127/631）；
+  fmt / diff / metadata / Windows target check 全过。
+- Evidence/artifact: `/tmp/full.log`、`/tmp/win.log`、`/tmp/pkg_m4.log`。
+- **两个自身缺陷由测试抓出，如实记录**（都不是"顺手改了改"）:
+  1. `impl SpectrumSource for Vec<f32>` **打断了一个无关示例的编译**：该 trait 在 prelude 里，
+     于是每个插件的每个 `Vec<f32>` 都多出一个 `fill` 方法并**遮蔽 `slice::fill`**
+     （`sunmao_fx_tempo_delay` 的 `line.fill(0.0)` 直接类型错误）。固有方法优先级救不了这种情况:
+     trait impl 直接落在 `Vec<f32>` 上、无需 deref，因此赢得方法解析。改成 newtype
+     `StaticSpectrum`。**教训：不要给 prelude 里的 trait 在 `Vec`/数组这类无处不在的外部类型上开 impl。**
+  2. accessibility 树对非参数子节点**硬编码 `focused: false`**，而 `Stack::set_focus` 只做
+     索引边界检查、显示件同样能拿到焦点 → 树说"无焦点"、stack 说"焦点在 0"。
+     由 proptest `focus_is_reported_exactly_once_and_matches_the_stack` shrink 出
+     "只含一个 Display 的编辑器" 这个最小反例抓到。**单元测试抓不到**（手写编辑器里显示件
+     总在最后）。修法是让树如实镜像 stack，而不是改 `Stack` 已三平台验收过的焦点语义。
+- Unresolved（**M4 有两项没有交付，这是决策项不是遗漏**，详见 status.md「M4 受阻项」）:
+  - **floating CLAP editor 受阻于 baseview**：`is_floating` 如实回 `false`。vendored baseview
+    只有 `open_parented` 与**阻塞式** `open_blocking`，在 `gui_show` 里调用后者会卡死宿主主线程。
+    要交付得先给 baseview 加"非阻塞顶层窗口"模式并在 Win32/AppKit/X11 各实现一遍事件泵归属。
+  - **accessibility 的 OS 桥接未做**：框架侧的树已完成并测试（6 单测 + 4 proptest +
+    1 doc-test + fixture 断言），但把树发布给 UIA / NSAccessibility / AT-SPI 是三份互不复用的
+    原生实现。**runner 无法验收这一项**：runner 经 VST3/CLAP 插件 API 驱动，而两个格式都
+    没有 accessibility 通道——它走 OS API，必须先有桥接才存在可被 hosted job 断言的宿主可见行为。
+    （runner 里既有的 UIA helper 是测试侧拖动宿主滑块的工具，不是插件侧实现，不能复用为验收手段。）

@@ -258,6 +258,10 @@ impl ParameterWidget for Toggle {
         if self.is_on() { "On" } else { "Off" }.to_string()
     }
 
+    fn accessible_role(&self) -> crate::AccessibleRole {
+        crate::AccessibleRole::CheckBox
+    }
+
     /// Accepts what `display_value` produces, plus the numeric form a
     /// continuous control would paste.
     fn set_from_text(&mut self, text: &str) -> bool {

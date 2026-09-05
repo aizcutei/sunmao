@@ -6,6 +6,7 @@
 //! - Button: Toggle or momentary button
 //! - Toggle: Boolean switch
 //! - Dropdown: Discrete choice
+//! - SpectrumAnalyzer: audio->GUI bar display
 //! - Label: Text display
 
 mod button;
@@ -13,6 +14,7 @@ mod dropdown;
 mod knob;
 mod label;
 mod slider;
+mod spectrum;
 mod toggle;
 
 pub use button::{Button, ButtonType};
@@ -20,6 +22,7 @@ pub use dropdown::Dropdown;
 pub use knob::Knob;
 pub use label::Label;
 pub use slider::{Orientation, Slider};
+pub use spectrum::{SpectrumAnalyzer, SpectrumSource, StaticSpectrum, MAX_SPECTRUM_BARS};
 pub use toggle::Toggle;
 
 use std::sync::atomic::{AtomicU64, Ordering};
