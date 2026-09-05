@@ -294,3 +294,22 @@
   - **M3 仍有未做项**：GL 后端把字形上传为纹理并真正绘制（`draw_text` 仍是空实现，
     度量已真实）、clipboard、wgpu/WebView 后端的宿主键盘队列排空。这三项如实列为遗留，
     不算 M3 完成。
+
+### 2026-09-05 — M3 下半修复：run #81 三平台同步失败，非 flake
+
+- Command/platform: run #81（commit `8588c39`）**三平台同时**在 "Package and exercise
+  native GUI backends" 失败。三平台同步失败即排除 flake，是本轮代码问题。
+- 根因（读 macOS job 日志得到确切一行）：`GUI key did not reach a parameter: Gain stayed at 0`,
+  被测插件是 **`SunMao Gain GL`**。我把"该格式提供宿主键盘转发"当成了"这个编辑器会处理键盘"。
+  Phase 1/2 的 8 个 GUI 示例都是手写 view、没有 `on_keyboard_event`，按键在那里**本来就该
+  什么都不做**——断言却要求参数变化，于是它们因为行为正确而被判失败。
+- Change: 键盘断言改为只对声明了键盘处理的编辑器生效（`info().name.contains("Widgets")`），
+  与 runner 既有先例同形——`latency_alignment` 也只测 `OS Distortion`，因为只有它具备被测性质。
+  其余插件打印"该编辑器未声明键盘处理，跳过"。
+- Result: 本地把 CI 的实际矩阵**逐一复现**：`GainGL.vst3`/`GainGL.clap` 均 exit 0 且走跳过路径，
+  `WidgetsGL.vst3` exit 0 且 `Gain moved 0 -> 1`，`WidgetsGL.clap` exit 0 且走格式跳过路径。
+- Evidence/artifact: `/tmp/fix_GainGL.vst3.log` 等四份本地日志。
+- Unresolved / 这轮的教训:
+  **推送前的本地验证只覆盖了新 fixture，没覆盖 GUI 矩阵里另外 8 个插件。** 那 8 个只在
+  hosted GUI 步骤里跑（需要显示器），本地不会自动触发，我也没有推理"这一步实际测哪些插件"。
+  以后凡是改动 `gui-test` 共享路径，本地必须至少手动跑一个**新 fixture之外**的 GUI 插件。
