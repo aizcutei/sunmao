@@ -41,6 +41,10 @@ gui-webview = [
     "dep:sunmao_view_baseview",
     "sunmao_view_baseview/webview",
 ]
+# Publish the editor's accessibility tree through AccessKit, which owns the
+# native UI Automation / NSAccessibility / AT-SPI bridges. Off by default: it
+# is a real dependency surface and the tree is useful without it.
+accessibility = ["gui", "sunmao_gui/accessibility"]
 
 [dev-dependencies]
 proptest = "1.11.0"

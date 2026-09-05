@@ -13,9 +13,13 @@ serde = { version = "1.0", features = ["derive"], optional = true }
 serde_json = { version = "1.0", optional = true }
 fontdue = { version = "0.9", optional = true }
 arboard = { version = "3", optional = true, default-features = false }
+accesskit = { version = "0.25", optional = true }
 
 [dev-dependencies]
 proptest = "1.11.0"
+# The AccessKit property test needs the types even when the feature is off,
+# because `cargo test` builds every integration test target.
+accesskit = "0.25"
 # Real font bytes for the rasterizer tests. Already in the workspace lockfile
 # via eframe, so this costs no extra download and vendors no blob here.
 epaint_default_fonts = "0.33.3"
@@ -31,3 +35,12 @@ text = ["dep:fontdue"]
 # Platform clipboard. Off by default so a plugin that never copies text does
 # not link an X11/AppKit/Win32 clipboard connection.
 clipboard = ["dep:arboard"]
+# Translate the accessibility tree into AccessKit, which owns the three native
+# bridges (UI Automation, NSAccessibility, AT-SPI) SunMao would otherwise have
+# to write and maintain itself.
+#
+# Off by default, deliberately. AccessKit is a real dependency surface — the
+# Linux adapter alone pulls a D-Bus stack — and the tree in `accessibility.rs`
+# is useful without it. A plugin that wants screen-reader support opts in; one
+# that does not ships nothing extra. Same reasoning as `text` and `clipboard`.
+accessibility = ["dep:accesskit"]

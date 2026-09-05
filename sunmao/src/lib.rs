@@ -119,6 +119,8 @@ pub mod prelude {
     #[cfg(feature = "gui")]
     pub use crate::binding::ViewContextHost;
     pub use sunmao_core::viz::{viz_channel, VizConsumer, VizFrame, VizPublisher};
+    #[cfg(feature = "accessibility")]
+    pub use sunmao_gui::accesskit_update;
     #[cfg(feature = "gui")]
     pub use sunmao_gui::{accessibility_tree, AccessibleNode, AccessibleRole};
     #[cfg(feature = "gui")]

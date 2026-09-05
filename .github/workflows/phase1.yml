@@ -337,6 +337,31 @@ jobs:
           done
           cargo build --locked "${fixtures[@]/#/--package=}"
 
+      - name: Test the accessibility feature
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `accessibility` is off by default, so the default `cargo test` above
+          # never compiles it. Without this step the AccessKit translation and
+          # its property tests would be dead code on every platform — the same
+          # trap run #82 fell into, where a fixture was packaged but never
+          # actually exercised.
+          echo "::group::cargo test -p sunmao_gui --features accessibility"
+          set +e
+          cargo test --locked -p sunmao_gui --features accessibility 2>&1 \
+            | tee -a target/phase1-artifacts/phase4-accessibility.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            summary="$(tail -n 25 target/phase1-artifacts/phase4-accessibility.log | tr '\n' ' ' | cut -c1-1200)"
+            echo "::error title=Accessibility feature test failed::exited with status $status: $summary"
+            exit "$status"
+          fi
+          echo "::endgroup::"
+          # The facade must also build with the feature, so a plugin can turn it
+          # on through `sunmao` rather than reaching into `sunmao_gui`.
+          cargo build --locked -p sunmao --features accessibility
+
       - name: Test macOS system-capture linkage (non-blocking follow-up)
         if: runner.os == 'macOS'
         continue-on-error: true

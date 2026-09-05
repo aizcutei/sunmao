@@ -23,6 +23,8 @@
 //! ```
 
 mod accessibility;
+#[cfg(feature = "accessibility")]
+mod accessibility_accesskit;
 mod binding;
 mod clipboard;
 mod context;
@@ -37,6 +39,8 @@ mod widget;
 mod widgets;
 
 pub use accessibility::*;
+#[cfg(feature = "accessibility")]
+pub use accessibility_accesskit::*;
 pub use binding::*;
 pub use clipboard::*;
 pub use context::*;

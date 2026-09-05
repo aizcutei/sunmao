@@ -563,3 +563,37 @@
   无法验收——需要 Phase 5 的交互式 host；Windows 侧或可复用既有 UIA helper 反向查询）；
   (2) baseview 的 Wayland 后端（`wl_surface`/`xdg_shell`/EGL/`wl_seat`+xkbcommon/`wl_output`，
   且 CI 需装无头 compositor 才谈得上验收，Ubuntu job 现在跑的是 Xvfb ＝ X11）。
+
+### 2026-09-06 — accessibility 第二层：到 AccessKit 的翻译（同样是纠正一次过重的判断）
+
+- Command/platform: macOS ARM64。
+- **又一次判断过重，如实记下。** 上一轮我把 accessibility 记为"需要 UIA /
+  NSAccessibility / AT-SPI 三份互不复用的原生实现"。事实是
+  [AccessKit](https://github.com/AccessKit/accesskit)（MIT/Apache-2.0，MSRV 1.85）
+  已经在维护那三个适配器，egui 与 winit 都在用。**SunMao 需要写的只是数据映射。**
+  与 floating 那次是同一个毛病：先断言规模，后核实。这次核实的方式是 `cargo search` +
+  读 `accesskit-0.25.0/src/lib.rs` 的真实定义（`TreeUpdate` 需要 `tree_id`、
+  `Tree` 已 deprecate 为 `TreeInfo`——**docs.rs 摘要漏了前者，是源码补上的**）。
+- Change:
+  - `sunmao_gui` 新增 `accesskit_update(&AccessibleNode) -> accesskit::TreeUpdate`，
+    放在 **off-by-default 的 `accessibility` feature** 后（与 `text`/`clipboard` 同理，
+    也合本项目"AU 不进默认 feature"的既有约定）。只新增 2 个 crate：`accesskit` + `uuid`。
+  - 映射要点：role 保守对应（`Graphic → Role::Image`，AccessKit 无 meter，读作"存在、
+    可描述、不可交互"）；归一化值**连同 min/max 一起写**，否则屏幕阅读器算不出百分比；
+    **非有限值直接不写**，否则会被念成乱码；id 深度优先分配且父节点先占位再递归，
+    因此子节点永远拿不到父节点的 id。
+  - 4 条 proptest 钉住 AccessKit 的树形约束（它对此很严格）：唯一 id、每个非根节点恰好被
+    一个父节点认领、无自环、focus 必指向存在的节点。
+  - `sunmao` facade 同名 feature + prelude 导出 `accesskit_update`（带 doc-test）。
+  - **CI 新增 blocking 步骤 "Test the accessibility feature"**（每 job 26→27 步）。
+    这一步不能省：默认 `cargo test` 不编译该 feature，不单开就等于三平台上全是死代码——
+    run #82 已经踩过一次"进了矩阵却没真跑"的坑。
+- Result: 默认 `cargo test --locked` exit 0，**129 套件 / 662 测试**；
+  feature-on `cargo test -p sunmao_gui --features accessibility` exit 0，
+  **95 + 4 + 4 + 10 + 5 测试**（含 7 个 accesskit 单测、4 条 accesskit proptest、doc-test）；
+  Windows target check（带 feature）exit 0；fmt / diff / metadata 全过。
+- Evidence/artifact: `/tmp/ak.log`、`/tmp/ak_feat.log`。
+- Unresolved: **还差最后一层**——把 `TreeUpdate` 交给 `accesskit_windows`/`_macos`/`_unix`
+  并接进 baseview 三个后端的窗口生命周期。runner 侧的验收手段已经存在（既有 UIA helper
+  用的正是 `IUIAutomation6` + `IUIAutomationRangeValuePattern`，可反向查询插件暴露的元素），
+  因此 **Windows 是三平台里最先能被 hosted job 断言的一条**。

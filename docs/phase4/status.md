@@ -134,22 +134,41 @@ Windows 那条甚至已经把 `WindowHandle` 返回出来了。
 已下载三平台日志核实三条测试**逐条 ok**、零 FAILED 套件。**X11 那条实现本地无法编译验证**
 （交叉编译缺 X11 sysroot），Linux job 是它唯一的证据，因此这一条尤其不能只看 job 结论。
 
-### 2. accessibility 平台桥接 —— 框架侧已完成，OS 侧未做
+### 2. accessibility —— 框架侧完成；AccessKit 翻译层完成；平台适配器接线未做
 
 `accessibility_tree()` 把控件树转成 `AccessibleNode`（role / label / 可朗读值 /
-归一化值 / bounds / focus / disabled），这是 UIA、NSAccessibility、AT-SPI 三家
-**共同**需要的那一层，也是唯一值得测试的那一层：6 个单测 + 1 个 doc-test + fixture
-上的 `the_editor_describes_itself_to_assistive_technology`（断言真实编辑器被朗读为
-Slider/ComboBox/CheckBox 而非一个不透明矩形）。
+归一化值 / bounds / focus / disabled），这是三家 OS API 共同需要、也是唯一值得测试的
+那一层：6 单测 + 4 proptest + 1 doc-test + fixture 上的
+`the_editor_describes_itself_to_assistive_technology`。
 
-未做的是把这棵树发布给操作系统：Windows 要实现 `IRawElementProviderSimple` /
-`IRawElementProviderFragment` 并挂到 HWND，macOS 要在 NSView 上实现
-`NSAccessibilityProtocol`，Linux 要接 AT-SPI D-Bus。三份互不复用的原生实现。
+**本轮补上第二层：`accesskit_update()` 把这棵树翻成 AccessKit 的 `TreeUpdate`。**
+上一轮我把这项记为"需要三份互不复用的原生实现"——**这个判断同样过重**：
+[AccessKit](https://github.com/AccessKit/accesskit)（MIT/Apache-2.0，MSRV 1.85）
+已经维护着 UIA / NSAccessibility / AT-SPI 三个适配器，egui 与 winit 都用它。
+SunMao 要写的只是数据映射，**没有任何平台代码，因此在任何主机上都可测**。
 
-**runner 无法验收这一项**：runner 通过 VST3/CLAP 插件 API 驱动插件，而这两个格式
-都没有 accessibility 通道——accessibility 走的是 OS API，必须先有上述桥接才存在可被
-hosted job 断言的宿主可见行为。（runner 里既有的 UIA helper 是**测试侧**用 UIA 拖动
-宿主滑块的工具，不是插件侧的可访问性实现，无法复用为验收手段。）
+放在 **off-by-default 的 `accessibility` feature** 后面，与 `text`/`clipboard` 同理，
+也与本项目"AU 不进默认 feature"的既有约定一致：AccessKit 是真实的依赖面
+（Linux 适配器要拉 D-Bus 栈），而 `accessibility.rs` 那棵树本身不依赖它。
+只新增 2 个 crate（`accesskit` + `uuid`）。
+
+设计要点：
+- role 映射保守——每个目标 role 在三平台都有明确对应，屏幕阅读器读到的控件种类一致。
+  `Graphic` 映射到 `Role::Image`（AccessKit 无 meter），读作"存在、可描述、不可交互"。
+- 归一化值同时写 `min`/`max`，否则屏幕阅读器无法说出百分比；**非有限值直接不写**，
+  否则会被念成乱码。
+- id 按深度优先分配，父节点先占位再递归，因此子节点永远不会拿到父节点的 id。
+- AccessKit 对树形很严格（节点必须是 root 或某节点的 child），故 4 条 proptest 钉住：
+  唯一 id、每个非根节点恰好被一个父节点认领、无自环、focus 必指向存在的节点。
+
+**CI 单开一步 "Test the accessibility feature"**（blocking，每 job 26→27 步）：
+默认 `cargo test` 不会编译这个 feature，不单开就等于三平台上全是死代码——
+run #82 已经踩过一次"进了矩阵却没真跑"的坑。
+
+**仍未做的一层**：把 `TreeUpdate` 交给 `accesskit_windows`/`_macos`/`_unix` 适配器，
+并接进 baseview 三个后端的窗口生命周期。runner 侧的验收手段已经存在
+（既有 UIA helper 用的正是 `IUIAutomation6` + `IUIAutomationRangeValuePattern`，
+可反向查询插件暴露的元素），因此 **Windows 是三平台里最先能被 hosted job 断言的一条**。
 
 ## M5 Wayland：受阻链已缩短为一条
 
