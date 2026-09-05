@@ -701,3 +701,21 @@
 - Unresolved: 下一轮看 Windows 日志里是 `UIA VERIFIED` 还是 `UIA SKIPPED`。
   **若是 SKIPPED，就说明 hosted runner 开不出顶层窗口**，那时才谈得上换验收路径
   （例如经打包矩阵用 runner 的宿主进程去查），而不是现在就假设它能行。
+
+### 2026-09-06 — run #96：断言如实报告"跳过"，验收路径改为嵌入式
+
+- Command/platform: push `3ba516a` → run #96。**Windows job failure**，正是新加的硬检查
+  拦下的：日志里是 `UIA SKIPPED: no floating window could be opened in this session`，
+  而测试本身仍报 `... ok`。
+- **这一步的价值就在这里**：run #95 同一个测试"三平台绿 + `... ok`"，看起来完全正常，
+  实际上一次断言都没跑。加标记 + 加硬检查之后，第一时间就把它暴露了。
+  **绿色从来不是证据，断言执行过才是。**
+- 根因：hosted Windows runner 的测试进程**开不出顶层窗口**，因此 `open_floating` 回 `None`。
+- Change: 验收路径从"浮动窗口"改为"**自建父窗口 + 嵌入式编辑器**"——
+  `CreateWindowExW` 造一个宿主窗口（runner 自己的 GUI 测试就是这么做的，在该平台可用），
+  再 `view.open(ParentWindow::Win32(..))` 把编辑器嵌进去，然后从父窗口查 UIA
+  （屏幕阅读器在 DAW 里走的正是这条遍历）。**顺带更对**：嵌入才是插件在宿主里的真实路径。
+  两条跳过路径各有独立标记，分别指向"根本建不了窗口"与"编辑器嵌不进去"。
+- Result: `cargo check --tests --target x86_64-pc-windows-msvc --features accessibility` exit 0；
+  fmt / diff 全过。
+- Unresolved: 下一轮仍要看 Windows 日志是 `UIA VERIFIED` 还是某条 `UIA SKIPPED`。
