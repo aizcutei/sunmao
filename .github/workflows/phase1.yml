@@ -366,7 +366,10 @@ jobs:
           # nothing else compiles.
           echo "::group::cargo test -p sunmao_fx_widgets_gui_gl --features accessibility"
           set +e
-          cargo test --locked -p sunmao_fx_widgets_gui_gl --features accessibility 2>&1 \
+          # `--nocapture`: on Windows this suite contains the UI Automation
+          # round trip, and cargo hides its output on success — leaving a
+          # skipped run indistinguishable from a verified one in the log.
+          cargo test --locked -p sunmao_fx_widgets_gui_gl --features accessibility -- --nocapture 2>&1 \
             | tee -a target/phase1-artifacts/phase4-accessibility.log
           status=${PIPESTATUS[0]}
           set -e
@@ -376,6 +379,15 @@ jobs:
             exit "$status"
           fi
           echo "::endgroup::"
+          # Fail loudly if the round trip silently skipped rather than verified.
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            if grep -q "UIA VERIFIED" target/phase1-artifacts/phase4-accessibility.log; then
+              echo "UI Automation round trip verified"
+            else
+              echo "::error title=UIA round trip did not verify::the assertion did not run; log says: $(grep -o 'UIA [A-Z]*.*' target/phase1-artifacts/phase4-accessibility.log | head -1)"
+              exit 1
+            fi
+          fi
 
       - name: Test macOS system-capture linkage (non-blocking follow-up)
         if: runner.os == 'macOS'

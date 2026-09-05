@@ -681,3 +681,23 @@
 - Evidence/artifact: `/tmp/uia2.log`。
 - Unresolved: **该断言的真实执行证据只能来自 Windows hosted job**——本地无法运行。
   下一轮核实日志里它是否真的跑了并通过（run #82 的教训：绿不等于断言执行过）。
+
+### 2026-09-06 — run #95 三平台绿，但 UIA 断言的证据不成立，已修
+
+- Command/platform: push `7d80d53` → GitHub Actions #95，三平台 success、27 步零非成功。
+  Windows 日志里 `a_screen_reader_can_see_the_editor_controls ... ok`。
+- **为什么这还不够。** 该测试在开不出窗口的会话里会**跳过并返回**，而 cargo test 在成功时
+  **捕获 stdout/stderr**——于是"断言通过"和"静默跳过"在日志里长得**一模一样**，两者都只显示
+  `... ok`。我确认不了它到底验证了什么。**这正是 run #82 那个坑的同一形状**：绿色，
+  但断言可能一次都没跑。
+- Change:
+  - 两条路径各打一个**互斥的标记**：`UIA VERIFIED: ...` 与 `UIA SKIPPED: ...`。
+  - CI 该步骤加 `-- --nocapture`，否则标记根本不会出现在日志里。
+  - **Windows job 上新增硬检查**：日志里没有 `UIA VERIFIED` 就 `exit 1` 并回显实际走的
+    那条路径。跳过不再能伪装成通过。
+- Result: `cargo check --tests --target x86_64-pc-windows-msvc --features accessibility` exit 0；
+  fmt / diff 全过；macOS 上该 feature 的 fixture 测试仍 9 通过（UIA 测试在非 Windows 上
+  由 `#![cfg]` 整体排除）。
+- Unresolved: 下一轮看 Windows 日志里是 `UIA VERIFIED` 还是 `UIA SKIPPED`。
+  **若是 SKIPPED，就说明 hosted runner 开不出顶层窗口**，那时才谈得上换验收路径
+  （例如经打包矩阵用 runner 的宿主进程去查），而不是现在就假设它能行。

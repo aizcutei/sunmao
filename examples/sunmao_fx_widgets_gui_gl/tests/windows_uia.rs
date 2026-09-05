@@ -121,7 +121,9 @@ fn a_screen_reader_can_see_the_editor_controls() {
         // A headless session with no window station cannot host a window at
         // all. Failing here would report a windowing problem as an
         // accessibility one.
-        eprintln!("skipping: no floating window could be opened in this session");
+        // Marked distinctly so a CI log shows which path was taken. A test
+        // that silently skips reads exactly like one that passed.
+        println!("UIA SKIPPED: no floating window could be opened in this session");
         return;
     };
 
@@ -167,5 +169,10 @@ fn a_screen_reader_can_see_the_editor_controls() {
         types.contains(&UIA_CheckBoxControlTypeId.0),
         "UI Automation did not see the toggle as a check box; saw {types:?}"
     );
-    println!("UIA saw {} elements under the editor", types.len());
+    // The marker CI greps for. Without it, a skipped run and a verified run are
+    // indistinguishable in the log — the trap run #82 fell into.
+    println!(
+        "UIA VERIFIED: slider + combo box + check box among {} elements",
+        types.len()
+    );
 }
