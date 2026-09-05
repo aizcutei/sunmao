@@ -190,3 +190,16 @@
     `the_editor_binds_one_control_per_parameter` 断言控件树与绑定。**这一点如实记下，
     因为 M0 当时写的是"这些测试跨替换保持不变"，实际是行为测试不变、skeleton 测试被取代。**
   - `Label`/`Slider`/`Button` 已存在，M2 未重写；M3 的字体栅格化落地后再看 `Label` 的度量。
+
+### 2026-09-05 — M2 完成：hosted run #77 三平台全绿
+
+- Command/platform: push `aec872f` 触发 GitHub Actions #77：
+  https://github.com/aizcutei/sunmao/actions/runs/33965946234
+- Result: 三个 job 同一 commit 全部 success，每 job **26 步零非成功**。Windows WGPU 收尾
+  段错误未复现（自 run #66 起连续第 10 次）。
+- Evidence/artifact: artifacts 3 份可下载。**另下载三平台日志核实新进矩阵的 fixture 真被宿主
+  执行**：每平台 `SunMao Widgets GL` 出现 10 次（打包两格式 + 两格式各测一次），
+  `Testing: SunMao Widgets GL (VST3)` 与 `(CLAP)` 均在场，且全 run **零失败套件**
+  （`Summary: N passed, ≥1 failed` 匹配数为 0）。这正是 M0 推迟进矩阵、M2 兑现的那一步。
+- Unresolved: M2 完成，进入 M3（text rendering 与输入：字体栅格化与文本度量、clipboard、
+  IME/国际键盘、cursor/focus 模型，runner 断言按键→参数变化可观测）。
