@@ -10,12 +10,17 @@ default = ["gl"]
 gl = ["sunmao_gui/gl", "baseview/opengl"]
 wgpu = ["sunmao_gui/wgpu", "dep:wgpu", "dep:pollster"]
 webview = ["baseview/webview"]
+# Publish the editor's accessibility tree. Pulls the feature through both the
+# GUI layer (which builds the AccessKit tree) and baseview (which hands it to
+# the platform adapter).
+accessibility = ["sunmao_gui/accessibility", "baseview/accessibility", "dep:accesskit"]
 
 [dependencies]
 sunmao_core = { path = "../core" }
 sunmao_gui = { path = "../gui", default-features = false }
 baseview = { path = "../../baseview", default-features = false }
 raw-window-handle = "0.6"
+accesskit = { version = "0.25", optional = true }
 keyboard-types = "0.6.1"
 
 # wgpu dependencies (optional)

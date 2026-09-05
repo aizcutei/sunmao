@@ -594,6 +594,17 @@ mod gl_backend {
             false
         }
         fn on_resize(&mut self, _width: f32, _height: f32) {}
+
+        /// Describe this editor to assistive technology.
+        ///
+        /// Build it with `sunmao_gui::accessibility_tree` and translate with
+        /// `accesskit_update`. `None` — the default — means the editor does not
+        /// describe itself, and the platform falls back to announcing a bare
+        /// window.
+        #[cfg(feature = "accessibility")]
+        fn accessibility_tree(&mut self) -> Option<accesskit::TreeUpdate> {
+            None
+        }
     }
 
     /// Wraps a [`ViewState`] so keys the host forwarded through
@@ -607,6 +618,11 @@ mod gl_backend {
     }
 
     impl<S: ViewState> ViewState for HostKeyedState<S> {
+        #[cfg(feature = "accessibility")]
+        fn accessibility_tree(&mut self) -> Option<accesskit::TreeUpdate> {
+            self.inner.accessibility_tree()
+        }
+
         fn draw(&mut self, ctx: &mut dyn GuiContext, width: f32, height: f32) {
             for key in self.keys.drain() {
                 let mut consumed = false;
@@ -818,6 +834,16 @@ mod gl_backend {
     }
 
     impl<S: ViewState> WindowHandler for BaseviewHandler<S> {
+        #[cfg(feature = "accessibility")]
+        fn accessibility_tree(&mut self) -> Option<accesskit::TreeUpdate> {
+            match self {
+                Self::Gl(handler) => handler.accessibility_tree(),
+                #[cfg(all(feature = "wgpu", target_os = "windows"))]
+                Self::Wgpu(handler) => handler.accessibility_tree(),
+                Self::Failed => None,
+            }
+        }
+
         fn on_frame(&mut self, window: &mut Window) {
             match self {
                 Self::Gl(handler) => handler.on_frame(window),
@@ -918,6 +944,11 @@ mod gl_backend {
     }
 
     impl<S: ViewState> WindowHandler for GlHandler<S> {
+        #[cfg(feature = "accessibility")]
+        fn accessibility_tree(&mut self) -> Option<accesskit::TreeUpdate> {
+            self.state.accessibility_tree()
+        }
+
         fn on_frame(&mut self, window: &mut Window) {
             if let Some(gl_ctx) = window.gl_context() {
                 if let Err(error) = unsafe { gl_ctx.make_current() } {

@@ -597,3 +597,37 @@
   并接进 baseview 三个后端的窗口生命周期。runner 侧的验收手段已经存在（既有 UIA helper
   用的正是 `IUIAutomation6` + `IUIAutomationRangeValuePattern`，可反向查询插件暴露的元素），
   因此 **Windows 是三平台里最先能被 hosted job 断言的一条**。
+
+### 2026-09-06 — accessibility 第三层：Windows UIA 适配器接通
+
+- Command/platform: macOS ARM64（Windows 侧只能交叉编译检查，运行时证据靠 hosted job）。
+- Change（自底向上）:
+  - **baseview 新增 `accessibility` feature**：`WindowHandler::accessibility_tree()`
+    （默认 `None`——"这个窗口没有可描述的结构"是裸 framebuffer 窗口的诚实答案）。
+  - **Windows 后端接 `accesskit_windows::Adapter` + `WM_GETOBJECT`**。没有用
+    `SubclassingAdapter`：它要求窗口尚未可见，而 baseview 的嵌入窗口带 `WS_VISIBLE`
+    创建，会直接 panic。
+    - 适配器**懒创建**：`Adapter::new` 要初始化 UIA，而绝大多数情况没有辅助技术在跑；
+      Windows 只在真有人问时才发 `WM_GETOBJECT`。
+    - **`WM_GETOBJECT` 来自操作系统，在里面 panic 会带走宿主**：handler 的 `RefCell`
+      一律 `try_borrow_mut`，借不到就回 `None` 让 `DefWindowProc` 去答。
+    - 每帧后 `update_if_active`（只在真有客户端时回调工厂），且必须放在 `on_frame`
+      **之后**——那次借用结束了，发布要再借一次。
+    - `winapi` 与 `windows` crate 的 `HWND`/`WPARAM`/`LPARAM` 是不同类型，
+      边界**显式转换**而非 transmute。
+    - action 未接：屏幕阅读器能读、不能改；`ActionHandler` 如实无动作。
+  - `sunmao_view_baseview`/`sunmao`/fixture 各自透传同名 feature；`sunmao_gui`
+    重新导出 `accesskit`，这样插件不必自己加依赖、也不会用上版本不匹配的一份。
+  - CI 的 "Test the accessibility feature" 步骤扩展为同时构建 facade 与 fixture 的
+    feature 版本——**Windows 上这一步是唯一会编译 UIA 适配器与 `WM_GETOBJECT` 分支的地方**。
+- Result: 默认 `cargo test --locked` exit 0，**129 套件 / 662 测试**；
+  `cargo check --target x86_64-pc-windows-msvc` 对 `baseview` / `sunmao_view_baseview` /
+  fixture 的 feature 版本均 exit 0；macOS 上 fixture feature 版 9 测试通过；
+  fmt / diff / metadata 全过。
+- Evidence/artifact: `/tmp/uia.log`。
+- Unresolved:
+  - **macOS/Linux 适配器未接**：树已产出，但 AppKit/X11 后端还没交给
+    `accesskit_macos`/`accesskit_unix`，两平台上开 feature 只是多算一棵树、无人消费。
+    **如实记为未接通。**
+  - **宿主侧断言未做**：目前 hosted job 只证明这条链三平台编译并通过单测。真正用
+    runner 的 UIA 机制反查插件暴露的元素，需要先把 fixture 以该 feature 打包进矩阵。

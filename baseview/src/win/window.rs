@@ -10,11 +10,11 @@ use winapi::um::winuser::{
     RegisterClassW, ReleaseCapture, SetCapture, SetCursor, SetFocus, SetTimer, SetWindowLongPtrW,
     SetWindowPos, TrackMouseEvent, TranslateMessage, UnregisterClassW, CS_OWNDC,
     GET_XBUTTON_WPARAM, GWLP_USERDATA, HTCLIENT, IDC_ARROW, MSG, SWP_NOMOVE, SWP_NOZORDER,
-    TRACKMOUSEEVENT, WHEEL_DELTA, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DPICHANGED, WM_INPUTLANGCHANGE,
-    WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
-    WM_MOUSEHWHEEL, WM_MOUSELEAVE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_SETCURSOR, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
-    WM_TIMER, WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_CAPTION, WS_CHILD,
+    TRACKMOUSEEVENT, WHEEL_DELTA, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DPICHANGED, WM_GETOBJECT,
+    WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+    WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSELEAVE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN,
+    WM_SYSKEYUP, WM_TIMER, WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WS_CAPTION, WS_CHILD,
     WS_CLIPSIBLINGS, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUPWINDOW, WS_SIZEBOX, WS_VISIBLE,
     XBUTTON1, XBUTTON2,
 };
@@ -391,6 +391,11 @@ unsafe fn wnd_proc_inner(
                     .as_mut()
                     .unwrap()
                     .on_frame(&mut window);
+                // After the frame, so the published tree matches what was just
+                // drawn. The borrow above has ended by now, which matters:
+                // publishing takes the handler borrow again.
+                #[cfg(feature = "accessibility")]
+                window_state.publish_accessibility_tree();
             }
 
             Some(0)
@@ -534,6 +539,8 @@ unsafe fn wnd_proc_inner(
                 None
             }
         }
+        #[cfg(feature = "accessibility")]
+        WM_GETOBJECT => window_state.handle_wm_getobject(wparam, lparam),
         // NOTE: `WM_NCDESTROY` is handled in the outer function because this deallocates the window
         //        state
         BV_WINDOW_MUST_CLOSE => {
@@ -594,6 +601,14 @@ pub(super) struct WindowState {
     cursor_icon: Cell<MouseCursor>,
     // Initialized late so the `Window` can hold a reference to this `WindowState`
     handler: RefCell<Option<Box<dyn WindowHandler>>>,
+    /// UI Automation adapter, created lazily on the first `WM_GETOBJECT`.
+    ///
+    /// Lazy because `Adapter::new` initialises UIA, which is not free and is
+    /// pointless in the overwhelmingly common case where no assistive
+    /// technology is running — Windows only sends `WM_GETOBJECT` when
+    /// something actually asks.
+    #[cfg(feature = "accessibility")]
+    accesskit: RefCell<Option<accesskit_windows::Adapter>>,
     _drop_target: RefCell<Option<Rc<DropTarget>>>,
     scale_policy: WindowScalePolicy,
     dw_style: u32,
@@ -614,7 +629,113 @@ pub(super) struct WindowState {
     pub gl_context: Option<GlContext>,
 }
 
+/// Bridges AccessKit's activation request to the window handler.
+///
+/// AccessKit asks for a full tree the first time something wants one. The
+/// handler lives behind a `RefCell` that the window procedure may already have
+/// borrowed, so a failed borrow reports "nothing to describe" rather than
+/// panicking inside a system callback — `WM_GETOBJECT` arrives from the OS and
+/// unwinding through it would take the host down.
+#[cfg(feature = "accessibility")]
+struct HandlerActivation<'a> {
+    handler: &'a RefCell<Option<Box<dyn WindowHandler>>>,
+}
+
+#[cfg(feature = "accessibility")]
+impl accesskit::ActivationHandler for HandlerActivation<'_> {
+    fn request_initial_tree(&mut self) -> Option<accesskit::TreeUpdate> {
+        self.handler
+            .try_borrow_mut()
+            .ok()?
+            .as_mut()?
+            .accessibility_tree()
+    }
+}
+
+/// Actions requested by assistive technology.
+///
+/// Not yet routed into the widget tree: a screen reader can read the editor
+/// but cannot yet drive it. Declining is the honest behaviour — the trait
+/// requires an unsupported action to do nothing — and it keeps read-only
+/// support from waiting on the action plumbing.
+#[cfg(feature = "accessibility")]
+struct NoActions;
+
+#[cfg(feature = "accessibility")]
+impl accesskit::ActionHandler for NoActions {
+    fn do_action(&mut self, _request: accesskit::ActionRequest) {}
+}
+
 impl WindowState {
+    /// Answer `WM_GETOBJECT`, creating the UIA adapter on first use.
+    ///
+    /// Returns `None` when the window has no tree to publish, which lets
+    /// `DefWindowProc` give the caller the plain-window description instead.
+    #[cfg(feature = "accessibility")]
+    fn handle_wm_getobject(&self, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+        // A window that describes nothing should not pay to initialise UIA.
+        if self
+            .handler
+            .try_borrow_mut()
+            .ok()?
+            .as_mut()?
+            .accessibility_tree()
+            .is_none()
+        {
+            return None;
+        }
+        let mut adapter = self.accesskit.try_borrow_mut().ok()?;
+        // `winapi` and the `windows` crate model these as different types, so
+        // convert explicitly at the boundary rather than transmuting: HWND is
+        // a pointer here and a newtype over isize there.
+        let hwnd = accesskit_windows::HWND(self.hwnd as isize as *mut std::ffi::c_void);
+        let adapter = adapter.get_or_insert_with(|| {
+            let focused = unsafe { GetFocus() } == self.hwnd;
+            accesskit_windows::Adapter::new(hwnd, focused, NoActions)
+        });
+        let mut activation = HandlerActivation {
+            handler: &self.handler,
+        };
+        let result = adapter.handle_wm_getobject(
+            accesskit_windows::WPARAM(wparam),
+            accesskit_windows::LPARAM(lparam),
+            &mut activation,
+        )?;
+        let result: accesskit_windows::LRESULT = result.into();
+        Some(result.0)
+    }
+
+    /// Push the current tree to assistive technology after a repaint.
+    ///
+    /// A no-op until something has actually asked for accessibility, so the
+    /// ordinary case costs one `Option` check per frame.
+    #[cfg(feature = "accessibility")]
+    fn publish_accessibility_tree(&self) {
+        let Ok(mut adapter) = self.accesskit.try_borrow_mut() else {
+            return;
+        };
+        let Some(adapter) = adapter.as_mut() else {
+            return;
+        };
+        // `update_if_active` only calls the factory when a client is attached,
+        // so the tree is not rebuilt for nobody.
+        let events = adapter.update_if_active(|| {
+            self.handler
+                .try_borrow_mut()
+                .ok()
+                .and_then(|mut handler| handler.as_mut()?.accessibility_tree())
+                .unwrap_or_else(|| accesskit::TreeUpdate {
+                    nodes: Vec::new(),
+                    tree: None,
+                    tree_id: accesskit::TreeId::ROOT,
+                    focus: accesskit::NodeId(0),
+                })
+        });
+        if let Some(events) = events {
+            events.raise();
+        }
+    }
+
     pub(super) fn create_window(&self) -> Window<'_> {
         Window { state: self }
     }
@@ -838,6 +959,8 @@ impl Window<'_> {
                 // The Window refers to this `WindowState`, so this `handler` needs to be
                 // initialized later
                 handler: RefCell::new(None),
+                #[cfg(feature = "accessibility")]
+                accesskit: RefCell::new(None),
                 _drop_target: RefCell::new(None),
                 scale_policy: options.scale,
                 dw_style: flags,

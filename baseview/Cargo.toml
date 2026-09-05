@@ -19,10 +19,15 @@ default = []
 opengl = ["uuid", "x11/glx"]
 metal = []
 webview = ["dep:wry", "dep:gtk", "dep:gdk"]
+# Publish an accessibility tree through AccessKit's native adapters. Off by
+# default: the Linux adapter alone pulls a D-Bus stack, and a window that does
+# not describe itself should not pay for one.
+accessibility = ["dep:accesskit", "dep:accesskit_windows"]
 
 [dependencies]
 keyboard-types = { version = "0.6.1", default-features = false }
 raw-window-handle = "0.6.2"
+accesskit = { version = "0.25", optional = true }
 wry = { version = "=0.53.3", default-features = false, features = ["os-webview", "x11"], optional = true }
 
 [target.'cfg(target_os="linux")'.dependencies]
@@ -35,6 +40,7 @@ gdk = { version = "0.18", features = ["unsafe-assume-initialized"], optional = t
 [target.'cfg(target_os="windows")'.dependencies]
 winapi = { version = "0.3.8", features = ["libloaderapi", "winuser", "windef", "minwindef", "guiddef", "combaseapi", "wingdi", "errhandlingapi", "ole2", "oleidl", "shellapi", "winerror"] }
 uuid = { version = "0.8", features = ["v4"], optional = true }
+accesskit_windows = { version = "0.35", optional = true }
 
 [target.'cfg(target_os="macos")'.dependencies]
 cocoa = "0.24.0"

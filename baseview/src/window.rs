@@ -71,6 +71,20 @@ impl HasWindowHandle for WindowHandle {
 pub trait WindowHandler {
     fn on_frame(&mut self, window: &mut Window);
     fn on_event(&mut self, window: &mut Window, event: Event) -> EventStatus;
+
+    /// Describe the window's contents to assistive technology.
+    ///
+    /// Called when the platform first asks — on Windows, the first
+    /// `WM_GETOBJECT` — and again whenever the window repaints, so the tree
+    /// must be a *complete* one each time rather than a delta.
+    ///
+    /// `None` means this window has nothing to describe, which is the honest
+    /// answer for a window whose contents are not structured (a raw framebuffer,
+    /// say). The platform then falls back to describing the bare window.
+    #[cfg(feature = "accessibility")]
+    fn accessibility_tree(&mut self) -> Option<accesskit::TreeUpdate> {
+        None
+    }
 }
 
 pub struct Window<'a> {

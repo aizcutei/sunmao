@@ -14,6 +14,9 @@ required-features = ["standalone"]
 [features]
 default = []
 standalone = ["sunmao/standalone"]
+# Publish this editor's accessibility tree to the OS. Off by default so the
+# packaged fixture matches what a plugin ships without opting in.
+accessibility = ["sunmao/accessibility"]
 
 [dependencies]
 sunmao = { path = "../../sunmao", features = ["gui-gl"] }

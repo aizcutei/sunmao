@@ -41,6 +41,10 @@ mod widgets;
 pub use accessibility::*;
 #[cfg(feature = "accessibility")]
 pub use accessibility_accesskit::*;
+/// Re-exported so a plugin can name AccessKit's types without adding its own
+/// dependency, and cannot end up with a version that mismatches ours.
+#[cfg(feature = "accessibility")]
+pub use accesskit;
 pub use binding::*;
 pub use clipboard::*;
 pub use context::*;

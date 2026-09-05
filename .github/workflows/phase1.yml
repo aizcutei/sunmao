@@ -361,6 +361,21 @@ jobs:
           # The facade must also build with the feature, so a plugin can turn it
           # on through `sunmao` rather than reaching into `sunmao_gui`.
           cargo build --locked -p sunmao --features accessibility
+          # And the whole chain down to a real editor: on Windows this pulls in
+          # the AccessKit UIA adapter and baseview's WM_GETOBJECT handling, which
+          # nothing else compiles.
+          echo "::group::cargo test -p sunmao_fx_widgets_gui_gl --features accessibility"
+          set +e
+          cargo test --locked -p sunmao_fx_widgets_gui_gl --features accessibility 2>&1 \
+            | tee -a target/phase1-artifacts/phase4-accessibility.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            summary="$(tail -n 25 target/phase1-artifacts/phase4-accessibility.log | tr '\n' ' ' | cut -c1-1200)"
+            echo "::error title=Accessibility fixture test failed::exited with status $status: $summary"
+            exit "$status"
+          fi
+          echo "::endgroup::"
 
       - name: Test macOS system-capture linkage (non-blocking follow-up)
         if: runner.os == 'macOS'

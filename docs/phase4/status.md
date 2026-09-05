@@ -165,10 +165,32 @@ SunMao 要写的只是数据映射，**没有任何平台代码，因此在任�
 默认 `cargo test` 不会编译这个 feature，不单开就等于三平台上全是死代码——
 run #82 已经踩过一次"进了矩阵却没真跑"的坑。
 
-**仍未做的一层**：把 `TreeUpdate` 交给 `accesskit_windows`/`_macos`/`_unix` 适配器，
-并接进 baseview 三个后端的窗口生命周期。runner 侧的验收手段已经存在
-（既有 UIA helper 用的正是 `IUIAutomation6` + `IUIAutomationRangeValuePattern`，
-可反向查询插件暴露的元素），因此 **Windows 是三平台里最先能被 hosted job 断言的一条**。
+**第三层：Windows 平台适配器已接通，macOS/Linux 未接。**
+
+Windows 走 `accesskit_windows::Adapter` + baseview 的 `WM_GETOBJECT`（不用
+`SubclassingAdapter`：它要求窗口尚未可见，而 baseview 的嵌入窗口是带 `WS_VISIBLE`
+创建的，会直接 panic）。要点：
+
+- **适配器懒创建**。`Adapter::new` 会初始化 UIA，而绝大多数情况下没有任何辅助技术在跑；
+  Windows 只有在真有人问时才发 `WM_GETOBJECT`，所以在那时才建。
+- **`WM_GETOBJECT` 来自操作系统，在其中 panic 会带走宿主**。因此 handler 的
+  `RefCell` 一律用 `try_borrow_mut`，借不到就回"没有可描述的内容"，让
+  `DefWindowProc` 去答，而不是 unwind 穿过系统回调。
+- 每帧绘制后调 `update_if_active`——它只在真有客户端连着时才回调工厂，因此没人监听时
+  不会白白重建树。放在 `on_frame` **之后**也是必须的：那次借用结束了，发布要再借一次。
+- `winapi` 与 `windows` crate 的 `HWND`/`WPARAM`/`LPARAM` 是不同类型，边界处**显式转换**
+  而不是 transmute。
+- **action 未接**：屏幕阅读器能读、还不能改。`ActionHandler` 如实什么都不做（trait 要求
+  不支持的 action 必须无动作），这样只读支持不必等 action 管线。
+
+macOS/Linux 侧：`ViewState::accessibility_tree()` 已经产出树，但 baseview 的
+AppKit/X11 后端还没有把它交给 `accesskit_macos`/`accesskit_unix`，因此这两个平台上
+feature 打开也只是多算一棵树、无人消费——**如实记为未接通，不是"已支持"**。
+
+**尚未做到的验收**：hosted job 目前只证明这条链在三平台**编译并通过单测**
+（新增 CI 步骤同时构建 `sunmao_gui`、`sunmao` facade 与 fixture 的 feature 版本）。
+真正的宿主侧断言——用 runner 既有的 UIA 机制反查插件暴露的元素——还需要把 fixture
+以该 feature 打包进矩阵，是下一轮的事。
 
 ## M5 Wayland：受阻链已缩短为一条
 

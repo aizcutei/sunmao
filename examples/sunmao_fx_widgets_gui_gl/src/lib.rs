@@ -354,6 +354,17 @@ impl ViewState for WidgetsViewState {
         self.controls.draw(ctx);
     }
 
+    /// Hand the editor's description to the platform adapter.
+    ///
+    /// This is the last link: `accessibility()` builds the tree,
+    /// `accesskit_update` translates it, and baseview's per-platform adapter
+    /// publishes it. Behind the `accessibility` feature, so a plugin that does
+    /// not opt in ships none of it.
+    #[cfg(feature = "accessibility")]
+    fn accessibility_tree(&mut self) -> Option<sunmao::gui::accesskit::TreeUpdate> {
+        Some(accesskit_update(&self.accessibility()))
+    }
+
     fn on_mouse_event(&mut self, event: &GuiEvent) -> bool {
         // The binder dispatches, detects the change, pushes it to the host and
         // brackets the gesture. No hand-written callback.
