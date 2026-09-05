@@ -11,7 +11,6 @@ use clap_sys::ext::params::{
 };
 use clap_sys::id::clap_id;
 use clap_sys::plugin::clap_plugin_t;
-use clap_sys::string_sizes::CLAP_PATH_SIZE;
 use std::ffi::{CStr, c_char};
 use std::ptr;
 
@@ -261,123 +260,6 @@ pub(crate) fn create_params_ext<P: Plugin>() -> clap_plugin_params_t {
 
 // ======= GUI Plugin Support =======
 
-use crate::ext::gui::GuiHandler;
-
-pub(crate) unsafe extern "C" fn params_count_gui<P: Plugin + GuiHandler>(
-    plugin: *const clap_plugin_t,
-) -> u32 {
-    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
-        return 0;
-    };
-    let instance = unsafe { &*instance_ptr };
-    instance.params_cache.len() as u32
-}
-
-pub(crate) unsafe extern "C" fn params_get_info_gui<P: Plugin + GuiHandler>(
-    plugin: *const clap_plugin_t,
-    param_index: u32,
-    param_info: *mut clap_param_info_t,
-) -> bool {
-    if param_info.is_null() {
-        return false;
-    }
-    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
-        return false;
-    };
-    let instance = unsafe { &*instance_ptr };
-    if (param_index as usize) >= instance.params_cache.len() {
-        return false;
-    }
-    let param = &instance.params_cache[param_index as usize];
-    let info = unsafe { &mut *param_info };
-    info.id = param.id;
-    info.flags = parameter_flags(param);
-    info.cookie = ptr::null_mut();
-    write_cstr_to_array(&mut info.name, param.name.as_bytes());
-    // `module` is the parameter's `/`-separated group path. It was previously
-    // zeroed unconditionally, so a declared hierarchy never reached the host.
-    write_cstr_to_array(&mut info.module, param.module.as_bytes());
-    info.min_value = param.min_value;
-    info.max_value = param.max_value;
-    info.default_value = param.default_value;
-    true
-}
-
-pub(crate) unsafe extern "C" fn params_get_value_gui<P: Plugin + GuiHandler>(
-    plugin: *const clap_plugin_t,
-    param_id: clap_id,
-    out_value: *mut f64,
-) -> bool {
-    if out_value.is_null() {
-        return false;
-    }
-    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
-        return false;
-    };
-    let instance = unsafe { &*instance_ptr };
-    if !instance.params_cache.iter().any(|p| p.id == param_id) {
-        return false;
-    }
-    let Some(param) = instance.params_cache.iter().find(|p| p.id == param_id) else {
-        return false;
-    };
-    let Some(value) = ffi_guard(None, || unsafe {
-        sanitize_parameter_value(param, instance.controller().get_parameter(param_id))
-    }) else {
-        return false;
-    };
-    unsafe { *out_value = value };
-    true
-}
-
-pub(crate) unsafe extern "C" fn params_flush_gui<P: Plugin + GuiHandler>(
-    plugin: *const clap_plugin_t,
-    input: *const clap_input_events_t,
-    output: *const clap_output_events_t,
-) {
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        params_flush_gui_unchecked::<P>(plugin, input, output);
-    }));
-}
-
-unsafe fn params_flush_gui_unchecked<P: Plugin + GuiHandler>(
-    plugin: *const clap_plugin_t,
-    input: *const clap_input_events_t,
-    output: *const clap_output_events_t,
-) {
-    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
-        return;
-    };
-    let instance = unsafe { &*instance_ptr };
-    if !input.is_null() {
-        let size_fn = unsafe { (*input).size };
-        let get_fn = unsafe { (*input).get };
-        if let (Some(size_fn), Some(get_fn)) = (size_fn, get_fn) {
-            let size = unsafe { size_fn(input) };
-            for index in 0..size.min(MAX_PROCESS_EVENTS as u32) {
-                let header = unsafe { get_fn(input, index) };
-                if header.is_null() {
-                    continue;
-                }
-                if unsafe { is_param_value_event(header) } {
-                    let event = unsafe { &*(header as *const clap_event_param_value_t) };
-                    if instance
-                        .params_cache
-                        .iter()
-                        .find(|param| param.id == event.param_id)
-                        .is_some_and(|param| valid_parameter_value(param, event.value))
-                    {
-                        unsafe {
-                            instance.set_parameter_for_current_thread(event.param_id, event.value)
-                        };
-                    }
-                }
-            }
-        }
-    }
-    unsafe { instance.host.flush_parameter_events(output) };
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -420,16 +302,5 @@ mod tests {
 
         header.space_id = 1;
         assert!(!unsafe { is_param_value_event(&header) });
-    }
-}
-
-pub(crate) fn create_params_ext_gui<P: Plugin + GuiHandler>() -> clap_plugin_params_t {
-    clap_plugin_params_t {
-        count: Some(params_count_gui::<P>),
-        get_info: Some(params_get_info_gui::<P>),
-        get_value: Some(params_get_value_gui::<P>),
-        value_to_text: Some(params_value_to_text::<P>),
-        text_to_value: Some(params_text_to_value::<P>),
-        flush: Some(params_flush_gui::<P>),
     }
 }

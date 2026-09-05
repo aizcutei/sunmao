@@ -6,8 +6,6 @@ license.workspace = true
 
 [dependencies]
 clap_sys = { path = "../clap_sys" }
-log = "0.4"
-bitflags = "2.4"
 raw-window-handle = "0.6.2"
 rtrb = "0.2"
 

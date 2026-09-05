@@ -5,10 +5,5 @@ edition = "2021"
 description = "Core traits and types for the SunMao audio plugin framework"
 license = "MIT OR Apache-2.0"
 
-[dependencies]
-# Basic utilities
-anyhow = "1.0"
-atomic_float = "0.1"
-
 [dev-dependencies]
 proptest = "1.11.0"

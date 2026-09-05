@@ -2,22 +2,20 @@
 //!
 //! This module provides the PluginInstance wrapper and lifecycle callbacks.
 
-use crate::ext::audio_ports::{AudioPortInfo, create_audio_ports_ext, create_audio_ports_ext_gui};
-use crate::ext::audio_ports_activation::{
-    create_audio_ports_activation_ext, create_audio_ports_activation_ext_gui,
-};
+use crate::ext::audio_ports::{AudioPortInfo, create_audio_ports_ext};
+use crate::ext::audio_ports_activation::create_audio_ports_activation_ext;
 use crate::ext::audio_ports_config::{
     AudioPortsConfig, create_audio_ports_config_ext, create_audio_ports_config_ext_gui,
     create_audio_ports_config_info_ext, create_audio_ports_config_info_ext_gui,
 };
-use crate::ext::latency::{create_latency_ext, create_latency_ext_gui};
-use crate::ext::note_ports::{NotePortInfo, create_note_ports_ext, create_note_ports_ext_gui};
-use crate::ext::params::{ParameterInfo, create_params_ext, create_params_ext_gui};
+use crate::ext::latency::create_latency_ext;
+use crate::ext::note_ports::{NotePortInfo, create_note_ports_ext};
+use crate::ext::params::{ParameterInfo, create_params_ext};
 use crate::ext::preset_load::{create_preset_load_ext, create_preset_load_ext_gui};
-use crate::ext::render::{create_render_ext, create_render_ext_gui};
-use crate::ext::state::{create_state_ext, create_state_ext_gui};
-use crate::ext::tail::{create_tail_ext, create_tail_ext_gui};
-use crate::ext::voice_info::{create_voice_info_ext, create_voice_info_ext_gui};
+use crate::ext::render::create_render_ext;
+use crate::ext::state::create_state_ext;
+use crate::ext::tail::create_tail_ext;
+use crate::ext::voice_info::create_voice_info_ext;
 use crate::plugin::{AudioProcessor, HostHandle, Plugin};
 use crate::process::{MAX_PROCESS_FRAMES, ProcessBuffers};
 
@@ -791,9 +789,9 @@ unsafe fn plugin_init_with_gui_unchecked<P: Plugin + GuiHandler>(
 
     // Initialize extension structs (use _gui versions for proper type casts)
     if !instance.audio_ports_cache.is_empty() {
-        let ext = Box::new(create_audio_ports_ext_gui::<P>());
+        let ext = Box::new(create_audio_ports_ext::<P>());
         instance.audio_ports_ext = Some(Box::into_raw(ext));
-        let activation_ext = Box::new(create_audio_ports_activation_ext_gui::<P>());
+        let activation_ext = Box::new(create_audio_ports_activation_ext::<P>());
         instance.audio_ports_activation_ext = Some(Box::into_raw(activation_ext));
     }
 
@@ -810,35 +808,35 @@ unsafe fn plugin_init_with_gui_unchecked<P: Plugin + GuiHandler>(
     }
 
     if !instance.note_ports_cache.is_empty() {
-        let ext = Box::new(create_note_ports_ext_gui::<P>());
+        let ext = Box::new(create_note_ports_ext::<P>());
         instance.note_ports_ext = Some(Box::into_raw(ext));
     }
 
     if !instance.params_cache.is_empty() {
-        let ext = Box::new(create_params_ext_gui::<P>());
+        let ext = Box::new(create_params_ext::<P>());
         instance.params_ext = Some(Box::into_raw(ext));
     }
 
     // Always add state extension
-    let state_ext = Box::new(create_state_ext_gui::<P>());
+    let state_ext = Box::new(create_state_ext::<P>());
     instance.state_ext = Some(Box::into_raw(state_ext));
 
     // Always add latency extension
-    let latency_ext = Box::new(create_latency_ext_gui::<P>());
+    let latency_ext = Box::new(create_latency_ext::<P>());
     instance.latency_ext = Some(Box::into_raw(latency_ext));
 
     // Always add tail extension
-    let tail_ext = Box::new(create_tail_ext_gui::<P>());
+    let tail_ext = Box::new(create_tail_ext::<P>());
     instance.tail_ext = Some(Box::into_raw(tail_ext));
 
     // Add voice_info only if plugin provides it
     if unsafe { instance.controller() }.voice_info().is_some() {
-        let ext = Box::new(create_voice_info_ext_gui::<P>());
+        let ext = Box::new(create_voice_info_ext::<P>());
         instance.voice_info_ext = Some(Box::into_raw(ext));
     }
 
     // Always add render extension
-    let render_ext = Box::new(create_render_ext_gui::<P>());
+    let render_ext = Box::new(create_render_ext::<P>());
     instance.render_ext = Some(Box::into_raw(render_ext));
 
     // Always add GUI extension for GUI plugins

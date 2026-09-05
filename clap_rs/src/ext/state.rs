@@ -1,6 +1,5 @@
 //! CLAP state extension.
 
-use crate::ext::gui::GuiHandler;
 use crate::ext::params::ParameterInfo;
 use crate::plugin::Plugin;
 use crate::plugin_instance::{ffi_guard, instance_ptr};
@@ -9,8 +8,9 @@ use clap_sys::plugin::clap_plugin_t;
 use clap_sys::stream::{clap_istream_t, clap_ostream_t};
 
 const STATE_MAGIC: [u8; 8] = *b"SMCLPRM\0";
-/// Fallback used by the encoder's tests; live blobs carry the plugin's own
-/// `Plugin::STATE_VERSION`.
+/// Version the encoder tests round-trip against; live blobs carry the plugin's
+/// own `Plugin::STATE_VERSION`.
+#[cfg(test)]
 const STATE_VERSION: u32 = 1;
 const HEADER_LEN: usize = 16;
 const ENTRY_LEN: usize = 12;
@@ -72,65 +72,6 @@ pub(crate) fn create_state_ext<P: Plugin>() -> clap_plugin_state_t {
     clap_plugin_state_t {
         save: Some(state_save::<P>),
         load: Some(state_load::<P>),
-    }
-}
-
-pub(crate) unsafe extern "C" fn state_save_gui<P: Plugin + GuiHandler>(
-    plugin: *const clap_plugin_t,
-    stream: *const clap_ostream_t,
-) -> bool {
-    ffi_guard(false, || unsafe {
-        state_save_gui_unchecked::<P>(plugin, stream)
-    })
-}
-
-unsafe fn state_save_gui_unchecked<P: Plugin + GuiHandler>(
-    plugin: *const clap_plugin_t,
-    stream: *const clap_ostream_t,
-) -> bool {
-    if stream.is_null() {
-        return false;
-    }
-    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
-        return false;
-    };
-    let instance = unsafe { &*instance_ptr };
-    unsafe { save_parameter_state(instance.controller(), &instance.params_cache, stream) }
-}
-
-pub(crate) unsafe extern "C" fn state_load_gui<P: Plugin + GuiHandler>(
-    plugin: *const clap_plugin_t,
-    stream: *const clap_istream_t,
-) -> bool {
-    ffi_guard(false, || unsafe {
-        state_load_gui_unchecked::<P>(plugin, stream)
-    })
-}
-
-unsafe fn state_load_gui_unchecked<P: Plugin + GuiHandler>(
-    plugin: *const clap_plugin_t,
-    stream: *const clap_istream_t,
-) -> bool {
-    if stream.is_null() {
-        return false;
-    }
-    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
-        return false;
-    };
-    let instance = unsafe { &*instance_ptr };
-    let loaded =
-        unsafe { load_parameter_state(instance.controller_mut(), &instance.params_cache, stream) };
-    if loaded {
-        unsafe { instance.refresh_tail_cache() };
-    }
-    loaded
-}
-
-/// Create the state extension for a plugin with a GUI.
-pub(crate) fn create_state_ext_gui<P: Plugin + GuiHandler>() -> clap_plugin_state_t {
-    clap_plugin_state_t {
-        save: Some(state_save_gui::<P>),
-        load: Some(state_load_gui::<P>),
     }
 }
 
@@ -392,10 +333,10 @@ mod tests {
         // Entries are matched by parameter id, so an older layout restores
         // what it knew and leaves newer parameters at their defaults. This
         // must not be rejected outright.
-        let header = header_bytes(STATE_VERSION.saturating_sub(1).max(0), 0);
+        let header = header_bytes(STATE_VERSION.saturating_sub(1), 0);
         assert_eq!(
             decode_header(&header, STATE_VERSION),
-            Some((STATE_VERSION.saturating_sub(1).max(0), 0))
+            Some((STATE_VERSION.saturating_sub(1), 0))
         );
     }
 

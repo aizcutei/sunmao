@@ -84,57 +84,6 @@ pub(crate) fn create_note_ports_ext<P: Plugin>() -> clap_plugin_note_ports_t {
 
 // ======= GUI Plugin Support =======
 
-use crate::ext::gui::GuiHandler;
-
-pub(crate) unsafe extern "C" fn note_ports_count_gui<P: Plugin + GuiHandler>(
-    plugin: *const clap_plugin_t,
-    is_input: bool,
-) -> u32 {
-    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
-        return 0;
-    };
-    let instance = unsafe { &*instance_ptr };
-    instance
-        .note_ports_cache
-        .iter()
-        .filter(|p| p.is_input == is_input)
-        .count() as u32
-}
-
-pub(crate) unsafe extern "C" fn note_ports_get_gui<P: Plugin + GuiHandler>(
-    plugin: *const clap_plugin_t,
-    index: u32,
-    is_input: bool,
-    info: *mut clap_note_port_info_t,
-) -> bool {
-    if info.is_null() {
-        return false;
-    }
-    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
-        return false;
-    };
-    let instance = unsafe { &*instance_ptr };
-    let ports: Vec<_> = instance
-        .note_ports_cache
-        .iter()
-        .filter(|p| p.is_input == is_input)
-        .collect();
-    if (index as usize) >= ports.len() {
-        return false;
-    }
-    let port = &ports[index as usize];
-    let info = unsafe { &mut *info };
-    write_note_port_info(info, port);
-    true
-}
-
-pub(crate) fn create_note_ports_ext_gui<P: Plugin + GuiHandler>() -> clap_plugin_note_ports_t {
-    clap_plugin_note_ports_t {
-        count: Some(note_ports_count_gui::<P>),
-        get: Some(note_ports_get_gui::<P>),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

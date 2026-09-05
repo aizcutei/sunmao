@@ -72,37 +72,3 @@ pub(crate) fn create_audio_ports_activation_ext<P: Plugin>() -> clap_plugin_audi
 }
 
 // ======= GUI Plugin Support =======
-
-use crate::ext::gui::GuiHandler;
-
-pub(crate) unsafe extern "C" fn activation_can_activate_while_processing_gui<
-    P: Plugin + GuiHandler,
->(
-    plugin: *const clap_plugin_t,
-) -> bool {
-    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
-        return false;
-    };
-    let instance = unsafe { &*instance_ptr };
-    ffi_guard(false, || unsafe {
-        instance.controller().can_activate_ports_while_processing()
-    })
-}
-
-pub(crate) unsafe extern "C" fn activation_set_active_gui<P: Plugin + GuiHandler>(
-    plugin: *const clap_plugin_t,
-    is_input: bool,
-    port_index: u32,
-    is_active: bool,
-    sample_size: u32,
-) -> bool {
-    unsafe { set_active_impl::<P>(plugin, is_input, port_index, is_active, sample_size) }
-}
-
-pub(crate) fn create_audio_ports_activation_ext_gui<P: Plugin + GuiHandler>()
--> clap_plugin_audio_ports_activation_t {
-    clap_plugin_audio_ports_activation_t {
-        can_activate_while_processing: Some(activation_can_activate_while_processing_gui::<P>),
-        set_active: Some(activation_set_active_gui::<P>),
-    }
-}

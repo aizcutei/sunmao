@@ -6,7 +6,6 @@ description = "Renderer-agnostic GUI abstraction for SunMao audio plugins"
 license = "MIT"
 
 [dependencies]
-sunmao_core = { path = "../core" }
 glow = { version = "0.16", optional = true }
 wgpu = { version = "23", optional = true }
 bytemuck = { version = "1.18", features = ["derive"], optional = true }

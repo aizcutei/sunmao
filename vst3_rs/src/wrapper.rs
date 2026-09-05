@@ -2988,10 +2988,14 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
     }
 }
 
-/// Export macro for VST3 plugins
+/// Shared expansion behind [`export_vst3_plugin!`] and
+/// [`export_vst3_plugin_with_gui!`]. The two differ only in which controller
+/// wrapper the factory instantiates, so the entry points, factory vtable and
+/// class registration live here once.
+#[doc(hidden)]
 #[macro_export]
-macro_rules! export_vst3_plugin {
-    ($plugin_type:ty) => {
+macro_rules! __export_vst3_plugin_impl {
+    ($plugin_type:ty, $controller:ident) => {
         mod __vst3_rs_impl {
             use super::*;
             use std::ffi::c_void;
@@ -3220,7 +3224,7 @@ macro_rules! export_vst3_plugin {
                     $crate::wrapper::ProcessorWrapper::<$plugin_type>::new(controller_cid())
                         as *mut c_void
                 } else if iid_equal(&cid_arr, &controller_cid()) {
-                    $crate::wrapper::ControllerWrapper::<$plugin_type>::new() as *mut c_void
+                    $crate::wrapper::$controller::<$plugin_type>::new() as *mut c_void
                 } else {
                     *obj = std::ptr::null_mut();
                     return kNoInterface;
@@ -3329,344 +3333,19 @@ macro_rules! export_vst3_plugin {
     };
 }
 
+/// Export macro for VST3 plugins
+#[macro_export]
+macro_rules! export_vst3_plugin {
+    ($plugin_type:ty) => {
+        $crate::__export_vst3_plugin_impl!($plugin_type, ControllerWrapper);
+    };
+}
+
 /// Export macro for VST3 plugins with GUI support
 #[macro_export]
 macro_rules! export_vst3_plugin_with_gui {
     ($plugin_type:ty) => {
-        mod __vst3_rs_impl {
-            use super::*;
-            use std::ffi::c_void;
-            use std::sync::OnceLock;
-            use std::sync::atomic::{AtomicI32, Ordering};
-            use $crate::vst3_sys::*;
-
-            fn processor_cid() -> TUID {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    <$plugin_type as $crate::Plugin>::class_id()
-                }))
-                .unwrap_or([0; 16])
-            }
-
-            fn controller_cid() -> TUID {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    <$plugin_type as $crate::Plugin>::controller_class_id()
-                }))
-                .unwrap_or([0; 16])
-            }
-
-            fn plugin_info() -> $crate::PluginInfo {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    <$plugin_type as $crate::Plugin>::info()
-                }))
-                .unwrap_or_default()
-            }
-
-            #[repr(C)]
-            struct PluginFactoryObj {
-                vtbl: *const FactoryVtbl,
-                ref_count: AtomicI32,
-            }
-
-            #[repr(C)]
-            struct FactoryVtbl {
-                query_interface: unsafe extern "system" fn(
-                    *mut c_void,
-                    *const TUID,
-                    *mut *mut c_void,
-                ) -> tresult,
-                add_ref: unsafe extern "system" fn(*mut c_void) -> uint32,
-                release: unsafe extern "system" fn(*mut c_void) -> uint32,
-                get_factory_info:
-                    unsafe extern "system" fn(*mut c_void, *mut PFactoryInfoData) -> tresult,
-                count_classes: unsafe extern "system" fn(*mut c_void) -> int32,
-                get_class_info:
-                    unsafe extern "system" fn(*mut c_void, int32, *mut PClassInfoData) -> tresult,
-                create_instance: unsafe extern "system" fn(
-                    *mut c_void,
-                    FIDString,
-                    FIDString,
-                    *mut *mut c_void,
-                ) -> tresult,
-                get_class_info2:
-                    unsafe extern "system" fn(*mut c_void, int32, *mut PClassInfo2Data) -> tresult,
-                get_class_info_unicode:
-                    unsafe extern "system" fn(*mut c_void, int32, *mut PClassInfoWData) -> tresult,
-                set_host_context: unsafe extern "system" fn(*mut c_void, *mut c_void) -> tresult,
-            }
-
-            static FACTORY_VTBL: FactoryVtbl = FactoryVtbl {
-                query_interface: factory_query_interface,
-                add_ref: factory_add_ref,
-                release: factory_release,
-                get_factory_info: factory_get_factory_info,
-                count_classes: factory_count_classes,
-                get_class_info: factory_get_class_info,
-                create_instance: factory_create_instance,
-                get_class_info2: factory_get_class_info2,
-                get_class_info_unicode: factory_get_class_info_unicode,
-                set_host_context: factory_set_host_context,
-            };
-
-            struct SendSyncPtr(*mut PluginFactoryObj);
-            unsafe impl Send for SendSyncPtr {}
-            unsafe impl Sync for SendSyncPtr {}
-            static FACTORY: OnceLock<SendSyncPtr> = OnceLock::new();
-
-            unsafe extern "system" fn factory_query_interface(
-                this: *mut c_void,
-                iid: *const TUID,
-                obj: *mut *mut c_void,
-            ) -> tresult {
-                if this.is_null() || iid.is_null() || obj.is_null() {
-                    return kInvalidArgument;
-                }
-                *obj = std::ptr::null_mut();
-                let iid = &*iid;
-                if iid_equal(iid, &iid::IUnknown)
-                    || iid_equal(iid, &base_iid::IPluginFactory)
-                    || iid_equal(iid, &base_iid::IPluginFactory2)
-                    || iid_equal(iid, &base_iid::IPluginFactory3)
-                {
-                    factory_add_ref(this);
-                    *obj = this;
-                    return kResultOk;
-                }
-                *obj = std::ptr::null_mut();
-                kNoInterface
-            }
-
-            unsafe extern "system" fn factory_add_ref(this: *mut c_void) -> uint32 {
-                if this.is_null() {
-                    return 0;
-                }
-                (*(this as *mut PluginFactoryObj))
-                    .ref_count
-                    .fetch_add(1, Ordering::SeqCst) as uint32
-                    + 1
-            }
-
-            unsafe extern "system" fn factory_release(this: *mut c_void) -> uint32 {
-                if this.is_null() {
-                    return 0;
-                }
-                ((*(this as *mut PluginFactoryObj))
-                    .ref_count
-                    .fetch_sub(1, Ordering::SeqCst)
-                    - 1) as uint32
-            }
-
-            unsafe extern "system" fn factory_get_factory_info(
-                _this: *mut c_void,
-                info: *mut PFactoryInfoData,
-            ) -> tresult {
-                if info.is_null() {
-                    return kInvalidArgument;
-                }
-                let plugin_info = plugin_info();
-                let info = &mut *info;
-                strcpy_safe(&mut info.vendor, plugin_info.vendor.as_bytes());
-                strcpy_safe(&mut info.url, plugin_info.url.as_bytes());
-                strcpy_safe(&mut info.email, plugin_info.email.as_bytes());
-                info.flags = PFactoryInfo::Flags::kUnicode;
-                kResultOk
-            }
-
-            unsafe extern "system" fn factory_count_classes(_this: *mut c_void) -> int32 {
-                2
-            }
-
-            unsafe extern "system" fn factory_get_class_info(
-                _this: *mut c_void,
-                index: int32,
-                info: *mut PClassInfoData,
-            ) -> tresult {
-                if info.is_null() {
-                    return kInvalidArgument;
-                }
-                let plugin_info = plugin_info();
-                let info = &mut *info;
-                match index {
-                    0 => {
-                        info.cid = processor_cid();
-                        info.cardinality = PClassInfo::kManyInstances;
-                        strcpy_safe(&mut info.category, kVstAudioEffectClass);
-                        strcpy_safe(&mut info.name, plugin_info.name.as_bytes());
-                    }
-                    1 => {
-                        info.cid = controller_cid();
-                        info.cardinality = PClassInfo::kManyInstances;
-                        strcpy_safe(&mut info.category, kVstComponentControllerClass);
-                        let name = format!("{} Controller", plugin_info.name);
-                        strcpy_safe(&mut info.name, name.as_bytes());
-                    }
-                    _ => return kInvalidArgument,
-                }
-                kResultOk
-            }
-
-            unsafe extern "system" fn factory_get_class_info2(
-                _this: *mut c_void,
-                index: int32,
-                info: *mut PClassInfo2Data,
-            ) -> tresult {
-                if info.is_null() {
-                    return kInvalidArgument;
-                }
-                let plugin_info = plugin_info();
-                let info = &mut *info;
-                match index {
-                    0 => {
-                        info.cid = processor_cid();
-                        info.cardinality = PClassInfo::kManyInstances;
-                        strcpy_safe(&mut info.category, kVstAudioEffectClass);
-                        strcpy_safe(&mut info.name, plugin_info.name.as_bytes());
-                        info.class_flags = ComponentFlags::kSimpleModeSupported;
-                        strcpy_safe(&mut info.sub_categories, plugin_info.category.as_bytes());
-                        strcpy_safe(&mut info.vendor, plugin_info.vendor.as_bytes());
-                        strcpy_safe(&mut info.version, plugin_info.version.as_bytes());
-                        strcpy_safe(&mut info.sdk_version, b"VST 3.8.0\0");
-                    }
-                    1 => {
-                        info.cid = controller_cid();
-                        info.cardinality = PClassInfo::kManyInstances;
-                        strcpy_safe(&mut info.category, kVstComponentControllerClass);
-                        let name = format!("{} Controller", plugin_info.name);
-                        strcpy_safe(&mut info.name, name.as_bytes());
-                        info.class_flags = 0;
-                        strcpy_safe(&mut info.sub_categories, b"\0");
-                        strcpy_safe(&mut info.vendor, plugin_info.vendor.as_bytes());
-                        strcpy_safe(&mut info.version, plugin_info.version.as_bytes());
-                        strcpy_safe(&mut info.sdk_version, b"VST 3.8.0\0");
-                    }
-                    _ => return kInvalidArgument,
-                }
-                kResultOk
-            }
-
-            unsafe extern "system" fn factory_create_instance(
-                _this: *mut c_void,
-                cid: FIDString,
-                requested_iid: FIDString,
-                obj: *mut *mut c_void,
-            ) -> tresult {
-                if cid.is_null() || requested_iid.is_null() || obj.is_null() {
-                    return kInvalidArgument;
-                }
-                *obj = std::ptr::null_mut();
-                let cid_bytes = std::slice::from_raw_parts(cid as *const i8, 16);
-                let mut cid_arr: TUID = [0; 16];
-                cid_arr.copy_from_slice(cid_bytes);
-
-                let instance = if iid_equal(&cid_arr, &processor_cid()) {
-                    $crate::wrapper::ProcessorWrapper::<$plugin_type>::new(controller_cid())
-                        as *mut c_void
-                } else if iid_equal(&cid_arr, &controller_cid()) {
-                    $crate::wrapper::GuiControllerWrapper::<$plugin_type>::new() as *mut c_void
-                } else {
-                    *obj = std::ptr::null_mut();
-                    return kNoInterface;
-                };
-                $crate::wrapper::factory_query_interface(
-                    instance,
-                    requested_iid as *const TUID,
-                    obj,
-                )
-            }
-
-            unsafe extern "system" fn factory_get_class_info_unicode(
-                _this: *mut c_void,
-                index: int32,
-                info: *mut PClassInfoWData,
-            ) -> tresult {
-                if info.is_null() {
-                    return kInvalidArgument;
-                }
-                let plugin_info = plugin_info();
-                let info = &mut *info;
-                match index {
-                    0 => {
-                        info.cid = processor_cid();
-                        info.cardinality = PClassInfo::kManyInstances;
-                        strcpy_safe(&mut info.category, kVstAudioEffectClass);
-                        str16cpy(&mut info.name, plugin_info.name);
-                        info.class_flags = ComponentFlags::kSimpleModeSupported;
-                        strcpy_safe(&mut info.sub_categories, plugin_info.category.as_bytes());
-                        str16cpy(&mut info.vendor, plugin_info.vendor);
-                        str16cpy(&mut info.version, plugin_info.version);
-                        str16cpy(&mut info.sdk_version, "VST 3.8.0");
-                    }
-                    1 => {
-                        info.cid = controller_cid();
-                        info.cardinality = PClassInfo::kManyInstances;
-                        strcpy_safe(&mut info.category, kVstComponentControllerClass);
-                        let name = format!("{} Controller", plugin_info.name);
-                        str16cpy(&mut info.name, &name);
-                        info.class_flags = 0;
-                        strcpy_safe(&mut info.sub_categories, b"\0");
-                        str16cpy(&mut info.vendor, plugin_info.vendor);
-                        str16cpy(&mut info.version, plugin_info.version);
-                        str16cpy(&mut info.sdk_version, "VST 3.8.0");
-                    }
-                    _ => return kInvalidArgument,
-                }
-                kResultOk
-            }
-
-            unsafe extern "system" fn factory_set_host_context(
-                _this: *mut c_void,
-                _context: *mut c_void,
-            ) -> tresult {
-                kResultOk
-            }
-
-            #[unsafe(no_mangle)]
-            pub extern "C" fn GetPluginFactory() -> *mut c_void {
-                let factory = FACTORY.get_or_init(|| {
-                    SendSyncPtr(Box::into_raw(Box::new(PluginFactoryObj {
-                        vtbl: &FACTORY_VTBL,
-                        ref_count: AtomicI32::new(0),
-                    })))
-                });
-                unsafe { factory_add_ref(factory.0 as *mut c_void) };
-                factory.0 as *mut c_void
-            }
-
-            #[cfg(target_os = "macos")]
-            #[unsafe(no_mangle)]
-            pub extern "C" fn bundleEntry(_bundle: *mut c_void) -> bool {
-                true
-            }
-
-            #[cfg(target_os = "macos")]
-            #[unsafe(no_mangle)]
-            pub extern "C" fn bundleExit() -> bool {
-                true
-            }
-
-            #[cfg(target_os = "linux")]
-            #[unsafe(no_mangle)]
-            pub extern "C" fn ModuleEntry(_: *mut c_void) -> bool {
-                true
-            }
-
-            #[cfg(target_os = "linux")]
-            #[unsafe(no_mangle)]
-            pub extern "C" fn ModuleExit() -> bool {
-                true
-            }
-
-            #[cfg(target_os = "windows")]
-            #[unsafe(no_mangle)]
-            pub extern "C" fn InitDll() -> bool {
-                true
-            }
-
-            #[cfg(target_os = "windows")]
-            #[unsafe(no_mangle)]
-            pub extern "C" fn ExitDll() -> bool {
-                true
-            }
-        }
+        $crate::__export_vst3_plugin_impl!($plugin_type, GuiControllerWrapper);
     };
 }
 

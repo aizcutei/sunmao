@@ -65,38 +65,3 @@ pub(crate) fn create_voice_info_ext<P: Plugin>() -> clap_plugin_voice_info_t {
 }
 
 // ======= GUI Plugin Support =======
-
-use crate::ext::gui::GuiHandler;
-
-pub(crate) unsafe extern "C" fn voice_info_get_gui<P: Plugin + GuiHandler>(
-    plugin: *const clap_plugin_t,
-    info: *mut clap_voice_info_t,
-) -> bool {
-    if info.is_null() {
-        return false;
-    }
-    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
-        return false;
-    };
-    let instance = unsafe { &*instance_ptr };
-    let voice_info = ffi_guard(None, || unsafe { instance.controller().voice_info() });
-    if let Some(vi) = voice_info {
-        let out = unsafe { &mut *info };
-        out.voice_count = vi.voice_count;
-        out.voice_capacity = vi.voice_capacity;
-        out.flags = if vi.supports_overlapping_notes {
-            CLAP_VOICE_INFO_SUPPORTS_OVERLAPPING_NOTES
-        } else {
-            0
-        };
-        true
-    } else {
-        false
-    }
-}
-
-pub(crate) fn create_voice_info_ext_gui<P: Plugin + GuiHandler>() -> clap_plugin_voice_info_t {
-    clap_plugin_voice_info_t {
-        get: Some(voice_info_get_gui::<P>),
-    }
-}

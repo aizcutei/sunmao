@@ -15,7 +15,6 @@ system-capture = ["dep:ruhear", "dep:screencapturekit"]
 sunmao_core = { path = "../core" }
 cpal = "0.15"
 midir = "0.9"
-winit = "0.29"
 anyhow = "1.0"
 ringbuf = "0.2"
 

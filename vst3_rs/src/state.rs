@@ -4,8 +4,9 @@ use std::ffi::c_void;
 use vst3_sys::base::{IBStreamVtbl, int32, kInvalidArgument, kResultFalse, kResultOk, tresult};
 
 const STATE_MAGIC: [u8; 8] = *b"SMV3PRM\0";
-/// Version used when a caller does not supply the plugin's own. Kept so the
-/// header layout stays self-describing for pre-Phase-3 blobs.
+/// Version the encoder tests round-trip against. Live blobs always carry the
+/// plugin's own `Plugin::STATE_VERSION`; nothing outside the tests reads this.
+#[cfg(test)]
 const STATE_VERSION: u32 = 1;
 const HEADER_LEN: usize = 16;
 const ENTRY_LEN: usize = 12;
@@ -239,10 +240,10 @@ mod tests {
         // Entries are matched by parameter id, so an older layout restores
         // what it knew and leaves newer parameters at their defaults. This
         // must not be rejected outright.
-        let header = header_bytes(STATE_VERSION.saturating_sub(1).max(0), 0);
+        let header = header_bytes(STATE_VERSION.saturating_sub(1), 0);
         assert_eq!(
             decode_header(&header, STATE_VERSION),
-            Some((STATE_VERSION.saturating_sub(1).max(0), 0))
+            Some((STATE_VERSION.saturating_sub(1), 0))
         );
     }
 

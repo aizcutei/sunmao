@@ -23,21 +23,3 @@ pub(crate) fn create_tail_ext<P: Plugin>() -> clap_plugin_tail_t {
 }
 
 // ======= GUI Plugin Support =======
-
-use crate::ext::gui::GuiHandler;
-
-pub(crate) unsafe extern "C" fn tail_get_gui<P: Plugin + GuiHandler>(
-    plugin: *const clap_plugin_t,
-) -> u32 {
-    let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
-        return 0;
-    };
-    let instance = unsafe { &*instance_ptr };
-    instance.cached_tail()
-}
-
-pub(crate) fn create_tail_ext_gui<P: Plugin + GuiHandler>() -> clap_plugin_tail_t {
-    clap_plugin_tail_t {
-        get: Some(tail_get_gui::<P>),
-    }
-}

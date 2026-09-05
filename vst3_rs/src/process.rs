@@ -77,7 +77,9 @@ pub struct ProcessContext {
 }
 
 impl ProcessContext {
-    /// Create a new process context
+    /// Panicking constructor for tests. The ABI boundary must not unwind, so
+    /// production callers use [`Self::try_new`] and reject the setup instead.
+    #[cfg(test)]
     pub(crate) fn new(
         num_samples: usize,
         sample_rate: f64,
@@ -183,7 +185,10 @@ impl ProcessContext {
         self.outputs.len()
     }
 
-    /// Copy from raw input buffers
+    /// Copy from raw input buffers, starting at channel 0 with no silence
+    /// flags. The ABI path always supplies an offset, so this is a test-only
+    /// convenience over [`Self::copy_from_raw_inputs_at`].
+    #[cfg(test)]
     pub(crate) unsafe fn copy_from_raw_inputs(
         &mut self,
         buffers: *const *const f32,
@@ -227,18 +232,6 @@ impl ProcessContext {
                     std::ptr::copy_nonoverlapping(src, dst.as_mut_ptr(), len);
                 }
             }
-        }
-    }
-
-    /// Copy to raw output buffers
-    pub(crate) unsafe fn copy_to_raw_outputs(
-        &self,
-        buffers: *const *mut f32,
-        num_channels: usize,
-        num_samples: usize,
-    ) {
-        unsafe {
-            self.copy_to_raw_outputs_at(buffers, num_channels, num_samples, 0);
         }
     }
 

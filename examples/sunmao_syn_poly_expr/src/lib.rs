@@ -70,10 +70,6 @@ impl Default for PolyExprSynth {
     }
 }
 
-fn note_frequency(note: u8) -> f64 {
-    note_frequency_with_tuning(note, 0.0)
-}
-
 /// Note frequency with a per-note tuning offset in semitones.
 fn note_frequency_with_tuning(note: u8, semitones: f64) -> f64 {
     440.0 * 2.0_f64.powf((f64::from(note) - 69.0 + semitones) / 12.0)

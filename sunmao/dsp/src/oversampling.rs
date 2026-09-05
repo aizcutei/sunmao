@@ -535,9 +535,9 @@ mod tests {
         let goertzel = |samples: &[f32], target: f64| -> f32 {
             let omega = std::f64::consts::TAU * target / sample_rate;
             let coefficient = 2.0 * omega.cos();
-            let (mut s0, mut s1, mut s2) = (0.0f64, 0.0f64, 0.0f64);
+            let (mut s1, mut s2) = (0.0f64, 0.0f64);
             for sample in samples.iter().skip(2_048) {
-                s0 = f64::from(*sample) + coefficient * s1 - s2;
+                let s0 = f64::from(*sample) + coefficient * s1 - s2;
                 s2 = s1;
                 s1 = s0;
             }
