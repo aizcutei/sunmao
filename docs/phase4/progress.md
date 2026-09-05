@@ -482,3 +482,24 @@
   scale 协商 18 次等均为确定性断言），但**这一条并发断言在 #86 的通过是运气**，
   据此不能声称"跨线程行为已在三平台验证"——该结论要等修复后的版本取得绿才成立。
 - Unresolved: 修复后需重新取三平台绿。
+
+### 2026-09-06 — run #88 三平台全绿：flaky 修复生效，M4/M5 可交付部分验收
+
+- Command/platform: push `c25dabc` 触发 GitHub Actions #88：
+  https://github.com/aizcutei/sunmao/actions/runs/33984024056
+- Result: 三 job 同一 commit 全部 success，每 job **26 步零非成功**，artifacts 3 份可下载
+  （macOS 53.0MB / Windows 78.3MB / Linux 971.2MB）。
+- Evidence/artifact: 已下载三平台 job 日志逐条核实，**每一条都是真跑并通过**：
+  - `frames_survive_crossing_a_real_thread_boundary ... ok` —— #87 在 Linux 上失败的那条，
+    修复后三平台均绿。**至此"跨线程行为已三平台验证"才成立。**
+  - `the_editor_describes_itself_to_assistive_technology ... ok`（accessibility 树在真实
+    编辑器上的断言）
+  - `host_sync_never_echoes_back_to_the_host ... ok` **各 4 次/平台**（本轮从 2 个控件补到
+    四个参数控件全覆盖）
+  - `the_window_api_names_match_upstream ... ok`（`clap_sys` 补回 `uikit` 后的常量钉死）
+  - `GUI scale negotiated` 各 18 次/平台；**三平台零 FAILED 套件**。
+- Unresolved: **Phase 4 按其自身完成规则仍未完成**——M0–M3 全部完成并各自取绿，
+  M4/M5 的可交付部分已由 #86/#88 取绿，但 M4 的 floating CLAP editor 与 accessibility
+  OS 桥接、M5 的 Wayland 原生三项未交付，且都是范围问题而非工期问题（依据与文件行号见
+  status.md 的「M4 受阻项」「M5 Wayland 受阻链」「完成规则 → 当前判定」）。
+  三者共同的性质：工作量不在 SunMao 这一层，而在 vendored baseview 与三个 OS 的原生 API 上。
