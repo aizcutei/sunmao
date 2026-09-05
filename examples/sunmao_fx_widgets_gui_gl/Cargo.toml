@@ -1,0 +1,19 @@
+[package]
+name = "sunmao_fx_widgets_gui_gl"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "sunmao_fx_widgets_gui_gl_standalone"
+path = "src/bin/standalone.rs"
+required-features = ["standalone"]
+
+[features]
+default = []
+standalone = ["sunmao/standalone"]
+
+[dependencies]
+sunmao = { path = "../../sunmao", features = ["gui-gl"] }

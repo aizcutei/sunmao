@@ -4512,6 +4512,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sunmao_fx_widgets_gui_gl"
+version = "0.1.0"
+dependencies = [
+ "sunmao",
+]
+
+[[package]]
 name = "sunmao_gui"
 version = "0.1.0"
 dependencies = [

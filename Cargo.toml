@@ -71,6 +71,7 @@ members = [
     "examples/sunmao_template_instrument",
     "examples/sunmao_fx_os_dist",
     "examples/sunmao_fx_meter",
+    "examples/sunmao_fx_widgets_gui_gl",
 ]
 resolver = "2"
 

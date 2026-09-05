@@ -306,6 +306,34 @@ jobs:
           done
           cargo build --locked "${fixtures[@]/#/--package=}"
 
+      - name: Test Phase 4 acceptance fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The Phase 4 fixture carries the GUI-component milestones: the four
+          # control archetypes (knob, dropdown, toggle, spectrum) plus the
+          # lock-free audio->GUI publish path. Its dropdown/toggle/spectrum are
+          # skeletons that M2/M4 replace with framework widgets; the acceptance
+          # rule is that these tests survive the swap unchanged.
+          # Blocking from M0 on, same shape as the Phase 3 step above.
+          fixtures=(
+            sunmao_fx_widgets_gui_gl
+          )
+          for fixture in "${fixtures[@]}"; do
+            echo "::group::cargo test -p $fixture"
+            set +e
+            cargo test --locked -p "$fixture" 2>&1 | tee -a target/phase1-artifacts/phase4-fixture-tests.log
+            status=${PIPESTATUS[0]}
+            set -e
+            if [ "$status" -ne 0 ]; then
+              summary="$(tail -n 25 target/phase1-artifacts/phase4-fixture-tests.log | tr '\n' ' ' | cut -c1-1200)"
+              echo "::error title=Phase 4 fixture test failed::cargo test -p $fixture exited with status $status: $summary"
+              exit "$status"
+            fi
+            echo "::endgroup::"
+          done
+          cargo build --locked "${fixtures[@]/#/--package=}"
+
       - name: Test macOS system-capture linkage (non-blocking follow-up)
         if: runner.os == 'macOS'
         continue-on-error: true
