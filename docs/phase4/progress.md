@@ -240,3 +240,14 @@
     IME/国际键盘、cursor/focus 模型、runner 的"按键→参数变化"断言。
   - `TtfFont` 的 CJK：Ubuntu Light 无 CJK 覆盖，`has_glyph` 会如实报 false 供调用方替换；
     真要渲染 CJK 需插件自带字体。这一点在 M3 下半的 IME 落地时要一并说清。
+
+### 2026-09-05 — M3 上半验收：hosted run #79 三平台全绿
+
+- Command/platform: push `c405bd0` 触发 GitHub Actions #79：
+  https://github.com/aizcutei/sunmao/actions/runs/33968821893
+- Result: 三个 job 同一 commit 全部 success，每 job **26 步零非成功**，artifacts 3 份。
+  Windows WGPU 收尾段错误未复现（自 run #66 起连续第 12 次）。
+- Evidence/artifact: run #79 artifacts 可下载。
+- Unresolved: **M3 尚未完成**——下半（GL 真正绘制字形、clipboard、IME/国际键盘、
+  cursor/focus 模型、runner 的按键→参数断言）未开始。本条只是把已绿的上半钉住，
+  避免下半失败时连度量层一起回滚。
