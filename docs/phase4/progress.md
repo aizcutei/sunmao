@@ -313,3 +313,19 @@
   **推送前的本地验证只覆盖了新 fixture，没覆盖 GUI 矩阵里另外 8 个插件。** 那 8 个只在
   hosted GUI 步骤里跑（需要显示器），本地不会自动触发，我也没有推理"这一步实际测哪些插件"。
   以后凡是改动 `gui-test` 共享路径，本地必须至少手动跑一个**新 fixture之外**的 GUI 插件。
+
+### 2026-09-05 — run #82 绿但**断言空转**，补进 GUI 矩阵
+
+- Command/platform: run #82（commit `3a0b1e6`）三平台 success、26 步零非成功、artifacts 齐备。
+- **但核实日志发现断言从未执行**：三平台 `GUI key verified` 各 **0 次**，
+  `declares no keyboard handling` 各 16 次——即 GUI 矩阵里 8 个插件 × 2 格式全部走了跳过路径。
+  原因是 widgets fixture 只加进了**打包矩阵**（`runner test`），没加进 **GUI 矩阵**
+  （`gui-test`），而它是唯一声明键盘处理的编辑器。
+- **这正是本轮一直在防的失败模式，这次出在我自己的改动上**：一个只会 success、
+  却从不真正执行的 gate，会让后面每个 milestone 的"证据"失效。若不是逐平台数
+  `GUI key verified` 的出现次数，只看 conclusion 会把它当作 M3 已验收。
+- Change: `package_and_test_gui_lifecycle WidgetsGL` 加入 GUI 矩阵，并在 workflow 里
+  写明原因（不加这一行断言就是空的）。
+- Result: 待三平台 hosted 复验；判定标准是三平台各出现 **1 次** `GUI key verified`
+  （VST3）与 1 次格式跳过（CLAP），而不只是 job success。
+- Unresolved: M3 在该验证通过前不算完成。

@@ -795,6 +795,11 @@ jobs:
 
           package_and_test_gui_lifecycle LPFGL "${{ matrix.lpf-binary }}" "SunMao LPF GL" fx.lpf.gl
           package_and_test_gui_lifecycle DAWInfoGUI "${{ matrix.daw-binary }}" "SunMao DAW Info GUI" daw.info.gui
+          # The Phase 4 widgets fixture. It is the only editor that declares
+          # keyboard handling, so the runner's key->parameter assertion is inert
+          # unless it runs here: without this line the check is green but never
+          # actually executes. Run #82 demonstrated exactly that.
+          package_and_test_gui_lifecycle WidgetsGL "${{ matrix.widgets-gui-binary }}" "SunMao Widgets GL" fx.widgets-gl
 
       - name: Exercise repository packaging helper
         shell: bash
