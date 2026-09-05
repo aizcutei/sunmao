@@ -128,3 +128,19 @@
   - M1 第三项"Windows WGPU exit 139 若复现则定位"：本轮**未复现**，故未做定位；
     `ownership.md` 已写下复现时的排查起点（`WgpuHandler` drop 必须早于窗口销毁）。
   - 本轮只协商 scale，未做 M2 的布局/主题。
+
+### 2026-09-05 — M1 完成：hosted run #75 三平台全绿
+
+- Command/platform: push `0b51dcb` 触发 GitHub Actions #75：
+  https://github.com/aizcutei/sunmao/actions/runs/33963105660
+- Result: 三个 job 同一 commit 全部 success，每 job **26 步零非成功**。Phase 1/2/3 既有 gate
+  与 Phase 4 fixture 步骤同时绿。Windows WGPU 收尾段错误未复现（自 run #66 起连续第 8 次）。
+- Evidence/artifact: artifacts 3 份可下载。**另下载三平台 job 原始日志核实断言非空转**：
+  每平台 `GUI scale negotiated: host applied 2.0` 各出现 **16 次**（8 个 GUI 插件 × VST3/CLAP
+  两格式），零因子拒绝同样 16 次；且拒绝方式**按格式精确分裂 8/8**——CLAP 回 `false`
+  （日志 "correctly refused a zero factor"）、VST3 回 `kInvalidArgument`（日志 "refused a zero
+  factor with an error"），三平台完全一致。这同时反向确认了 semantics.md 里"两格式拒绝信号
+  方式不同"那条记录是准确的，而不是只在 macOS 上观察到的巧合。
+- Unresolved: M1 完成，进入 M2（布局与主题：`Column`/`Row`/gap/padding 与
+  `Label`/`Knob`/`Slider`/`Toggle`/`Dropdown`、参数双向绑定、主题 token）。
+  M2 同时要把 `sunmao_fx_widgets_gui_gl` 的三个 skeleton 换成框架控件并接入打包矩阵。
