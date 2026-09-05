@@ -719,3 +719,27 @@
 - Result: `cargo check --tests --target x86_64-pc-windows-msvc --features accessibility` exit 0；
   fmt / diff 全过。
 - Unresolved: 下一轮仍要看 Windows 日志是 `UIA VERIFIED` 还是某条 `UIA SKIPPED`。
+
+### 2026-09-06 — UIA 往返抓到一个真缺陷：适配器不能在 `WM_GETOBJECT` 里创建
+
+- Command/platform: run #97 的 Windows job 给出了决定性诊断（raw-view 遍历 + 元素名）。
+- **诊断读数**：`type=50033 name="SunMao Widgets"`——50033 是 Pane，而 `"SunMao Widgets"`
+  正是 **baseview 的窗口标题**（`BaseviewConfig.title`），不是我们的根节点标签
+  （那会是 `WidgetsPlugin::NAME` = `"SunMao Widgets GL"`）。**即：UIA 看到的是默认的
+  HWND pane，我们的 provider 根本没装上。** 其余元素（TitleBar/MenuBar/Minimize/
+  Maximize/Close）全是宿主窗口自己的非客户区。
+- **根因，而且上游早就写明了**：`accesskit_windows::Adapter::new` 的文档说它
+  **不得在处理 `WM_GETOBJECT` 期间调用**，因为它必须在那条消息被处理**之前**初始化 UIA；
+  否则会产生嵌套的 `WM_GETOBJECT`，且**辅助技术会认为该窗口不原生支持 UIA**——
+  与观察到的现象逐字吻合。我为了省开销把适配器做成"首次 `WM_GETOBJECT` 时懒创建"，
+  正好踩中这一条。**我读过那段注释，但没把它和自己的懒加载联系起来。**
+- Change: 改为**随窗口创建**（handler 装好之后、任何 `WM_GETOBJECT` 之前）。
+  仍然跳过"handler 不描述自己"的窗口，所以只有真正参与的编辑器才付这份开销——
+  该判断移到了创建时而不是消息处理里。macOS 侧本来就是在 `finish` 里 eager 创建的，
+  没有这个问题。
+- **这正是这个测试存在的理由**：整条链在三平台都编译通过、所有单测和 proptest 全绿，
+  而真实的 UIA 客户端看到的仍然是一个不透明矩形。只有拿屏幕阅读器用的同一套 API
+  去问，才问得出来。
+- Result: `cargo check --target x86_64-pc-windows-msvc --features accessibility` exit 0；
+  fmt / diff 全过。
+- Unresolved: 下一轮看 Windows 日志里是否出现 `UIA VERIFIED`。

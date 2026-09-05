@@ -601,12 +601,17 @@ pub(super) struct WindowState {
     cursor_icon: Cell<MouseCursor>,
     // Initialized late so the `Window` can hold a reference to this `WindowState`
     handler: RefCell<Option<Box<dyn WindowHandler>>>,
-    /// UI Automation adapter, created lazily on the first `WM_GETOBJECT`.
+    /// UI Automation adapter, created with the window.
     ///
-    /// Lazy because `Adapter::new` initialises UIA, which is not free and is
-    /// pointless in the overwhelmingly common case where no assistive
-    /// technology is running — Windows only sends `WM_GETOBJECT` when
-    /// something actually asks.
+    /// **Not** created lazily on the first `WM_GETOBJECT`, however tempting
+    /// that is: `Adapter::new` initialises UIA, and upstream documents that
+    /// doing so *while handling* that message causes nested `WM_GETOBJECT`s and
+    /// leaves assistive technology believing the window has no native UIA
+    /// support. A lazy version of this passed every compile check and then
+    /// reported the plain HWND pane to a real UIA client instead of the editor.
+    ///
+    /// Still skipped entirely for a window whose handler describes nothing, so
+    /// only editors that participate pay for it.
     #[cfg(feature = "accessibility")]
     accesskit: RefCell<Option<accesskit_windows::Adapter>>,
     _drop_target: RefCell<Option<Rc<DropTarget>>>,
@@ -667,32 +672,38 @@ impl accesskit::ActionHandler for NoActions {
 }
 
 impl WindowState {
-    /// Answer `WM_GETOBJECT`, creating the UIA adapter on first use.
+    /// Create the UIA adapter, unless this window describes nothing.
     ///
-    /// Returns `None` when the window has no tree to publish, which lets
-    /// `DefWindowProc` give the caller the plain-window description instead.
+    /// Called once the handler exists and **before** any `WM_GETOBJECT` can be
+    /// answered — see the field's comment for why that order is not optional.
     #[cfg(feature = "accessibility")]
-    fn handle_wm_getobject(&self, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
-        // A window that describes nothing should not pay to initialise UIA.
-        if self
+    fn install_accessibility(&self) {
+        let describes = self
             .handler
             .try_borrow_mut()
-            .ok()?
-            .as_mut()?
-            .accessibility_tree()
-            .is_none()
-        {
-            return None;
+            .ok()
+            .and_then(|mut handler| Some(handler.as_mut()?.accessibility_tree().is_some()))
+            .unwrap_or(false);
+        if !describes {
+            return;
         }
-        let mut adapter = self.accesskit.try_borrow_mut().ok()?;
-        // `winapi` and the `windows` crate model these as different types, so
-        // convert explicitly at the boundary rather than transmuting: HWND is
-        // a pointer here and a newtype over isize there.
+        // `winapi` and the `windows` crate model this as a different type, so
+        // convert explicitly rather than transmuting: HWND is a pointer here
+        // and a newtype over a pointer there.
         let hwnd = accesskit_windows::HWND(self.hwnd as isize as *mut std::ffi::c_void);
-        let adapter = adapter.get_or_insert_with(|| {
-            let focused = unsafe { GetFocus() } == self.hwnd;
-            accesskit_windows::Adapter::new(hwnd, focused, NoActions)
-        });
+        let focused = unsafe { GetFocus() } == self.hwnd;
+        *self.accesskit.borrow_mut() =
+            Some(accesskit_windows::Adapter::new(hwnd, focused, NoActions));
+    }
+
+    /// Answer `WM_GETOBJECT` from the already-created adapter.
+    ///
+    /// `None` when this window has no adapter, which lets `DefWindowProc` give
+    /// the caller the plain-window description instead.
+    #[cfg(feature = "accessibility")]
+    fn handle_wm_getobject(&self, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+        let mut adapter = self.accesskit.try_borrow_mut().ok()?;
+        let adapter = adapter.as_mut()?;
         let mut activation = HandlerActivation {
             handler: &self.handler,
         };
@@ -979,6 +990,10 @@ impl Window<'_> {
                 build(&mut window)
             };
             *window_state.handler.borrow_mut() = Some(Box::new(handler));
+            // Before the window can be asked anything: UIA must be initialised
+            // outside `WM_GETOBJECT` handling, not during it.
+            #[cfg(feature = "accessibility")]
+            window_state.install_accessibility();
 
             // A plugin editor is embedded in a host process, so changing the
             // process-wide DPI awareness here would mutate host policy after its
