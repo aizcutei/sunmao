@@ -2173,16 +2173,35 @@ struct PlugViewVtblLocal {
     check_size_constraint: unsafe extern "system" fn(*mut c_void, *mut ViewRect) -> tresult,
 }
 
+/// `IPlugViewContentScaleSupport` vtable, mirroring
+/// `vst3_sys::gui::IPlugViewContentScaleSupportVtbl` with the local
+/// `IUnknown` layout the other wrappers in this file use.
+#[repr(C)]
+struct PlugViewScaleVtblLocal {
+    query_interface:
+        unsafe extern "system" fn(*mut c_void, *const TUID, *mut *mut c_void) -> tresult,
+    add_ref: unsafe extern "system" fn(*mut c_void) -> uint32,
+    release: unsafe extern "system" fn(*mut c_void) -> uint32,
+    set_content_scale_factor: unsafe extern "system" fn(*mut c_void, ScaleFactor) -> tresult,
+}
+
 /// Internal IPlugView wrapper for GUI plugins
+///
+/// `vtbl_scale` must stay immediately after `vtbl`: `from_scale` recovers the
+/// wrapper by subtracting exactly one pointer width, so reordering these two
+/// fields would corrupt every `IPlugViewContentScaleSupport` call. The layout
+/// is pinned by `plug_view_scale_vtbl_is_one_pointer_after_vtbl`.
 #[repr(C)]
 pub struct PlugViewWrapper<P: GuiPlugin> {
     vtbl: *const PlugViewVtblLocal,
+    vtbl_scale: *const PlugViewScaleVtblLocal,
     ref_count: AtomicI32,
     plugin: *mut P,
     size: GuiSize,
     host: HostHandle,
     owner: *mut GuiControllerWrapper<P>,
     _vtbl_storage: Box<PlugViewVtblLocal>,
+    _scale_vtbl_storage: Box<PlugViewScaleVtblLocal>,
 }
 
 impl<P: GuiPlugin> PlugViewWrapper<P> {
@@ -2199,16 +2218,20 @@ impl<P: GuiPlugin> PlugViewWrapper<P> {
     ) -> *mut Self {
         let vtbl_storage = Box::new(Self::make_vtbl());
         let vtbl = &*vtbl_storage;
+        let scale_vtbl_storage = Box::new(Self::make_scale_vtbl());
+        let vtbl_scale = &*scale_vtbl_storage;
         let size = P::gui_size();
 
         let wrapper = Box::new(Self {
             vtbl,
+            vtbl_scale,
             ref_count: AtomicI32::new(1),
             plugin,
             size,
             host,
             owner,
             _vtbl_storage: vtbl_storage,
+            _scale_vtbl_storage: scale_vtbl_storage,
         });
         if !owner.is_null() {
             unsafe { GuiControllerWrapper::<P>::add_ref(owner.cast::<c_void>()) };
@@ -2236,6 +2259,20 @@ impl<P: GuiPlugin> PlugViewWrapper<P> {
         }
     }
 
+    fn make_scale_vtbl() -> PlugViewScaleVtblLocal {
+        PlugViewScaleVtblLocal {
+            query_interface: Self::scale_query_interface,
+            add_ref: Self::scale_add_ref,
+            release: Self::scale_release,
+            set_content_scale_factor: Self::set_content_scale_factor,
+        }
+    }
+
+    /// Recover the wrapper from a pointer to its `vtbl_scale` field.
+    unsafe fn from_scale(this: *mut c_void) -> *mut Self {
+        (this as *mut u8).sub(std::mem::size_of::<*const c_void>()) as *mut Self
+    }
+
     unsafe extern "system" fn query_interface(
         this: *mut c_void,
         iid: *const TUID,
@@ -2251,8 +2288,72 @@ impl<P: GuiPlugin> PlugViewWrapper<P> {
             *obj = this;
             return kResultOk;
         }
+        if iid_equal(iid, &gui_iid::IPlugViewContentScaleSupport) {
+            Self::add_ref(this);
+            *obj = &(*(this as *mut Self)).vtbl_scale as *const _ as *mut c_void;
+            return kResultOk;
+        }
         *obj = std::ptr::null_mut();
         kNoInterface
+    }
+
+    // ---- IPlugViewContentScaleSupport ----
+    //
+    // The host holds this as a separate interface pointer, so its IUnknown
+    // methods must forward to the view's single refcount rather than keep
+    // their own.
+
+    unsafe extern "system" fn scale_query_interface(
+        this: *mut c_void,
+        iid: *const TUID,
+        obj: *mut *mut c_void,
+    ) -> tresult {
+        if this.is_null() {
+            return kInvalidArgument;
+        }
+        Self::query_interface(Self::from_scale(this) as *mut c_void, iid, obj)
+    }
+
+    unsafe extern "system" fn scale_add_ref(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
+        Self::add_ref(Self::from_scale(this) as *mut c_void)
+    }
+
+    unsafe extern "system" fn scale_release(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
+        Self::release(Self::from_scale(this) as *mut c_void)
+    }
+
+    unsafe extern "system" fn set_content_scale_factor(
+        this: *mut c_void,
+        factor: ScaleFactor,
+    ) -> tresult {
+        ffi_guard(kResultFalse, || unsafe {
+            if this.is_null() {
+                return kInvalidArgument;
+            }
+            // A non-finite or non-positive factor would scale the editor into
+            // nothing; reject it instead of forwarding it to plugin code.
+            if !factor.is_finite() || factor <= 0.0 {
+                return kInvalidArgument;
+            }
+            let wrapper = Self::from_scale(this);
+            let plugin = (*wrapper).plugin;
+            if plugin.is_null() {
+                return kResultFalse;
+            }
+            if (*plugin).gui_set_scale(factor) {
+                kResultOk
+            } else {
+                // Not an error: the plugin scales itself. Hosts treat
+                // kResultFalse as "understood, nothing to do".
+                kResultFalse
+            }
+        })
     }
 
     unsafe extern "system" fn add_ref(this: *mut c_void) -> uint32 {
@@ -3855,6 +3956,13 @@ mod tests {
         }
     }
 
+    /// Last factor delivered to `HostGuiTestPlugin::gui_set_scale`, as raw f32
+    /// bits. `u32::MAX` means "never called".
+    static LAST_SCALE_BITS: AtomicU32 = AtomicU32::new(u32::MAX);
+    /// When false, the test plugin declines the factor so the wrapper's
+    /// `kResultFalse` path can be exercised.
+    static ACCEPT_SCALE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
     impl GuiPlugin for HostGuiTestPlugin {
         fn gui_size() -> GuiSize {
             GuiSize::new(320, 200)
@@ -3865,6 +3973,11 @@ mod tests {
         }
 
         fn gui_destroy(&mut self) {}
+
+        fn gui_set_scale(&mut self, factor: f32) -> bool {
+            LAST_SCALE_BITS.store(factor.to_bits(), Ordering::SeqCst);
+            ACCEPT_SCALE.load(Ordering::SeqCst)
+        }
     }
 
     mod exported_factory {
@@ -4761,6 +4874,106 @@ mod tests {
             assert!(!host.begin_edit(17));
             assert_eq!(
                 ControllerWrapper::<BridgeTestPlugin>::release(controller.cast::<c_void>()),
+                0
+            );
+        }
+    }
+
+    /// `from_scale` subtracts exactly one pointer width. If the two vtable
+    /// pointers were ever reordered or separated, every scale call would land
+    /// on a bogus `self`, so pin the layout rather than trust the comment.
+    #[test]
+    fn plug_view_scale_vtbl_is_one_pointer_after_vtbl() {
+        unsafe {
+            let controller = GuiControllerWrapper::<HostGuiTestPlugin>::new();
+            let plugin = (*controller).plugin.as_mut().unwrap() as *mut HostGuiTestPlugin;
+            let view = PlugViewWrapper::new(controller, plugin, (*controller).host.clone());
+
+            let base = view as *const u8;
+            let scale_field = &(*view).vtbl_scale as *const _ as *const u8;
+            assert_eq!(
+                scale_field.offset_from(base) as usize,
+                std::mem::size_of::<*const c_void>()
+            );
+            // And the recovery is exactly its inverse.
+            assert_eq!(
+                PlugViewWrapper::<HostGuiTestPlugin>::from_scale(scale_field as *mut c_void),
+                view
+            );
+
+            assert_eq!(
+                PlugViewWrapper::<HostGuiTestPlugin>::release(view.cast::<c_void>()),
+                0
+            );
+            assert_eq!(
+                GuiControllerWrapper::<HostGuiTestPlugin>::release(controller.cast::<c_void>()),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn plug_view_reports_content_scale_support_and_forwards_the_factor() {
+        unsafe {
+            let controller = GuiControllerWrapper::<HostGuiTestPlugin>::new();
+            let plugin = (*controller).plugin.as_mut().unwrap() as *mut HostGuiTestPlugin;
+            let view = PlugViewWrapper::new(controller, plugin, (*controller).host.clone());
+            LAST_SCALE_BITS.store(u32::MAX, Ordering::SeqCst);
+            ACCEPT_SCALE.store(true, Ordering::SeqCst);
+
+            // The host asks the view for the scale interface by IID.
+            let mut obj: *mut c_void = std::ptr::null_mut();
+            assert_eq!(
+                PlugViewWrapper::<HostGuiTestPlugin>::query_interface(
+                    view.cast::<c_void>(),
+                    &gui_iid::IPlugViewContentScaleSupport as *const TUID,
+                    &mut obj,
+                ),
+                kResultOk
+            );
+            assert!(!obj.is_null());
+            // Handing out the interface took a reference on the same object.
+            assert_eq!((*view).ref_count.load(Ordering::SeqCst), 2);
+
+            let scale_vtbl = *(obj as *const *const PlugViewScaleVtblLocal);
+            assert_eq!(
+                ((*scale_vtbl).set_content_scale_factor)(obj, 2.0),
+                kResultOk
+            );
+            assert_eq!(f32::from_bits(LAST_SCALE_BITS.load(Ordering::SeqCst)), 2.0);
+
+            // A plugin that scales itself answers kResultFalse, not an error.
+            ACCEPT_SCALE.store(false, Ordering::SeqCst);
+            assert_eq!(
+                ((*scale_vtbl).set_content_scale_factor)(obj, 1.5),
+                kResultFalse
+            );
+            assert_eq!(f32::from_bits(LAST_SCALE_BITS.load(Ordering::SeqCst)), 1.5);
+
+            // Nonsense factors are rejected before reaching plugin code.
+            ACCEPT_SCALE.store(true, Ordering::SeqCst);
+            LAST_SCALE_BITS.store(u32::MAX, Ordering::SeqCst);
+            for bad in [0.0f32, -1.0, f32::NAN, f32::INFINITY] {
+                assert_eq!(
+                    ((*scale_vtbl).set_content_scale_factor)(obj, bad),
+                    kInvalidArgument,
+                    "factor {bad} should have been rejected"
+                );
+            }
+            assert_eq!(
+                LAST_SCALE_BITS.load(Ordering::SeqCst),
+                u32::MAX,
+                "a rejected factor still reached the plugin"
+            );
+
+            // The interface shares the view's refcount.
+            assert_eq!(((*scale_vtbl).release)(obj), 1);
+            assert_eq!(
+                PlugViewWrapper::<HostGuiTestPlugin>::release(view.cast::<c_void>()),
+                0
+            );
+            assert_eq!(
+                GuiControllerWrapper::<HostGuiTestPlugin>::release(controller.cast::<c_void>()),
                 0
             );
         }

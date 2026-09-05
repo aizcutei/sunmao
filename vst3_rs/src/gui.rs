@@ -52,6 +52,19 @@ pub trait GuiPlugin: crate::Plugin {
 
     /// Called when GUI should be resized
     fn gui_resize(&mut self, _size: GuiSize) {}
+
+    /// Host-driven DPI scale change, via `IPlugViewContentScaleSupport`.
+    ///
+    /// Return `true` if the editor applied the factor. Returning `false` makes
+    /// the wrapper answer `kResultFalse`, which tells the host the plugin
+    /// handles scaling itself — the correct answer on macOS, where the OS owns
+    /// backing-scale and hosts are not expected to call this at all.
+    ///
+    /// The factor arrives as an `f32` because that is the upstream SDK's
+    /// `ScaleFactor` typedef; CLAP passes an `f64` for the same concept.
+    fn gui_set_scale(&mut self, _factor: f32) -> bool {
+        false
+    }
 }
 
 // =============================================================================

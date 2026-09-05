@@ -1180,6 +1180,25 @@ impl<P: SunmaoPlugin> GuiHandler for SunmaoClapWrapper<P> {
             .unwrap_or(false)
     }
 
+    /// `clap_plugin_gui.set_scale`.
+    ///
+    /// CLAP carries the factor as `f64`; VST3's `ScaleFactor` is `f32`, so the
+    /// framework narrows here to keep one editor-side contract. The extra
+    /// `f64` precision has no display meaning — a scale is a small ratio like
+    /// 1.0/1.5/2.0 — but a value too large for `f32` would become infinity, so
+    /// it is rejected rather than narrowed. With no editor open there is
+    /// nothing to scale and this reports `false`, which CLAP defines as "the
+    /// plugin does not support this scale".
+    fn gui_set_scale(&mut self, scale: f64) -> bool {
+        if !scale.is_finite() || scale <= 0.0 || scale > f32::MAX as f64 {
+            return false;
+        }
+        self.view_handle
+            .as_mut()
+            .map(|handle| handle.handle.set_scale(scale as f32))
+            .unwrap_or(false)
+    }
+
     fn gui_set_parent(&mut self, window: *mut c_void) -> bool {
         if let Some(view) = self.view.as_ref() {
             let mut raw_handle = match self.gui_api {
@@ -3704,6 +3723,72 @@ mod tests {
         unsafe { ((*plugin).destroy.unwrap())(plugin) };
     }
 
+    #[derive(Default)]
+    struct ScaleSpy {
+        last: Option<f32>,
+    }
+
+    fn record_scale(spy: &mut ScaleSpy, factor: f32) -> bool {
+        spy.last = Some(factor);
+        true
+    }
+
+    /// The CLAP half of the M1 scale contract. The VST3 half is asserted at the
+    /// ABI level by `plug_view_reports_content_scale_support_and_forwards_the_factor`
+    /// in `vst3_rs`, and both formats are exercised against real hosts by the
+    /// runner's `gui_scale_negotiation` suite. CLAP is the only side that has to
+    /// narrow, because it carries the factor as `f64` where VST3 uses `f32`.
+    #[test]
+    fn clap_scale_narrows_f64_and_reports_no_editor_as_unsupported() {
+        let mut host_state = NotificationHostState::default();
+        let raw_host = notification_host(&mut host_state);
+        let host = unsafe { HostHandle::from_raw(&raw_host) };
+        let mut wrapper = <SunmaoClapWrapper<PanickingViewPlugin> as Plugin>::new(host);
+
+        // No editor open: nothing to scale. CLAP reads false as "this scale is
+        // not supported", which is the honest answer.
+        assert!(!wrapper.gui_set_scale(2.0));
+
+        wrapper.view_handle = Some(MainThreadViewHandle {
+            handle: ViewHandle::scalable(ScaleSpy::default(), None, record_scale),
+        });
+        assert!(wrapper.gui_set_scale(1.5));
+        assert_eq!(
+            wrapper
+                .view_handle
+                .as_ref()
+                .unwrap()
+                .handle
+                .downcast_ref::<ScaleSpy>()
+                .unwrap()
+                .last,
+            Some(1.5)
+        );
+
+        // Values that cannot survive the narrowing to `f32` are rejected rather
+        // than silently becoming infinity.
+        for bad in [0.0f64, -1.0, f64::NAN, f64::INFINITY, f64::MAX] {
+            assert!(!wrapper.gui_set_scale(bad), "factor {bad} was accepted");
+        }
+        assert_eq!(
+            wrapper
+                .view_handle
+                .as_ref()
+                .unwrap()
+                .handle
+                .downcast_ref::<ScaleSpy>()
+                .unwrap()
+                .last,
+            Some(1.5),
+            "a rejected factor still reached the editor"
+        );
+
+        // An editor with no scale callback declines; the plugin scales itself.
+        wrapper.view_handle = Some(MainThreadViewHandle {
+            handle: ViewHandle::new(()),
+        });
+        assert!(!wrapper.gui_set_scale(2.0));
+    }
     #[test]
     fn smoothing_in_process_does_not_allocate() {
         // `Smoother` is called once per sample on the audio thread. This runs

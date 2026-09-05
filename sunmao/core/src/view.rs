@@ -88,11 +88,13 @@ trait ErasedViewHandle {
     fn as_any_mut(&mut self) -> &mut dyn Any;
     fn resize(&mut self, width: u32, height: u32) -> bool;
     fn is_resizable(&self) -> bool;
+    fn set_scale(&mut self, factor: f32) -> bool;
 }
 
 struct StoredViewHandle<T> {
     value: T,
     resize: Option<fn(&mut T, u32, u32) -> bool>,
+    set_scale: Option<fn(&mut T, f32) -> bool>,
 }
 
 impl<T: 'static> ErasedViewHandle for StoredViewHandle<T> {
@@ -112,6 +114,12 @@ impl<T: 'static> ErasedViewHandle for StoredViewHandle<T> {
 
     fn is_resizable(&self) -> bool {
         self.resize.is_some()
+    }
+
+    fn set_scale(&mut self, factor: f32) -> bool {
+        self.set_scale
+            .map(|set_scale| set_scale(&mut self.value, factor))
+            .unwrap_or(false)
     }
 }
 
@@ -175,6 +183,7 @@ impl ViewHandle {
             inner: Box::new(StoredViewHandle {
                 value,
                 resize: None,
+                set_scale: None,
             }),
         }
     }
@@ -188,6 +197,27 @@ impl ViewHandle {
             inner: Box::new(StoredViewHandle {
                 value,
                 resize: Some(resize),
+                set_scale: None,
+            }),
+        }
+    }
+
+    /// Wrap an editor resource that also honours host-driven DPI scale changes.
+    ///
+    /// `resize` stays optional so a fixed-size editor can still accept a scale
+    /// factor. An editor without a `set_scale` callback reports `false`, which
+    /// both backends translate into "the plugin scales itself" rather than an
+    /// error — the correct answer on macOS, where the OS owns backing scale.
+    pub fn scalable<T: 'static>(
+        value: T,
+        resize: Option<fn(&mut T, width: u32, height: u32) -> bool>,
+        set_scale: fn(&mut T, factor: f32) -> bool,
+    ) -> Self {
+        Self {
+            inner: Box::new(StoredViewHandle {
+                value,
+                resize,
+                set_scale: Some(set_scale),
             }),
         }
     }
@@ -199,6 +229,15 @@ impl ViewHandle {
 
     pub fn is_resizable(&self) -> bool {
         self.inner.is_resizable()
+    }
+
+    /// Apply a host-provided DPI scale factor.
+    ///
+    /// Non-finite and non-positive factors are rejected here so neither ABI
+    /// wrapper has to repeat the check, and so a hostile host cannot scale an
+    /// editor out of existence.
+    pub fn set_scale(&mut self, factor: f32) -> bool {
+        factor.is_finite() && factor > 0.0 && self.inner.set_scale(factor)
     }
 
     pub fn downcast_ref<T: 'static>(&self) -> Option<&T> {
@@ -245,14 +284,6 @@ pub trait SunmaoView: Send + Sync {
         _options: StandaloneViewOptions,
     ) -> StandaloneViewResult {
         StandaloneViewResult::Unsupported
-    }
-
-    /// Called when the DPI scale factor changes.
-    ///
-    /// On macOS, scaling is handled by the OS so this may not be called.
-    /// On Windows/Linux, the editor should resize its content accordingly.
-    fn set_scale_factor(&self, _factor: f32) -> bool {
-        false
     }
 
     /// Called when a parameter value changed from the host.
@@ -305,10 +336,16 @@ mod tests {
     #[derive(Default)]
     struct TestEditor {
         size: (u32, u32),
+        scale: Option<f32>,
     }
 
     fn resize_test_editor(editor: &mut TestEditor, width: u32, height: u32) -> bool {
         editor.size = (width, height);
+        true
+    }
+
+    fn scale_test_editor(editor: &mut TestEditor, factor: f32) -> bool {
+        editor.scale = Some(factor);
         true
     }
 
@@ -327,6 +364,49 @@ mod tests {
             (640, 360)
         );
         assert!(!resizable.resize(0, 360));
+    }
+
+    #[test]
+    fn view_handle_validates_scale_before_reaching_the_editor() {
+        // An editor without a scale callback reports false, which both backends
+        // translate into "the plugin scales itself" rather than an error.
+        let mut unscalable = ViewHandle::resizable(TestEditor::default(), resize_test_editor);
+        assert!(!unscalable.set_scale(2.0));
+        assert!(unscalable
+            .downcast_ref::<TestEditor>()
+            .unwrap()
+            .scale
+            .is_none());
+
+        let mut scalable = ViewHandle::scalable(
+            TestEditor::default(),
+            Some(resize_test_editor),
+            scale_test_editor,
+        );
+        assert!(scalable.set_scale(1.5));
+        assert_eq!(
+            scalable.downcast_ref::<TestEditor>().unwrap().scale,
+            Some(1.5)
+        );
+        // Resizing still works alongside scaling.
+        assert!(scalable.resize(640, 360));
+
+        // Nonsense factors never reach the editor, so each wrapper does not
+        // have to repeat the check.
+        for bad in [0.0f32, -1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(!scalable.set_scale(bad), "factor {bad} should be rejected");
+        }
+        assert_eq!(
+            scalable.downcast_ref::<TestEditor>().unwrap().scale,
+            Some(1.5),
+            "a rejected factor overwrote the last good one"
+        );
+
+        // A fixed-size editor may still accept a scale factor.
+        let mut fixed_but_scalable =
+            ViewHandle::scalable(TestEditor::default(), None, scale_test_editor);
+        assert!(!fixed_but_scalable.is_resizable());
+        assert!(fixed_but_scalable.set_scale(2.0));
     }
 
     #[test]

@@ -266,6 +266,19 @@ pub trait HostPlugin: Send {
         ))
     }
 
+    /// Push a host-driven DPI scale factor at the open editor.
+    ///
+    /// `Ok(true)` means the plugin applied it, `Ok(false)` that it declined
+    /// (VST3 `kResultFalse` / CLAP `false`) — which is a legitimate answer
+    /// meaning "the plugin scales itself". `Err` is reserved for the interface
+    /// being missing or the call failing outright.
+    fn set_gui_scale(&mut self, _factor: f64) -> Result<bool, String> {
+        Err(format!(
+            "{} does not expose GUI scale negotiation",
+            self.info().format
+        ))
+    }
+
     /// Close the plugin's native GUI.
     fn close_gui(&mut self) {}
 

@@ -842,6 +842,19 @@ impl<P: SunmaoPlugin> GuiPlugin for SunmaoVst3Wrapper<P> {
             let _ = handle.resize(size.width, size.height);
         }
     }
+
+    /// `IPlugViewContentScaleSupport::setContentScaleFactor`.
+    ///
+    /// Routed to the *live* handle rather than a freshly built view, because
+    /// the factor has to reach the editor the host is actually showing. With no
+    /// editor open there is nothing to scale, so this reports `false` and the
+    /// wrapper answers `kResultFalse`.
+    fn gui_set_scale(&mut self, factor: f32) -> bool {
+        self.view_handle
+            .as_mut()
+            .map(|handle| handle.set_scale(factor))
+            .unwrap_or(false)
+    }
 }
 
 #[cfg(test)]

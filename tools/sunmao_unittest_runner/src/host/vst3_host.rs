@@ -1055,6 +1055,47 @@ impl HostPlugin for Vst3HostPlugin {
         }
     }
 
+    fn set_gui_scale(&mut self, factor: f64) -> Result<bool, String> {
+        unsafe {
+            if self.view.is_null() {
+                return Err("VST3 GUI is not attached".into());
+            }
+            let view_vtbl = *(self.view as *const *const IPlugViewVtbl);
+            if view_vtbl.is_null() {
+                return Err("VST3 IPlugView vtable is null".into());
+            }
+
+            // A real host asks the view for the optional interface rather than
+            // assuming it exists.
+            let mut scale_obj: *mut c_void = ptr::null_mut();
+            let queried = ((*view_vtbl).unknown.query_interface)(
+                self.view,
+                &vst3_sys::gui::iid::IPlugViewContentScaleSupport,
+                &mut scale_obj,
+            );
+            if queried != kResultOk || scale_obj.is_null() {
+                return Err("VST3 plugin does not expose IPlugViewContentScaleSupport".into());
+            }
+
+            let scale_vtbl = *(scale_obj as *const *const IPlugViewContentScaleSupportVtbl);
+            if scale_vtbl.is_null() {
+                ((*view_vtbl).unknown.release)(scale_obj);
+                return Err("IPlugViewContentScaleSupport vtable is null".into());
+            }
+            // VST3 carries the factor as a 32-bit float.
+            let result = ((*scale_vtbl).set_content_scale_factor)(scale_obj, factor as ScaleFactor);
+            ((*scale_vtbl).unknown.release)(scale_obj);
+
+            match result {
+                r if r == kResultOk => Ok(true),
+                r if r == kResultFalse => Ok(false),
+                other => Err(format!(
+                    "IPlugViewContentScaleSupport::setContentScaleFactor() failed: {other}"
+                )),
+            }
+        }
+    }
+
     fn gui_gesture_evidence(&self) -> Option<GuiGestureEvidence> {
         Some(GuiGestureEvidence {
             begin_count: self._component_handler.begin_count.load(Ordering::Acquire),

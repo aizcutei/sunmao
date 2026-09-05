@@ -2256,6 +2256,58 @@ fn cmd_gui_test(args: &[String]) -> bool {
         }
     }
 
+    // Phase 4 M1: DPI scale negotiation, driven through the real format API on
+    // the live editor. Runs last so a scaled window cannot perturb the pixel
+    // and gesture checks above. VST3 reaches this via
+    // IPlugViewContentScaleSupport, CLAP via clap_plugin_gui.set_scale — the
+    // point of asserting here is that both formats answer identically.
+    match plugin.set_gui_scale(2.0) {
+        Ok(true) => println!("GUI scale negotiated: host applied 2.0"),
+        Ok(false) => {
+            // Legitimate only if the editor genuinely scales itself. Every
+            // SunMao GUI fixture routes to a baseview window that does honour
+            // the factor, so declining here means the chain is broken.
+            eprintln!("GUI scale negotiation declined 2.0; the editor should have applied it");
+            plugin.close_gui();
+            plugin.shutdown();
+            return false;
+        }
+        Err(error) => {
+            eprintln!("GUI scale negotiation failed: {error}");
+            plugin.close_gui();
+            plugin.shutdown();
+            return false;
+        }
+    }
+    if let Err(error) = gui_test_render_delay(plugin.as_mut()) {
+        eprintln!("GUI scale render failed: {error}");
+        plugin.close_gui();
+        plugin.shutdown();
+        return false;
+    }
+    // A nonsense factor must be refused rather than scaling the editor away.
+    // Both wrappers reject it before it reaches editor code.
+    match plugin.set_gui_scale(0.0) {
+        Ok(false) => println!("GUI scale correctly refused a zero factor"),
+        Ok(true) => {
+            eprintln!("GUI scale accepted a zero factor");
+            plugin.close_gui();
+            plugin.shutdown();
+            return false;
+        }
+        Err(error) => {
+            // VST3 answers kInvalidArgument here, which the host surfaces as an
+            // error; that is also a refusal, so accept it and say so.
+            println!("GUI scale refused a zero factor with an error: {error}");
+        }
+    }
+    if let Err(error) = plugin.set_gui_scale(1.0) {
+        eprintln!("GUI scale restore failed: {error}");
+        plugin.close_gui();
+        plugin.shutdown();
+        return false;
+    }
+
     println!();
     println!("Recreating GUI...");
     plugin.close_gui();

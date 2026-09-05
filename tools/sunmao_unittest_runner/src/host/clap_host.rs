@@ -789,6 +789,24 @@ impl HostPlugin for ClapHostPlugin {
         }
     }
 
+    fn set_gui_scale(&mut self, factor: f64) -> Result<bool, String> {
+        if !self._host_state.gui_attached.load(Ordering::Acquire) {
+            return Err("CLAP GUI is not attached".into());
+        }
+        unsafe {
+            let plugin = &*self.plugin;
+            let extension = plugin.get_extension.ok_or("no get_extension")?;
+            let gui_ptr = extension(self.plugin, b"clap.gui\0".as_ptr().cast());
+            if gui_ptr.is_null() {
+                return Err("Plugin has no GUI extension".into());
+            }
+            let gui = &*(gui_ptr as *const clap_plugin_gui_t);
+            let set_scale = gui.set_scale.ok_or("gui.set_scale is null")?;
+            // CLAP carries the factor as a 64-bit float, unlike VST3.
+            Ok(set_scale(self.plugin, factor))
+        }
+    }
+
     fn resize_gui(&mut self, width: u32, height: u32) -> Result<(u32, u32), String> {
         if width == 0 || height == 0 {
             return Err("CLAP GUI size must be positive".into());

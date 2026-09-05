@@ -46,6 +46,38 @@ fn resize_baseview_window(handle: &mut baseview::WindowHandle, width: u32, heigh
     true
 }
 
+/// The editor window plus the logical size it was created at.
+///
+/// A host-driven DPI change is answered by resizing to `base × factor`, which
+/// is what a non-DPI-aware editor must do on Windows and X11. macOS hosts are
+/// not expected to call this at all — AppKit owns backing scale there — so the
+/// path simply stays unused rather than being special-cased.
+struct ScalableWindow {
+    handle: baseview::WindowHandle,
+    base_width: u32,
+    base_height: u32,
+}
+
+fn resize_scalable_window(window: &mut ScalableWindow, width: u32, height: u32) -> bool {
+    resize_baseview_window(&mut window.handle, width, height)
+}
+
+fn scale_scalable_window(window: &mut ScalableWindow, factor: f32) -> bool {
+    // `ViewHandle::set_scale` already rejected non-finite and non-positive
+    // factors; what is left is guarding the *product* against overflowing a
+    // sane window size.
+    let width = (window.base_width as f32 * factor).round();
+    let height = (window.base_height as f32 * factor).round();
+    let limit = u16::MAX as f32;
+    if !(1.0..=limit).contains(&width) || !(1.0..=limit).contains(&height) {
+        return false;
+    }
+    window
+        .handle
+        .resize(baseview::Size::new(width as f64, height as f64));
+    true
+}
+
 struct StandaloneWindowHandler<H> {
     inner: H,
     close_after_frames: Option<u32>,
@@ -497,7 +529,15 @@ mod gl_backend {
             });
 
             if initialized.load(Ordering::Acquire) && handle.is_open() {
-                Some(ViewHandle::resizable(handle, resize_baseview_window))
+                Some(ViewHandle::scalable(
+                    ScalableWindow {
+                        handle,
+                        base_width: config.width,
+                        base_height: config.height,
+                    },
+                    Some(resize_scalable_window),
+                    scale_scalable_window,
+                ))
             } else {
                 handle.close();
                 None
@@ -839,7 +879,15 @@ pub(crate) mod wgpu_backend {
             });
 
             if initialized.load(Ordering::Acquire) && handle.is_open() {
-                Some(ViewHandle::resizable(handle, resize_baseview_window))
+                Some(ViewHandle::scalable(
+                    ScalableWindow {
+                        handle,
+                        base_width: config.width,
+                        base_height: config.height,
+                    },
+                    Some(resize_scalable_window),
+                    scale_scalable_window,
+                ))
             } else {
                 handle.close();
                 None
@@ -1290,7 +1338,15 @@ mod webview_backend {
             });
 
             if initialized.load(Ordering::Acquire) && handle.is_open() {
-                Some(ViewHandle::resizable(handle, resize_baseview_window))
+                Some(ViewHandle::scalable(
+                    ScalableWindow {
+                        handle,
+                        base_width: config.width,
+                        base_height: config.height,
+                    },
+                    Some(resize_scalable_window),
+                    scale_scalable_window,
+                ))
             } else {
                 handle.close();
                 None

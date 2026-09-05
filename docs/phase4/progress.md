@@ -75,3 +75,56 @@
   会让后面每个 milestone 的证据失效，所以这一步单独核实。
 - Unresolved: M0 完成，进入 M1（renderer 资源与线程归属、scale/DPI 协商）。
   fixture 进打包矩阵推迟到 M2（理由见 status.md）。
+
+### 2026-09-05 — M1：scale/DPI 协商两格式落地 + renderer 归属文档
+
+- Command/platform: macOS ARM64，分支 `phase4/gui-component-library`。
+- Change（自底向上，每层带测试）：
+  - **`_sys`（缺口在此）**：`vst3_sys` **完全没有 `IPlugViewContentScaleSupport` 绑定**。
+    新增 `IPlugViewContentScaleSupportVtbl`、`ScaleFactor` 与 IID
+    `0x65ED9690,0x8AC44525,0x8AADEF7A,0x72EA703F`——三者均从上游
+    `pluginterfaces/gui/iplugviewcontentscalesupport.h` **逐字转录**（本机未 vendored SDK 头，
+    故直接取上游源文件，未凭记忆）。CLAP 侧 `clap_sys::set_scale` 早已存在。
+  - **`_rs`**：`vst3_rs::PlugViewWrapper` 新增第二个 vtable，`queryInterface` 按 IID 交出该
+    可选接口，其 IUnknown 三件套转发到视图自身的 refcount（宿主持有独立接口指针）。
+    `GuiPlugin::gui_set_scale(f32) -> bool` 为新钩子。`vtbl_scale` 必须紧邻 `vtbl`——
+    `from_scale` 靠减一个指针宽度还原 `this`——该布局由
+    `plug_view_scale_vtbl_is_one_pointer_after_vtbl` 机械钉住，而不是只写在注释里。
+  - **core**：`ViewHandle::scalable(value, resize, set_scale)` + `ViewHandle::set_scale`，
+    与既有 `resizable` 同形。非有限/非正因子在此**统一挡掉一次**，两个 wrapper 不重复实现。
+    顺带**删除死钩子** `SunmaoView::set_scale_factor`：它自 Phase 1 起就无调用方，且签名是
+    `&self`，根本无法改动编辑器——真正能承载的是持有 `&mut` 的 `ViewHandle`。
+  - **backend（两格式的真实缺口）**：`sunmao/backend_clap` **从未 override**
+    `GuiHandler::gui_set_scale`，一直用默认实现回 `false`，即 CLAP 宿主被告知"不支持缩放"；
+    VST3 侧连绑定都没有。两侧现均路由到**活着的** `view_handle`（而非 `plugin.view()` 新建的
+    视图对象——那样因子到不了宿主正在显示的编辑器）。CLAP 侧把 `f64` 收窄为 `f32`，
+    超出 `f32::MAX` 的值**拒绝**而不是让它变成 infinity。
+  - **view_baseview**：三个后端的 `ViewHandle` 换成 `scalable`，因子实现为"窗口重设为
+    **创建尺寸 × factor**"。基准尺寸存在 `ScalableWindow` 里而不是从当前窗口尺寸推导——
+    否则连续两次 1.5 会复合成 2.25。
+  - **runner**：`HostPlugin::set_gui_scale(f64) -> Result<bool, String>`，VST3 侧走真实
+    `queryInterface` + `setContentScaleFactor`，CLAP 侧走 `clap_plugin_gui.set_scale`；
+    `gui-test` 末尾断言两格式都能应用 2.0、拒绝 0.0、恢复 1.0。放在最后是为了让被放大的
+    窗口不干扰前面的像素与手势检查。
+  - **文档**：`docs/phase4/ownership.md`（三后端设备/表面/上下文归属与销毁顺序、Linux 专用
+    GTK 线程与 100ms drain 的既有修复、Windows WGPU exit 139 的排查起点、对 M2–M4 的约束）；
+    `docs/phase2/semantics.md` 新增 "GUI DPI scale 协商" 行。
+- Result:
+  - 完整 `RUSTFLAGS=-Awarnings cargo test --locked` **exit 0，126 套件 / 540 测试**
+    （M0 为 536，增量 4 项即本轮新增测试）。
+  - **本地实测两格式端到端**：`gui-test` 对同一 GL 插件的 `.vst3` 与 `.clap` 分别
+    exit 0，日志为 `GUI scale negotiated: host applied 2.0`。**两格式的拒绝信号方式不同**且
+    均被如实记录：VST3 回 `kInvalidArgument`（宿主侧呈现为错误），CLAP 回 `false`。
+  - `tools/package_examples.sh --debug --test` exit 0，**30 套件 / 600 断言**，与基线逐位相同。
+  - 触及平台代码的 9 个 crate 的 `--target x86_64-pc-windows-msvc` 检查 exit 0。
+    （注：整 workspace 交叉编译会在 `au_sys` 失败，那是 macOS-only crate 的既有情况，
+    与本轮无关——AU crates 本轮零改动；CI 的 Windows 覆盖走 native runner 而非交叉编译。）
+  - `nm -gU` 复查：GUI 插件仍只导出 `GetPluginFactory` + `clap_entry`，**AU 符号 0 个**。
+  - `cargo fmt --all -- --check`、`git diff --check`、`cargo metadata --locked` 全过。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/m1_test.log`、`/tmp/m1_pkg.log`、
+  `/tmp/m1_win2.log`）——本地证据等级。
+- Unresolved:
+  - 本 commit 需三平台 hosted 全绿才算 M1 完成。
+  - M1 第三项"Windows WGPU exit 139 若复现则定位"：本轮**未复现**，故未做定位；
+    `ownership.md` 已写下复现时的排查起点（`WgpuHandler` drop 必须早于窗口销毁）。
+  - 本轮只协商 scale，未做 M2 的布局/主题。

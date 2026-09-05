@@ -137,3 +137,26 @@ pub struct IRunLoopVtbl {
     pub unregister_timer:
         unsafe extern "system" fn(this: *mut c_void, handler: *mut c_void) -> tresult,
 }
+
+// =============================================================================
+// IPlugViewContentScaleSupport
+// =============================================================================
+
+/// Content scale factor, as declared by the upstream SDK.
+///
+/// Transcribed from `pluginterfaces/gui/iplugviewcontentscalesupport.h`:
+/// `typedef float ScaleFactor;`. Note this is a 32-bit float, whereas CLAP's
+/// `clap_plugin_gui.set_scale` takes a `double` — the two formats disagree on
+/// precision, so the framework narrows toward `f32`.
+pub type ScaleFactor = f32;
+
+/// Host-driven DPI scale negotiation for an `IPlugView`.
+///
+/// Transcribed from `pluginterfaces/gui/iplugviewcontentscalesupport.h`:
+/// `virtual tresult PLUGIN_API setContentScaleFactor (ScaleFactor factor) = 0;`
+#[repr(C)]
+pub struct IPlugViewContentScaleSupportVtbl {
+    pub unknown: IUnknownVtbl,
+    pub set_content_scale_factor:
+        unsafe extern "system" fn(this: *mut c_void, factor: ScaleFactor) -> tresult,
+}
