@@ -21,7 +21,9 @@ sunmao_view_baseview = { path = "view_baseview", default-features = false, optio
 [features]
 default = []
 standalone = ["dep:sunmao_runtime"]
-gui = ["dep:sunmao_gui"]
+# `text` brings the TTF rasterizer with it: an editor that can draw is
+# expected to be able to measure and draw text.
+gui = ["dep:sunmao_gui", "sunmao_gui/text"]
 gui-gl = [
     "gui",
     "dep:sunmao_view_baseview",

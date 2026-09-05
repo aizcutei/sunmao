@@ -21,9 +21,23 @@ pub struct GlContext {
     // Uniform locations
     u_transform: glow::UniformLocation,
     u_color: glow::UniformLocation,
+    /// Owned by this context, per `docs/phase4/ownership.md`: a process-wide
+    /// glyph cache would be shared by two plugin instances that then free each
+    /// other's glyphs.
+    font: crate::Font,
 }
 
 impl GlContext {
+    /// Install a rasterizer for text measurement and (once uploaded) drawing.
+    pub fn set_font(&mut self, font: crate::Font) {
+        self.font = font;
+    }
+
+    /// The context's font, for callers that want to prime the glyph cache.
+    pub fn font_mut(&mut self) -> &mut crate::Font {
+        &mut self.font
+    }
+
     /// Create a new OpenGL context.
     ///
     /// # Safety
@@ -73,6 +87,7 @@ impl GlContext {
             vbo,
             u_transform,
             u_color,
+            font: crate::Font::default(),
         })
     }
 
@@ -546,8 +561,11 @@ impl GuiContext for GlContext {
         let _ = (text, x, y, size, color, align);
     }
 
-    fn measure_text(&self, _text: &str, _size: f32) -> f32 {
-        0.0
+    fn measure_text(&self, text: &str, size: f32) -> f32 {
+        // Real metrics even while `draw_text` is still a stub: a caller that
+        // centres a label needs the width regardless of whether the glyphs
+        // have been uploaded yet.
+        self.font.measure(text, size).width
     }
 
     fn save(&mut self) {}

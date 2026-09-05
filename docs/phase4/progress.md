@@ -203,3 +203,40 @@
   （`Summary: N passed, ≥1 failed` 匹配数为 0）。这正是 M0 推迟进矩阵、M2 兑现的那一步。
 - Unresolved: M2 完成，进入 M3（text rendering 与输入：字体栅格化与文本度量、clipboard、
   IME/国际键盘、cursor/focus 模型，runner 断言按键→参数变化可观测）。
+
+### 2026-09-05 — M3 上半：字体栅格化与文本度量
+
+- Command/platform: macOS ARM64，分支 `phase4/gui-component-library`。
+- 出发点（先查现状再动手）：`GuiContext::measure_text` **返回 0.0**、GL 后端的 `draw_text`
+  是空实现。也就是说，此前每个画标签的编辑器都在**对着一个谎言排版**——按 0 宽度居中，
+  所有标签会叠在同一处。
+- Change:
+  - `sunmao/gui/src/text.rs`：`GlyphSource` trait（度量/栅格化/行度量/字形存在性）、
+    `Font`（带**字形缓存**，按 char + 1/64 像素的尺寸键）、`TextMetrics`、
+    `PositionedGlyph`、`Font::measure`/`Font::layout`（含换行与折行）。
+    栅格化放在 trait 后面而不是硬绑一个字体库，**布局逻辑因此可以在没有字体文件的情况下
+    被完整测试**，也给插件自带栅格化留了口子。
+  - `sunmao/gui/src/text_ttf.rs`（`text` feature）：`TtfFont`，fontdue 支撑。
+    **SunMao 不自带字体**——捆绑字体是许可与体积决策，属于发行插件的人。无字体时
+    `Font::default()` 用 `MetricsOnlyFont` 仍能度量（等宽近似），只是不出墨。
+  - `measure_text` 在 `NullContext` 与 GL 后端都接上真实度量。`GlContext` 拥有自己的
+    `Font`——按 `ownership.md` 的 M3 约束，字形缓存**不能是进程级 static**，否则两个插件
+    实例会共享并互相释放字形。
+  - 测试用 `epaint_default_fonts`（**已在 workspace lockfile 里**，经 eframe 引入）取真实
+    字体字节，因此**没有往仓库里塞二进制字体**，也没有新增许可文件。
+- Result:
+  - 完整 `cargo test --locked` **exit 0，127 套件 / 599 测试**（M2 为 578）。
+  - **两个真实缺陷由本轮新写的测试当场抓出，且都是单测漏掉、proptest 抓到的**：
+    (1) 折行时若某个词**从行首开始**仍放不下，原逻辑把它整体下移一行——落点完全相同，
+    于是永远溢出；改为此时直接断词。(2) 更隐蔽：把词下移之后**没有重新判断是否仍然超限**，
+    因此比整行还长的词在下移后照样画出边界（`"a xmcbim"` @22px/76px 限宽，末尾 'm'
+    画到 77.71 > 76.49）。折行溢出在截图里看不出来，但会画到相邻控件上。
+  - `tools/package_examples.sh --debug --test` exit 0，32 套件 / 640 断言，与 M2 一致。
+  - `--target x86_64-pc-windows-msvc` 检查 exit 0；fmt/diff/metadata 全过。
+- Evidence/artifact: 本地日志 `/tmp/m3_test.log`、`/tmp/m3_pkg.log`、`/tmp/m3_win.log`。
+- Unresolved:
+  - 本 commit 需三平台 hosted 全绿。
+  - **M3 下半未做**：GL 后端把字形上传为纹理并真正 `draw_text`、clipboard、
+    IME/国际键盘、cursor/focus 模型、runner 的"按键→参数变化"断言。
+  - `TtfFont` 的 CJK：Ubuntu Light 无 CJK 覆盖，`has_glyph` 会如实报 false 供调用方替换；
+    真要渲染 CJK 需插件自带字体。这一点在 M3 下半的 IME 落地时要一并说清。

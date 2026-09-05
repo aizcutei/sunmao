@@ -123,9 +123,11 @@ pub mod prelude {
         Alignment, Axis, Button, ButtonType, Color, Column, Direction, Dropdown, Event as GuiEvent,
         Fill, FontStyle, GuiContext, KeyCode, Knob, Label, Layout, Modifiers, MouseButton,
         MouseButton as GuiMouseButton, NullContext, Orientation, ParamBinder, ParamHost,
-        ParameterWidget, Point, Rect, Row, Size, Slider, Stack, Stroke, TextAlign, TextVAlign,
-        Theme, Toggle, Widget, WidgetContainer,
+        ParameterWidget, Point, Rect, Row, Size, Slider, Stack, Stroke, TextAlign, TextMetrics,
+        TextVAlign, Theme, Toggle, TtfFont, Widget, WidgetContainer,
     };
+    #[cfg(feature = "gui")]
+    pub use sunmao_gui::{Font, GlyphBitmap, GlyphMetrics, GlyphSource, LineMetrics};
 
     #[cfg(feature = "gui-wgpu")]
     pub use sunmao_gui::wgpu::WgpuContext;

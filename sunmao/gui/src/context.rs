@@ -217,11 +217,23 @@ pub trait GuiContext {
 pub struct NullContext {
     width: f32,
     height: f32,
+    font: crate::Font,
 }
 
 impl NullContext {
     pub fn new(width: f32, height: f32) -> Self {
-        Self { width, height }
+        Self {
+            width,
+            height,
+            font: crate::Font::default(),
+        }
+    }
+
+    /// Give this context a real rasterizer, so headless layout tests measure
+    /// against the same font the editor will draw with.
+    pub fn with_font(mut self, font: crate::Font) -> Self {
+        self.font = font;
+        self
     }
 }
 
@@ -239,8 +251,11 @@ impl GuiContext for NullContext {
     fn stroke_arc(&mut self, _: f32, _: f32, _: f32, _: f32, _: f32, _: Stroke) {}
     fn fill_arc(&mut self, _: f32, _: f32, _: f32, _: f32, _: f32, _: Fill) {}
     fn draw_text(&mut self, _: &str, _: f32, _: f32, _: f32, _: Color, _: TextAlign) {}
-    fn measure_text(&self, _: &str, _: f32) -> f32 {
-        0.0
+    fn measure_text(&self, text: &str, size: f32) -> f32 {
+        // Measuring is not drawing: a headless context still has to report a
+        // real width, otherwise every caller lays out against zero and stacks
+        // its labels on top of each other.
+        self.font.measure(text, size).width
     }
     fn save(&mut self) {}
     fn restore(&mut self) {}

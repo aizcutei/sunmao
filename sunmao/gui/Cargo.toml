@@ -11,12 +11,19 @@ wgpu = { version = "23", optional = true }
 bytemuck = { version = "1.18", features = ["derive"], optional = true }
 serde = { version = "1.0", features = ["derive"], optional = true }
 serde_json = { version = "1.0", optional = true }
+fontdue = { version = "0.9", optional = true }
 
 [dev-dependencies]
 proptest = "1.11.0"
+# Real font bytes for the rasterizer tests. Already in the workspace lockfile
+# via eframe, so this costs no extra download and vendors no blob here.
+epaint_default_fonts = "0.33.3"
 
 [features]
-default = ["gl"]
+default = ["gl", "text"]
 gl = ["glow", "bytemuck"]
 wgpu = ["dep:wgpu", "bytemuck"]
 webview = ["serde", "serde_json"]
+# TTF rasterization. Off by default: a plugin that draws no text should not
+# pay for a font parser.
+text = ["dep:fontdue"]

@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc d069dd6f02a3b083cf62ee08bb9999458e9855feaa3f20ed7fa5f2b012866d13 # shrinks to words = ["a", "xmcbim"], size = 22.172237, limit = 76.49448

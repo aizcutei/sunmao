@@ -196,3 +196,100 @@ proptest! {
         prop_assert!((rect.width - (500.0 - left - right)).abs() < 1.0e-3);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Text layout (Phase 4 M3)
+// ---------------------------------------------------------------------------
+
+use sunmao_gui::{Font, TtfFont};
+
+fn ubuntu_font() -> Font {
+    Font::new(Box::new(
+        TtfFont::from_bytes(epaint_default_fonts::UBUNTU_LIGHT).expect("bundled font parses"),
+    ))
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    /// Wrapped text must never place a glyph past the limit it was wrapped to.
+    /// Overflow here is invisible in a screenshot but paints outside the
+    /// control, over whatever is next to it.
+    #[test]
+    fn wrapped_glyphs_stay_within_the_limit(
+        words in prop::collection::vec("[a-z]{1,9}", 1..12),
+        size in 8.0f32..28.0,
+        limit in 40.0f32..300.0,
+    ) {
+        let font = ubuntu_font();
+        let text = words.join(" ");
+        let placed = font.layout(&text, size, Some(limit));
+        for glyph in &placed {
+            let advance = font.measure(&glyph.ch.to_string(), size).width;
+            prop_assert!(
+                glyph.x + advance <= limit + 1.0e-2 || glyph.x == 0.0,
+                "glyph {:?} at x={} + {} exceeds limit {limit}",
+                glyph.ch, glyph.x, advance
+            );
+        }
+    }
+
+    /// Every non-newline character must be placed exactly once, in order.
+    /// Wrapping is allowed to move glyphs; it is never allowed to drop or
+    /// duplicate them.
+    #[test]
+    fn layout_places_every_character_exactly_once(
+        text in "[a-z ]{0,60}",
+        size in 8.0f32..28.0,
+        limit in prop::option::of(30.0f32..250.0),
+    ) {
+        let font = ubuntu_font();
+        let placed = font.layout(&text, size, limit);
+        let expected: Vec<char> = text.chars().filter(|ch| *ch != '\n').collect();
+        let actual: Vec<char> = placed.iter().map(|glyph| glyph.ch).collect();
+        prop_assert_eq!(actual, expected);
+    }
+
+    /// Lines advance monotonically and each line restarts at or after x=0;
+    /// baselines increase with the line index so lines never stack on top of
+    /// one another.
+    #[test]
+    fn lines_advance_monotonically(
+        words in prop::collection::vec("[a-z]{1,7}", 1..14),
+        size in 8.0f32..24.0,
+        limit in 30.0f32..160.0,
+    ) {
+        let font = ubuntu_font();
+        let placed = font.layout(&words.join(" "), size, Some(limit));
+        for pair in placed.windows(2) {
+            let (a, b) = (&pair[0], &pair[1]);
+            prop_assert!(b.line >= a.line, "line index went backwards");
+            if b.line == a.line {
+                prop_assert!(b.x >= a.x, "x went backwards within a line");
+            } else {
+                prop_assert!(b.baseline > a.baseline, "a new line did not move down");
+                prop_assert!(b.x >= 0.0);
+            }
+        }
+    }
+
+    /// Measuring a string equals the sum of measuring its characters. Callers
+    /// centre labels with this, so a discrepancy shows up as text that drifts
+    /// off-centre as it gets longer.
+    #[test]
+    fn measuring_is_additive_over_characters(
+        text in "[a-zA-Z0-9 ]{0,40}",
+        size in 6.0f32..40.0,
+    ) {
+        let font = ubuntu_font();
+        let whole = font.measure(&text, size).width;
+        let summed: f32 = text
+            .chars()
+            .map(|ch| font.measure(&ch.to_string(), size).width)
+            .sum();
+        prop_assert!(
+            (whole - summed).abs() < 1.0e-2,
+            "whole {whole} vs summed {summed}"
+        );
+    }
+}

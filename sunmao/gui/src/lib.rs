@@ -27,6 +27,9 @@ mod context;
 mod event;
 mod layout;
 mod stack;
+mod text;
+#[cfg(feature = "text")]
+mod text_ttf;
 mod theme;
 mod widget;
 mod widgets;
@@ -36,6 +39,9 @@ pub use context::*;
 pub use event::*;
 pub use layout::*;
 pub use stack::*;
+pub use text::*;
+#[cfg(feature = "text")]
+pub use text_ttf::*;
 pub use theme::*;
 pub use widget::*;
 pub use widgets::*;
