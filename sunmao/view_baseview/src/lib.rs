@@ -647,18 +647,20 @@ mod gl_backend {
                 builder: Arc::new(builder),
             }
         }
-    }
 
-    impl<S: ViewState + 'static> SunmaoView for BaseviewView<S> {
-        fn size(&self) -> (u32, u32) {
-            (self.config.width, self.config.height)
-        }
-
-        fn can_resize(&self) -> bool {
-            true
-        }
-
-        fn open(&self, parent: ParentWindow, context: Arc<dyn ViewContext>) -> Option<ViewHandle> {
+        /// Build the editor and hand it to `open_window`, which decides whether
+        /// the window is embedded in a parent or floating.
+        ///
+        /// Everything else — GL config, the WGPU fallback, the initialization
+        /// check, the `ViewHandle` wiring — is identical for both, so it lives
+        /// here once rather than being copied per mode.
+        fn open_with<F>(&self, context: Arc<dyn ViewContext>, open_window: F) -> Option<ViewHandle>
+        where
+            F: FnOnce(
+                WindowOpenOptions,
+                Box<dyn FnOnce(&mut baseview::Window) -> BaseviewHandler<HostKeyedState<S>> + Send>,
+            ) -> baseview::WindowHandle,
+        {
             let config = self.config.clone();
             let keys = Arc::new(super::HostKeyQueue::default());
             let state = HostKeyedState {
@@ -677,38 +679,40 @@ mod gl_backend {
             gl_config.srgb = false;
             options.gl_config = Some(gl_config);
 
-            let parent_wrapper = ParentWindowWrapper(parent);
             let background = config.background;
-
             let initialized = Arc::new(AtomicBool::new(false));
             let initialized_in_builder = Arc::clone(&initialized);
-            let mut handle = Window::open_parented(&parent_wrapper, options, move |window| {
-                match GlHandler::try_new(state, background, window) {
-                    Ok(handler) => {
-                        initialized_in_builder.store(true, Ordering::Release);
-                        BaseviewHandler::Gl(handler)
-                    }
-                    Err(state) => {
-                        #[cfg(all(feature = "wgpu", target_os = "windows"))]
-                        {
-                            if let Ok(handler) = pollster::block_on(WgpuHandler::new(
-                                WgpuFallbackState(state),
-                                background,
-                                config.width,
-                                config.height,
-                                window,
-                            )) {
-                                initialized_in_builder.store(true, Ordering::Release);
-                                return BaseviewHandler::Wgpu(handler);
-                            }
+
+            let mut handle = open_window(
+                options,
+                Box::new(move |window: &mut baseview::Window| {
+                    match GlHandler::try_new(state, background, window) {
+                        Ok(handler) => {
+                            initialized_in_builder.store(true, Ordering::Release);
+                            BaseviewHandler::Gl(handler)
                         }
-                        #[cfg(not(all(feature = "wgpu", target_os = "windows")))]
-                        let _ = state;
-                        window.close();
-                        BaseviewHandler::Failed
+                        Err(state) => {
+                            #[cfg(all(feature = "wgpu", target_os = "windows"))]
+                            {
+                                if let Ok(handler) = pollster::block_on(WgpuHandler::new(
+                                    WgpuFallbackState(state),
+                                    background,
+                                    config.width,
+                                    config.height,
+                                    window,
+                                )) {
+                                    initialized_in_builder.store(true, Ordering::Release);
+                                    return BaseviewHandler::Wgpu(handler);
+                                }
+                            }
+                            #[cfg(not(all(feature = "wgpu", target_os = "windows")))]
+                            let _ = state;
+                            window.close();
+                            BaseviewHandler::Failed
+                        }
                     }
-                }
-            });
+                }),
+            );
 
             if initialized.load(Ordering::Acquire) && handle.is_open() {
                 Some(
@@ -727,6 +731,34 @@ mod gl_backend {
                 handle.close();
                 None
             }
+        }
+    }
+
+    impl<S: ViewState + 'static> SunmaoView for BaseviewView<S> {
+        fn size(&self) -> (u32, u32) {
+            (self.config.width, self.config.height)
+        }
+
+        fn can_resize(&self) -> bool {
+            true
+        }
+
+        fn open(&self, parent: ParentWindow, context: Arc<dyn ViewContext>) -> Option<ViewHandle> {
+            let parent_wrapper = ParentWindowWrapper(parent);
+            self.open_with(context, |options, build| {
+                Window::open_parented(&parent_wrapper, options, build)
+            })
+        }
+
+        fn supports_floating(&self) -> bool {
+            true
+        }
+
+        /// Floating windows go through the same construction as embedded ones,
+        /// so a bug fixed in one is fixed in both — the only difference is
+        /// which baseview entry point creates the window.
+        fn open_floating(&self, context: Arc<dyn ViewContext>) -> Option<ViewHandle> {
+            self.open_with(context, Window::open_floating)
         }
 
         fn open_standalone(

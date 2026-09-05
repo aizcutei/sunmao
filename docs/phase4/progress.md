@@ -503,3 +503,42 @@
   OS 桥接、M5 的 Wayland 原生三项未交付，且都是范围问题而非工期问题（依据与文件行号见
   status.md 的「M4 受阻项」「M5 Wayland 受阻链」「完成规则 → 当前判定」）。
   三者共同的性质：工作量不在 SunMao 这一层，而在 vendored baseview 与三个 OS 的原生 API 上。
+
+### 2026-09-06 — floating CLAP editor 交付：我之前把它判为受阻是错的
+
+- Command/platform: macOS ARM64。全量 gate 见下。
+- **先说错在哪。** 上一轮我写下"vendored baseview 只有 `open_parented` 与阻塞式
+  `open_blocking`，加一个非阻塞顶层窗口模式比 M4 其余全部加起来还大"，并据此把
+  floating editor 记为受阻。**这个判断是从函数名推出来的，不是从代码。** 把三个平台的
+  `open_blocking` 读完之后：真正阻塞的**只有最后一步**——macOS 的 `app.run()`、
+  Windows 的 `GetMessageW` 泵、X11 的 `join`。建窗与事件循环早已分离，Windows 那条
+  甚至已经把 `WindowHandle` 返回出来了。**教训：判"受阻"之前必须把被指为障碍的代码读完。**
+- Change（自底向上）:
+  - **baseview 新增 `Window::open_floating`（三平台各一条实现，与 `open_blocking` 共用建窗路径）**
+    - macOS：复用建窗代码但 **`ns_app: None`**。这一个字段是关键——它意为"本窗口拥有
+      application"，非空时关窗会调 `stop_application_event_loop()`，**在插件里那会停掉宿主的
+      run loop**。同理不碰 `setActivationPolicy`/`finishLaunching`/`activateIgnoringOtherApps`
+      （那是 standalone 的 app 引导，插件无权对宿主做），并用 `orderFront_` 而非
+      `makeKeyAndOrderFront_`：编辑器弹出不该把用户从手头的事上拽走。
+    - Windows：`Self::open(false, null_mut(), ..)` 已返回 handle，直接用。`DispatchMessageW`
+      按 HWND 派发到对应窗口过程，宿主的消息泵自然驱动我们的窗口。
+    - X11：`open_parented` 的结构、parent 传 `None`；不传 `stop_requested`（那是 standalone
+      停循环用的），窗口寿命由返回的 handle 掌握。
+  - **core**：`SunmaoView::supports_floating()`（默认 false）与 `open_floating()`（默认 None）。
+    两个方法分开是必要的：宿主在创建**之前**就要问（`is_api_supported`），而
+    **"查询说支持、创建却失败"是格式契约明令禁止的**。
+  - **view_baseview**：`BaseviewView` 的嵌入与浮动**共用同一段 `open_with`**——GL 配置、
+    WGPU 回退、初始化校验、`ViewHandle` 接线只写一遍，差别只有传进去的建窗函数。
+  - **backend_clap**：`is_api_supported(_, true)` 直接返回 `view.supports_floating()`，与
+    `gui_create` 同源；`gui_create` 只记录模式（CLAP 的 create/show 分工：create 分配、
+    show 上屏），窗口在 **`gui_show`** 才真正打开；浮动模式下 `gui_set_parent` 一律拒绝；
+    `gui_destroy` 连模式一起清（否则之后一次嵌入式 create 会被当成浮动）。
+  - `docs/phase2/semantics.md` 的 floating 行整条重写（此前记的是"一律拒绝"）。
+- Result: `cargo test --locked` **exit 0，128 套件 / 662 测试**（上一轮 660，增量为三条
+  floating 测试）；fmt / diff / metadata / Windows target check 全过。
+- Evidence/artifact: `/tmp/fl.log`、`/tmp/pkg_fl.log`。
+- **仍降级一项**：`gui_hide` 回 false。baseview 没有"隐藏但保活"的操作，关掉再开会让宿主
+  拿到一个全新编辑器、丢失界面状态，故如实回不支持、让宿主退回 destroy/create。
+- Unresolved: X11 那条实现**本地无法编译验证**（交叉编译缺 X11 sysroot），依赖 Linux
+  hosted job。Wayland 的受阻链因此缩短为一条：**baseview 没有 Wayland 后端**，
+  而"CLAP 在 Wayland 上要浮动窗口"这一环已经不再是障碍。

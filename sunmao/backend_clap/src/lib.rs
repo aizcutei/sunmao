@@ -561,6 +561,8 @@ pub struct SunmaoClapWrapper<P: SunmaoPlugin> {
     view_handle: Option<MainThreadViewHandle>,
     /// Title the host suggested for a floating editor, if it asked.
     suggested_title: Option<String>,
+    /// Whether the host asked for a floating editor rather than an embedded one.
+    gui_floating: bool,
     gui_api: Option<GuiApi>,
     host: HostHandle,
     param_descriptors: Vec<ParamDescriptor>,
@@ -667,6 +669,7 @@ impl<P: SunmaoPlugin> Plugin for SunmaoClapWrapper<P> {
             active_tail: 0,
             view_handle: None,
             suggested_title: None,
+            gui_floating: false,
             gui_api: None,
             host,
             param_descriptors,
@@ -1121,7 +1124,14 @@ impl<P: SunmaoPlugin> AudioProcessor for SunmaoClapProcessor<P> {
 impl<P: SunmaoPlugin> GuiHandler for SunmaoClapWrapper<P> {
     fn is_api_supported(&self, api: GuiApi, is_floating: bool) -> bool {
         if is_floating {
-            return false;
+            // A floating window is not embedded in anything, so the windowing
+            // API is irrelevant — CLAP even allows the host to pass null here.
+            // What matters is whether the view adapter can open a top-level
+            // window at all, and this must agree with what `gui_create` does.
+            return self
+                .view
+                .as_ref()
+                .is_some_and(|view| view.supports_floating());
         }
         is_native_gui_api(api)
     }
@@ -1142,12 +1152,16 @@ impl<P: SunmaoPlugin> GuiHandler for SunmaoClapWrapper<P> {
     }
 
     fn gui_create(&mut self, api: GuiApi, is_floating: bool) -> bool {
-        if is_floating || !self.is_api_supported(api, is_floating) {
+        if !self.is_api_supported(api, is_floating) {
             return false;
         }
         if self.view.is_none() {
             return false;
         }
+        // The window itself is opened later: embedded editors wait for
+        // `set_parent`, floating ones for `show`. This call only records the
+        // mode the host chose, which is what CLAP's create/show split is for.
+        self.gui_floating = is_floating;
         self.gui_api = Some(api);
         true
     }
@@ -1155,6 +1169,7 @@ impl<P: SunmaoPlugin> GuiHandler for SunmaoClapWrapper<P> {
     fn gui_destroy(&mut self) {
         self.view_handle = None;
         self.gui_api = None;
+        self.gui_floating = false;
     }
 
     fn gui_get_size(&self) -> Option<(u32, u32)> {
@@ -1213,6 +1228,11 @@ impl<P: SunmaoPlugin> GuiHandler for SunmaoClapWrapper<P> {
     }
 
     fn gui_set_parent(&mut self, window: *mut c_void) -> bool {
+        if self.gui_floating {
+            // A floating window has no parent by definition. Silently
+            // reparenting would contradict the mode the host asked for.
+            return false;
+        }
         if let Some(view) = self.view.as_ref() {
             let mut raw_handle = match self.gui_api {
                 Some(GuiApi::Cocoa) => {
@@ -1270,10 +1290,45 @@ impl<P: SunmaoPlugin> GuiHandler for SunmaoClapWrapper<P> {
         }
     }
 
+    /// Open the floating window, or confirm the embedded one is up.
+    ///
+    /// A floating editor has no `set_parent` to trigger creation, so `show` is
+    /// where its window comes into existence. Opening here rather than in
+    /// `gui_create` also matches CLAP's split: create allocates, show puts
+    /// something on screen.
     fn gui_show(&mut self) -> bool {
+        if self.gui_floating && self.view_handle.is_none() {
+            let Some(view) = self.view.as_ref() else {
+                return false;
+            };
+            let context = Arc::new(ClapParamsViewContext {
+                params: self.params.clone(),
+                host: self.host.clone(),
+                descriptors: self.param_descriptors.clone(),
+            });
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                view.open_floating(context)
+            })) {
+                Ok(Some(handle)) => {
+                    self.view_handle = Some(MainThreadViewHandle { handle });
+                }
+                Ok(None) => return false,
+                Err(_) => {
+                    eprintln!("SunMao CLAP floating view creation panicked");
+                    return false;
+                }
+            }
+        }
         self.view_handle.is_some()
     }
 
+    /// Hiding without destroying is not supported.
+    ///
+    /// baseview exposes no "hide but keep alive" operation, and closing the
+    /// window instead would lose the editor's state — a host calling `hide`
+    /// then `show` would silently get a fresh editor. Reporting `false` lets
+    /// the host fall back to destroy/create, which at least is honest about
+    /// what happens.
     fn gui_hide(&mut self) -> bool {
         false
     }
@@ -1544,6 +1599,60 @@ mod tests {
             _context: Arc<dyn ViewContext>,
         ) -> Option<ViewHandle> {
             panic!("intentional view creation failure")
+        }
+    }
+
+    /// A view that supports floating, so the CLAP floating path can be driven
+    /// without a windowing system. `open_floating` hands back a plain handle
+    /// the way a real adapter would.
+    struct FloatingView;
+
+    impl SunmaoView for FloatingView {
+        fn size(&self) -> (u32, u32) {
+            (320, 180)
+        }
+
+        fn open(
+            &self,
+            _parent: ParentWindow,
+            _context: Arc<dyn ViewContext>,
+        ) -> Option<ViewHandle> {
+            None
+        }
+
+        fn supports_floating(&self) -> bool {
+            true
+        }
+
+        fn open_floating(&self, _context: Arc<dyn ViewContext>) -> Option<ViewHandle> {
+            Some(ViewHandle::new(()))
+        }
+    }
+
+    #[derive(Default)]
+    struct FloatingViewPlugin;
+
+    impl SunmaoPlugin for FloatingViewPlugin {
+        const NAME: &'static str = "Floating GUI";
+        const VENDOR: &'static str = "SunMao Test";
+        const URL: &'static str = "https://example.invalid";
+        type Params = RealtimeParams;
+
+        fn params(&self) -> Arc<Self::Params> {
+            Arc::new(RealtimeParams)
+        }
+
+        fn view(&self) -> Option<Box<dyn SunmaoView>> {
+            Some(Box::new(FloatingView))
+        }
+
+        fn process(
+            &mut self,
+            _buffer: &mut AudioBuffer,
+            _events: &EventQueue,
+            _context: &SunmaoProcessContext,
+        ) -> ProcessStatus {
+            ProcessStatus::Normal
         }
     }
 
@@ -3753,11 +3862,12 @@ mod tests {
     /// narrow, because it carries the factor as `f64` where VST3 uses `f32`.
 
     /// `suggest_title` used to be a stub in `clap_rs`, so a host's title was
-    /// silently dropped. It now reaches the plugin, and a floating editor is
-    /// declined with the reason recorded in semantics.md rather than opened on
-    /// a path that would block the host's main thread.
+    /// silently dropped. It now reaches the plugin.
+    ///
+    /// The view used here does not support floating, so this also pins the
+    /// declining half of the contract: refused by the query *and* by create.
     #[test]
-    fn a_suggested_title_reaches_the_plugin_and_floating_is_declined() {
+    fn a_suggested_title_reaches_the_plugin_and_a_non_floating_view_declines() {
         let mut host_state = NotificationHostState::default();
         let raw_host = notification_host(&mut host_state);
         let host = unsafe { HostHandle::from_raw(&raw_host) };
@@ -3767,9 +3877,8 @@ mod tests {
         wrapper.gui_suggest_title("Track 3 — SunMao");
         assert_eq!(wrapper.suggested_title.as_deref(), Some("Track 3 — SunMao"));
 
-        // Floating is refused for every API, and refused consistently by both
-        // the query and the create call — a host must not be told yes and then
-        // handed a failure.
+        // Refused consistently by both the query and the create call — a host
+        // must not be told yes and then handed a failure.
         for api in [GuiApi::Cocoa, GuiApi::Win32, GuiApi::X11] {
             assert!(
                 !wrapper.is_api_supported(api, true),
@@ -3777,6 +3886,56 @@ mod tests {
             );
             assert!(!wrapper.gui_create(api, true), "{api:?} opened floating");
         }
+    }
+
+    /// A view that *can* float takes the whole CLAP floating path: query,
+    /// create, show-opens-the-window, and no parent.
+    #[test]
+    fn a_floating_capable_view_opens_on_show_and_refuses_a_parent() {
+        let mut host_state = NotificationHostState::default();
+        let raw_host = notification_host(&mut host_state);
+        let host = unsafe { HostHandle::from_raw(&raw_host) };
+        let mut wrapper = <SunmaoClapWrapper<FloatingViewPlugin> as Plugin>::new(host);
+
+        // The query must agree with what create will do.
+        assert!(wrapper.is_api_supported(GuiApi::Cocoa, true));
+        assert!(wrapper.gui_create(GuiApi::Cocoa, true));
+        assert!(wrapper.gui_floating);
+
+        // CLAP splits create from show: nothing is on screen yet.
+        assert!(
+            wrapper.view_handle.is_none(),
+            "the window opened before the host asked to show it"
+        );
+
+        assert!(wrapper.gui_show(), "show did not open the floating window");
+        assert!(wrapper.view_handle.is_some());
+
+        // A floating window has no parent; accepting one would contradict the
+        // mode the host asked for.
+        assert!(!wrapper.gui_set_parent(std::ptr::null_mut()));
+
+        // Destroy clears the mode as well as the window, so a later embedded
+        // create is not silently treated as floating.
+        wrapper.gui_destroy();
+        assert!(wrapper.view_handle.is_none());
+        assert!(!wrapper.gui_floating);
+    }
+
+    /// Embedding still works on a floating-capable view: supporting one mode
+    /// must not disable the other.
+    #[test]
+    fn a_floating_capable_view_still_embeds() {
+        let mut host_state = NotificationHostState::default();
+        let raw_host = notification_host(&mut host_state);
+        let host = unsafe { HostHandle::from_raw(&raw_host) };
+        let mut wrapper = <SunmaoClapWrapper<FloatingViewPlugin> as Plugin>::new(host);
+
+        let (api, _) = wrapper.preferred_api().expect("native GUI API");
+        assert!(wrapper.gui_create(api, false));
+        assert!(!wrapper.gui_floating);
+        // Not floating, so `show` must not conjure a window on its own.
+        assert!(!wrapper.gui_show());
     }
 
     #[test]

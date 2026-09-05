@@ -387,6 +387,30 @@ pub trait SunmaoView: Send + Sync {
     /// will be closed when this handle is dropped.
     fn open(&self, parent: ParentWindow, context: Arc<dyn ViewContext>) -> Option<ViewHandle>;
 
+    /// Whether this adapter can open a floating top-level window.
+    ///
+    /// Separate from [`Self::open_floating`] because a host asks *before*
+    /// creating anything (`clap_plugin_gui.is_api_supported`), and the answer
+    /// must match what creation will actually do. Answering "yes" here and
+    /// then failing to open is the one behaviour the format contract forbids.
+    fn supports_floating(&self) -> bool {
+        false
+    }
+
+    /// Open the editor as a floating top-level window owned by the host, and
+    /// return immediately.
+    ///
+    /// This is what CLAP's `is_floating` mode requires: the window must outlive
+    /// the call, so this can never block the way [`Self::open_standalone`]
+    /// does. `None` means this adapter only supports embedding, which callers
+    /// must report to the host as "floating not supported" rather than
+    /// pretending otherwise.
+    ///
+    /// Must be called on the host's main thread.
+    fn open_floating(&self, _context: Arc<dyn ViewContext>) -> Option<ViewHandle> {
+        None
+    }
+
     /// Open the editor as an application-owned top-level window.
     ///
     /// Implementations block until the window closes. The default preserves

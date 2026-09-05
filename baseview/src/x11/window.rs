@@ -267,6 +267,70 @@ impl<'a> Window<'a> {
         window_handle
     }
 
+    /// Open a top-level window and return immediately.
+    ///
+    /// This is what a plugin needs for a floating editor. X11 makes it the
+    /// easiest of the three platforms: the window already runs on its own
+    /// thread even in the parented case, so a floating window is
+    /// [`Self::open_parented`]'s structure with no parent id — the difference
+    /// from [`Self::open_blocking`] is only that we do not join the thread.
+    ///
+    /// No `stop_requested` flag is passed: that exists so a standalone host can
+    /// ask the loop to exit, whereas here the returned [`WindowHandle`] owns
+    /// the window's lifetime and closing it tears the loop down.
+    pub fn open_floating<H, B>(options: WindowOpenOptions, build: B) -> WindowHandle
+    where
+        H: WindowHandler + 'static,
+        B: FnOnce(&mut crate::Window) -> H,
+        B: Send + 'static,
+    {
+        let (tx, rx) = mpsc::sync_channel::<WindowOpenResult>(1);
+        let (parent_handle, mut window_handle, resize_receiver) = ParentHandle::new();
+        let initialization_finished = Arc::new(AtomicBool::new(false));
+        let worker_initialization_finished = Arc::clone(&initialization_finished);
+        let error_tx = tx.clone();
+        let join_handle = thread::spawn(move || {
+            if let Err(error) = Self::window_thread(
+                // `None` is what makes it top-level rather than embedded.
+                None,
+                options,
+                build,
+                tx,
+                Some(parent_handle),
+                Some(resize_receiver),
+                None,
+                worker_initialization_finished,
+            ) {
+                let message = error.to_string();
+                if initialization_finished.load(Ordering::Acquire)
+                    || error_tx.try_send(Err(message.clone())).is_err()
+                {
+                    eprintln!("baseview: floating X11 window thread failed: {message}");
+                }
+            }
+        });
+
+        match rx.recv() {
+            Ok(Ok(raw_window_handle)) => {
+                window_handle.raw_window_handle = Some(raw_window_handle.0);
+                window_handle.event_loop_handle = Some(join_handle);
+            }
+            Ok(Err(error)) => {
+                eprintln!("baseview: could not open floating X11 window: {error}");
+                if join_handle.join().is_err() {
+                    eprintln!("baseview: X11 window thread panicked during initialization");
+                }
+            }
+            Err(error) => {
+                eprintln!("baseview: X11 window thread exited before initialization: {error}");
+                if join_handle.join().is_err() {
+                    eprintln!("baseview: X11 window thread panicked during initialization");
+                }
+            }
+        }
+        window_handle
+    }
+
     pub fn open_blocking<H, B>(options: WindowOpenOptions, build: B)
     where
         H: WindowHandler + 'static,

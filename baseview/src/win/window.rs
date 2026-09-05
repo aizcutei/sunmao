@@ -699,6 +699,27 @@ impl Window<'_> {
         window_handle
     }
 
+    /// Open a top-level window and return immediately, leaving the caller's
+    /// existing message pump to service it.
+    ///
+    /// This is what a plugin needs for a floating editor. It works because
+    /// `DispatchMessageW` routes a message to the window procedure of whatever
+    /// HWND it names, so the host's pump drives our window too — provided the
+    /// window is created on the thread that owns that pump, which is the main
+    /// thread both CLAP and VST3 already guarantee for GUI calls.
+    pub fn open_floating<H, B>(options: WindowOpenOptions, build: B) -> WindowHandle
+    where
+        H: WindowHandler + 'static,
+        B: FnOnce(&mut crate::Window) -> H,
+        B: Send + 'static,
+    {
+        // `parented = false` gives the top-level frame (caption, sizebox,
+        // minimize/maximize) that `open_blocking` uses; the only thing we skip
+        // is the pump it runs afterwards.
+        let (window_handle, _) = Self::open(false, null_mut(), options, build);
+        window_handle
+    }
+
     pub fn open_blocking<H, B>(options: WindowOpenOptions, build: B)
     where
         H: WindowHandler + 'static,

@@ -108,6 +108,26 @@ impl<'a> Window<'a> {
         WindowHandle::new(window_handle)
     }
 
+    /// Open a top-level window and return immediately.
+    ///
+    /// Unlike [`Self::open_blocking`], this does not run an event loop: it
+    /// relies on the caller already having one, which is exactly the situation
+    /// a plugin is in. That makes it the mode a floating editor needs — CLAP
+    /// requires `gui_create` to return while the window keeps existing, and
+    /// `open_blocking` would instead hang the host's main thread.
+    ///
+    /// Must be called on the thread that owns the host's event loop. Both CLAP
+    /// and VST3 guarantee GUI calls arrive on the main thread.
+    pub fn open_floating<H, B>(options: WindowOpenOptions, build: B) -> WindowHandle
+    where
+        H: WindowHandler + 'static,
+        B: FnOnce(&mut Window) -> H,
+        B: Send + 'static,
+    {
+        let window_handle = platform::Window::open_floating::<H, B>(options, build);
+        WindowHandle::new(window_handle)
+    }
+
     pub fn open_blocking<H, B>(options: WindowOpenOptions, build: B)
     where
         H: WindowHandler + 'static,

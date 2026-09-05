@@ -417,6 +417,118 @@ impl<'a> Window<'a> {
         window_handle
     }
 
+    /// Open a top-level window and return immediately, leaving the caller's
+    /// existing run loop to service it.
+    ///
+    /// This is what a plugin needs for a floating editor: the host already owns
+    /// the main run loop, so the window only has to exist — [`Self::open_blocking`]
+    /// would hang the host on `app.run()`.
+    ///
+    /// Must be called on the main thread; AppKit requires it, and both CLAP and
+    /// VST3 already guarantee it for GUI calls.
+    ///
+    /// The critical difference from `open_blocking` is `ns_app: None`. That
+    /// field means "this window owns the application", and closing such a
+    /// window calls `stop_application_event_loop()` — which in a plugin would
+    /// stop the *host's* run loop. A floating window owns its window and
+    /// nothing else, so it must not touch application lifecycle: no
+    /// `setActivationPolicy`, no `finishLaunching`, no `activateIgnoringOtherApps`.
+    pub fn open_floating<H, B>(options: WindowOpenOptions, build: B) -> WindowHandle
+    where
+        H: WindowHandler + 'static,
+        B: FnOnce(&mut crate::Window) -> H,
+        B: Send + 'static,
+    {
+        let pool = unsafe { NSAutoreleasePool::new(nil) };
+
+        let scaling = match options.scale {
+            WindowScalePolicy::ScaleFactor(scale) => scale,
+            WindowScalePolicy::SystemScaleFactor => 1.0,
+        };
+        let window_info = WindowInfo::from_logical_size(options.size, scaling);
+
+        let rect = NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(
+                window_info.logical_size().width,
+                window_info.logical_size().height,
+            ),
+        );
+
+        let ns_window = unsafe {
+            let ns_window = NSWindow::alloc(nil).initWithContentRect_styleMask_backing_defer_(
+                rect,
+                NSWindowStyleMask::NSTitledWindowMask
+                    | NSWindowStyleMask::NSClosableWindowMask
+                    | NSWindowStyleMask::NSMiniaturizableWindowMask,
+                NSBackingStoreBuffered,
+                NO,
+            );
+            ns_window.center();
+
+            let title = NSString::alloc(nil).init_str(&options.title).autorelease();
+            ns_window.setTitle_(title);
+
+            // Order front without stealing focus from the host: a plugin
+            // editor appearing must not yank the user out of what they were
+            // doing. `makeKeyAndOrderFront_` would.
+            ns_window.orderFront_(nil);
+
+            ns_window
+        };
+
+        let ns_view = unsafe { create_view(&options) };
+
+        let window_inner = WindowInner {
+            open: Cell::new(true),
+            // Not `Some(app)`: see the doc comment. The host owns the app.
+            ns_app: Cell::new(None),
+            ns_window: Cell::new(Some(ns_window)),
+            ns_view,
+
+            #[cfg(feature = "opengl")]
+            gl_context: WindowResource::empty(),
+
+            #[cfg(feature = "metal")]
+            metal_layer: WindowResource::empty(),
+        };
+
+        let window_state = Self::prepare(window_inner, window_info);
+        let mut initialization_guard = WindowInitializationGuard::new(Rc::clone(&window_state));
+
+        unsafe {
+            ns_window.setContentView_(ns_view);
+            ns_window.setDelegate_(ns_view);
+        }
+
+        #[cfg(feature = "opengl")]
+        if let Some(gl_config) = options.gl_config {
+            let gl_context = Self::create_gl_context(ns_view, gl_config);
+            // SAFETY: the NSView is installed in its NSWindow, the handler has
+            // not been built, and the slot is still empty and unborrowed.
+            unsafe {
+                window_state.window_inner.gl_context.set(gl_context);
+            }
+        }
+        #[cfg(feature = "metal")]
+        if options.metal_layer {
+            let metal_layer = unsafe { MetalLayer::new(ns_view) };
+            // SAFETY: the NSView is installed in its NSWindow, the handler has
+            // not been built, and the slot is still empty and unborrowed.
+            unsafe {
+                window_state.window_inner.metal_layer.set(metal_layer);
+            }
+        }
+
+        let window_handle = Self::finish(window_state, build);
+        initialization_guard.disarm();
+
+        unsafe {
+            let () = msg_send![pool, drain];
+        }
+        window_handle
+    }
+
     pub fn open_blocking<H, B>(options: WindowOpenOptions, build: B)
     where
         H: WindowHandler + 'static,
