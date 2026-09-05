@@ -542,3 +542,24 @@
 - Unresolved: X11 那条实现**本地无法编译验证**（交叉编译缺 X11 sysroot），依赖 Linux
   hosted job。Wayland 的受阻链因此缩短为一条：**baseview 没有 Wayland 后端**，
   而"CLAP 在 Wayland 上要浮动窗口"这一环已经不再是障碍。
+
+### 2026-09-06 — run #90 三平台全绿：floating editor 验收
+
+- Command/platform: push `b111338` 触发 GitHub Actions #90：
+  https://github.com/aizcutei/sunmao/actions/runs/33986603921
+- Result: 三 job 同一 commit 全部 success，每 job **26 步零非成功**，artifacts 3 份可下载
+  （macOS 53.1MB / Windows 78.3MB / Linux 971.6MB）。
+- Evidence/artifact: 已下载三平台日志逐条核实：
+  `a_floating_capable_view_opens_on_show_and_refuses_a_parent ... ok`、
+  `a_floating_capable_view_still_embeds ... ok`、
+  `a_suggested_title_reaches_the_plugin_and_a_non_floating_view_declines ... ok`，
+  三平台**零 FAILED 套件**。**X11 的 `open_floating` 本地无法编译验证**（交叉编译缺
+  X11 sysroot），Linux job 是它唯一的证据。
+- Unresolved: Phase 4 仍剩两项，且我已按同样的方式核实过它们**不是**另一个"读函数名下的错判"：
+  全树 grep `NSAccessibility|IRawElementProvider|atspi` 与 `wayland`，**平台侧零代码**
+  （命中的三处全是本轮新写的框架侧 accessibility 树）。floating 之所以能快速交付，是因为
+  baseview 里建窗结构本来就在、只需拆出来；这两项则是三个平台各自从零起：
+  (1) accessibility OS 桥接（UIA / NSAccessibility / AT-SPI 三份互不复用，且 runner 目前
+  无法验收——需要 Phase 5 的交互式 host；Windows 侧或可复用既有 UIA helper 反向查询）；
+  (2) baseview 的 Wayland 后端（`wl_surface`/`xdg_shell`/EGL/`wl_seat`+xkbcommon/`wl_output`，
+  且 CI 需装无头 compositor 才谈得上验收，Ubuntu job 现在跑的是 Xvfb ＝ X11）。

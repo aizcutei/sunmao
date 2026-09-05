@@ -129,6 +129,11 @@ Windows 那条甚至已经把 `WindowHandle` 返回出来了。
 `a_floating_capable_view_still_embeds`、
 `a_suggested_title_reaches_the_plugin_and_a_non_floating_view_declines`。
 
+**验收**：[run #90](https://github.com/aizcutei/sunmao/actions/runs/33986603921)
+（commit `b111338`）三平台 success、每 job 26 步零非成功、artifacts 3 份可下载。
+已下载三平台日志核实三条测试**逐条 ok**、零 FAILED 套件。**X11 那条实现本地无法编译验证**
+（交叉编译缺 X11 sysroot），Linux job 是它唯一的证据，因此这一条尤其不能只看 job 结论。
+
 ### 2. accessibility 平台桥接 —— 框架侧已完成，OS 侧未做
 
 `accessibility_tree()` 把控件树转成 `AccessibleNode`（role / label / 可朗读值 /
