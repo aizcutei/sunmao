@@ -665,6 +665,8 @@ impl<'a> Window<'a> {
             frame_timer: Cell::new(None),
             window_info: Cell::new(window_info),
             deferred_events: RefCell::default(),
+            #[cfg(feature = "accessibility")]
+            accesskit: RefCell::new(None),
         });
 
         let window_state_ptr = Rc::into_raw(Rc::clone(&window_state));
@@ -702,6 +704,8 @@ impl<'a> Window<'a> {
                 debug_assert!(!state_ptr.is_null());
                 WindowState::setup_timer(state_ptr as *const WindowState);
             }
+            #[cfg(feature = "accessibility")]
+            window_state.install_accessibility();
         }
 
         WindowHandle {
@@ -834,9 +838,111 @@ pub(super) struct WindowState {
 
     /// Events that will be triggered at the end of `window_handler`'s borrow.
     deferred_events: RefCell<VecDeque<Event>>,
+
+    /// NSAccessibility adapter, installed once the handler exists.
+    ///
+    /// Unlike the Windows side this is not lazy: the macOS adapter works by
+    /// swizzling the NSView's accessibility methods, so it has to be in place
+    /// before AppKit ever asks rather than in response to the first question.
+    #[cfg(feature = "accessibility")]
+    accesskit: RefCell<Option<accesskit_macos::SubclassingAdapter>>,
+}
+
+/// Bridges AccessKit's activation request to the window handler.
+///
+/// Holds a `Weak` deliberately: the adapter lives inside `WindowState`, so an
+/// `Rc` here would close a cycle and leak the window.
+///
+/// `on_frame` *takes* the handler out of its `RefCell` for the duration of the
+/// call, so an absent handler is normal rather than exceptional — answering
+/// `None` then leaves AppKit describing a bare view for that instant.
+#[cfg(feature = "accessibility")]
+struct HandlerActivation {
+    state: std::rc::Weak<WindowState>,
+}
+
+#[cfg(feature = "accessibility")]
+impl accesskit::ActivationHandler for HandlerActivation {
+    fn request_initial_tree(&mut self) -> Option<accesskit::TreeUpdate> {
+        let state = self.state.upgrade()?;
+        let mut handler = state.window_handler.try_borrow_mut().ok()?;
+        handler.as_mut()?.accessibility_tree()
+    }
+}
+
+/// Actions requested by assistive technology.
+///
+/// Not routed into the widget tree yet: a screen reader can read the editor but
+/// not drive it. Doing nothing is what the trait asks of an unsupported action.
+#[cfg(feature = "accessibility")]
+struct NoActions;
+
+#[cfg(feature = "accessibility")]
+impl accesskit::ActionHandler for NoActions {
+    fn do_action(&mut self, _request: accesskit::ActionRequest) {}
 }
 
 impl WindowState {
+    /// Install the NSAccessibility adapter on this window's NSView.
+    ///
+    /// Skipped when the handler has nothing to describe, so a window that does
+    /// not participate is not swizzled at all.
+    #[cfg(feature = "accessibility")]
+    fn install_accessibility(self: &Rc<Self>) {
+        let describes = self
+            .window_handler
+            .try_borrow_mut()
+            .ok()
+            .and_then(|mut handler| Some(handler.as_mut()?.accessibility_tree().is_some()))
+            .unwrap_or(false);
+        if !describes {
+            return;
+        }
+        let activation = HandlerActivation {
+            // Weak, or the adapter and the state would keep each other alive.
+            state: Rc::downgrade(self),
+        };
+        // SAFETY: `ns_view` is this window's live, retained NSView, and
+        // `finish` runs on the main thread as the adapter requires.
+        let adapter = unsafe {
+            accesskit_macos::SubclassingAdapter::new(
+                self.window_inner.ns_view as *mut c_void,
+                activation,
+                NoActions,
+            )
+        };
+        *self.accesskit.borrow_mut() = Some(adapter);
+    }
+
+    /// Push the current tree after a repaint.
+    ///
+    /// Must run once `on_frame` has put the handler back: the adapter asks for
+    /// the tree, and during the frame call the handler is taken out.
+    #[cfg(feature = "accessibility")]
+    fn publish_accessibility_tree(&self) {
+        let Ok(mut adapter) = self.accesskit.try_borrow_mut() else {
+            return;
+        };
+        let Some(adapter) = adapter.as_mut() else {
+            return;
+        };
+        let events = adapter.update_if_active(|| {
+            self.window_handler
+                .try_borrow_mut()
+                .ok()
+                .and_then(|mut handler| handler.as_mut()?.accessibility_tree())
+                .unwrap_or_else(|| accesskit::TreeUpdate {
+                    nodes: Vec::new(),
+                    tree: None,
+                    tree_id: accesskit::TreeId::ROOT,
+                    focus: accesskit::NodeId(0),
+                })
+        });
+        if let Some(events) = events {
+            events.raise();
+        }
+    }
+
     /// Tries to get the `WindowState` held by an initialized `NSView`.
     ///
     /// AppKit can invoke geometry callbacks while `initWithFrame:` is still
@@ -907,6 +1013,9 @@ impl WindowState {
 
         if self.window_inner.open.get() {
             *self.window_handler.borrow_mut() = Some(window_handler);
+            // Only now is the handler back in its cell, which publishing needs.
+            #[cfg(feature = "accessibility")]
+            self.publish_accessibility_tree();
             self.drain_deferred_events();
         } else {
             drop_window_handler(Some(window_handler));

@@ -14,8 +14,56 @@ use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
 use x11rb::protocol::Event as XEvent;
 
+/// Supplies AccessKit with the most recently published tree.
+///
+/// Unlike the Windows and macOS adapters, the AT-SPI one requires a `Send`
+/// activation handler and runs it off the window thread, so it cannot reach
+/// into the handler the event loop owns. The tree is therefore *pushed* here
+/// each frame and read back from this slot.
+///
+/// Returning `None` before the first frame is explicitly allowed: AccessKit
+/// accepts a late tree as long as it arrives by the next display refresh, which
+/// is exactly when the loop publishes one.
+#[cfg(feature = "accessibility")]
+#[derive(Clone, Default)]
+struct PublishedTree(std::sync::Arc<std::sync::Mutex<Option<accesskit::TreeUpdate>>>);
+
+#[cfg(feature = "accessibility")]
+impl accesskit::ActivationHandler for PublishedTree {
+    fn request_initial_tree(&mut self) -> Option<accesskit::TreeUpdate> {
+        self.0.lock().ok()?.clone()
+    }
+}
+
+/// Actions requested by assistive technology.
+///
+/// Not routed into the widget tree yet: a screen reader can read the editor but
+/// not drive it. Doing nothing is what the trait asks of an unsupported action.
+#[cfg(feature = "accessibility")]
+struct NoActions;
+
+#[cfg(feature = "accessibility")]
+impl accesskit::ActionHandler for NoActions {
+    fn do_action(&mut self, _request: accesskit::ActionRequest) {}
+}
+
+#[cfg(feature = "accessibility")]
+struct NoDeactivation;
+
+#[cfg(feature = "accessibility")]
+impl accesskit::DeactivationHandler for NoDeactivation {
+    fn deactivate_accessibility(&mut self) {}
+}
+
 pub(super) struct EventLoop {
     handler: Box<dyn WindowHandler>,
+    /// AT-SPI adapter, created on the first frame that has a tree to publish.
+    ///
+    /// Lazy for the same reason as the Windows one: constructing it starts a
+    /// D-Bus connection, which is pure waste for a window that describes
+    /// nothing or a session with no accessibility bus.
+    #[cfg(feature = "accessibility")]
+    accesskit: Option<(accesskit_unix::Adapter, PublishedTree)>,
     window: WindowInner,
     parent_handle: Option<ParentHandle>,
     resize_receiver: Option<Receiver<Size>>,
@@ -27,6 +75,29 @@ pub(super) struct EventLoop {
 }
 
 impl EventLoop {
+    /// Publish the current tree over AT-SPI, creating the adapter on first use.
+    ///
+    /// Runs after `on_frame`, so what is published matches what was drawn.
+    #[cfg(feature = "accessibility")]
+    fn publish_accessibility_tree(&mut self) {
+        let Some(tree) = self.handler.accessibility_tree() else {
+            // Nothing to describe: do not start a D-Bus connection for it.
+            return;
+        };
+        let (adapter, published) = self.accesskit.get_or_insert_with(|| {
+            let published = PublishedTree::default();
+            let adapter =
+                accesskit_unix::Adapter::new(published.clone(), NoActions, NoDeactivation);
+            (adapter, published)
+        });
+        // Store first: the activation handler runs on the adapter's own thread
+        // and may ask for the tree at any moment after this point.
+        if let Ok(mut slot) = published.0.lock() {
+            *slot = Some(tree.clone());
+        }
+        adapter.update_if_active(|| tree);
+    }
+
     pub fn new(
         window: WindowInner,
         handler: impl WindowHandler + 'static,
@@ -37,6 +108,8 @@ impl EventLoop {
         Self {
             window,
             handler: Box::new(handler),
+            #[cfg(feature = "accessibility")]
+            accesskit: None,
             parent_handle,
             resize_receiver,
             blocking_stop_requested,
@@ -118,6 +191,8 @@ impl EventLoop {
                 self.handler.on_frame(&mut crate::Window::new(Window {
                     inner: &self.window,
                 }));
+                #[cfg(feature = "accessibility")]
+                self.publish_accessibility_tree();
                 last_frame = Instant::max(next_frame, Instant::now() - self.frame_interval);
             }
 

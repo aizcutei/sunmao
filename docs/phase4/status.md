@@ -183,9 +183,21 @@ Windows 走 `accesskit_windows::Adapter` + baseview 的 `WM_GETOBJECT`（不用
 - **action 未接**：屏幕阅读器能读、还不能改。`ActionHandler` 如实什么都不做（trait 要求
   不支持的 action 必须无动作），这样只读支持不必等 action 管线。
 
-macOS/Linux 侧：`ViewState::accessibility_tree()` 已经产出树，但 baseview 的
-AppKit/X11 后端还没有把它交给 `accesskit_macos`/`accesskit_unix`，因此这两个平台上
-feature 打开也只是多算一棵树、无人消费——**如实记为未接通，不是"已支持"**。
+**macOS**：`accesskit_macos::SubclassingAdapter`（它靠 swizzle NSView 的 accessibility
+方法工作，因此与 Windows 相反，必须在 AppKit 提问**之前**装好，不能懒创建）。
+两个要点：activation handler 持 `Weak`——适配器住在 `WindowState` 里，用 `Rc` 会成环、
+泄漏窗口；以及 macOS 的 `on_frame` 会把 handler **取出** `RefCell`，所以"handler 不在"
+是常态而非异常，此时如实回 `None`。发布放在 handler 放回之后。
+
+**Linux**：`accesskit_unix::Adapter`（AT-SPI）。与另两个平台形状不同：它要求
+activation handler 是 `Send` 且在自己的线程上跑，够不到事件循环持有的 handler，
+因此树是**每帧推**进一个共享槽、由 activation handler 读回。首帧之前回 `None` 是
+AccessKit 明确允许的（只要树在下一次刷新前送达，而那正是循环发布的时机）。
+适配器懒创建：构造它会起一条 D-Bus 连接，对不描述自己的窗口或没有 a11y 总线的会话
+纯属浪费。
+
+**三平台的共同降级**：action 未接——屏幕阅读器能读、不能改。`ActionHandler` 如实
+什么都不做（trait 要求不支持的 action 必须无动作），这样只读支持不必等 action 管线。
 
 **尚未做到的验收**：hosted job 目前只证明这条链在三平台**编译并通过单测**
 （新增 CI 步骤同时构建 `sunmao_gui`、`sunmao` facade 与 fixture 的 feature 版本）。

@@ -631,3 +631,29 @@
     **如实记为未接通。**
   - **宿主侧断言未做**：目前 hosted job 只证明这条链三平台编译并通过单测。真正用
     runner 的 UIA 机制反查插件暴露的元素，需要先把 fixture 以该 feature 打包进矩阵。
+
+### 2026-09-06 — accessibility 三平台适配器接通（macOS 与 Linux）
+
+- Command/platform: macOS ARM64。**Linux 侧本地无法编译验证**（交叉编译缺 X11 sysroot），
+  其唯一证据是 hosted Linux job——这一点必须先说清楚。
+- Change:
+  - **macOS**：`accesskit_macos::SubclassingAdapter`。它靠 swizzle NSView 的 accessibility
+    方法工作，所以与 Windows 相反**不能懒创建**——必须在 AppKit 提问之前装好。
+    两个坑：(1) activation handler 持 **`Weak`**，适配器住在 `WindowState` 里，
+    用 `Rc` 会成环并泄漏窗口；(2) macOS 的 `on_frame` 把 handler **取出** `RefCell`，
+    所以"handler 不在"是常态，此时回 `None`，发布也必须放在 handler 放回之后。
+  - **Linux**：`accesskit_unix::Adapter`（AT-SPI）。形状与另两个不同：activation handler
+    必须 `Send` 且跑在适配器自己的线程上，够不到事件循环持有的 handler，
+    因此树改为**每帧推**进共享槽、由 handler 读回。首帧前回 `None` 是 AccessKit 明确允许的
+    （只要树在下一次刷新前送达，而那正是循环发布的时机）。懒创建：构造它会起 D-Bus 连接。
+  - 三平台共同降级：**action 未接**，屏幕阅读器能读不能改；`ActionHandler` 如实无动作。
+- Result: 默认 `cargo test --locked` exit 0，**129 套件 / 662 测试**；
+  `cargo metadata --locked` 在新增 Linux 依赖后仍 exit 0；macOS 上 `sunmao_gui` 与 fixture
+  的 feature 版全绿；fmt / diff 全过。
+- Evidence/artifact: `/tmp/mac.log`。
+- Unresolved:
+  - **Linux 那条实现只有 CI 能验证**（同 floating 的 X11 分支）。
+  - **仍无宿主侧断言**：hosted job 目前证明的是三平台编译并通过单测。用 runner 的 UIA
+    机制反查插件暴露的元素需要先把 fixture 以该 feature 打包进矩阵。
+  - macOS 的 AXUIElement 验收在 CI 上受 TCC 权限限制，Windows UIA 无此限制，
+    因此**宿主侧断言优先做 Windows**。
