@@ -62,8 +62,8 @@ Linux GUI 面的风险。计划在 **M2 真控件落地时接入**——Phase 3 
 | M1 renderer 资源与线程归属 | 三后端归属与销毁顺序文档、scale/DPI 协商两格式落地 | **完成**（三平台 hosted 全绿）：`docs/phase4/ownership.md` 落地；scale/DPI 协商自 `_sys` 补起（`vst3_sys` 此前**完全没有** `IPlugViewContentScaleSupport` 绑定，IID/typedef 自上游头文件转录）→ `vst3_rs` 第二 vtable + 布局断言 → core `ViewHandle::scalable`（并删除自 Phase 1 起就无调用方、且签名 `&self` 无法改动编辑器的死钩子 `SunmaoView::set_scale_factor`）→ 两 backend 路由到**活着的** view_handle（`backend_clap` 此前从未 override `gui_set_scale`，一直告诉 CLAP 宿主“不支持缩放”）→ baseview 按 `创建尺寸 × factor` 响应 → runner `gui-test` 两格式断言 | [run #75](https://github.com/aizcutei/sunmao/actions/runs/33963105660)（commit `0b51dcb`）三 job success，每 job **26 步零非成功**，artifacts 3 份可下载。已下载三平台 job 日志核实断言**真实执行**：每平台 `GUI scale negotiated: host applied 2.0` 各 **16 次**（8 个 GUI 插件 × 2 格式），零因子拒绝亦 16 次，且**拒绝方式按格式精确分裂 8/8**（CLAP 回 `false`、VST3 回 `kInvalidArgument`），三平台完全一致 | — （M1 完成；进入 M2） |
 | M2 布局与主题 | `Column`/`Row`/gap/padding、五个控件、参数双向绑定、主题 token | **完成**（三平台 hosted 全绿）：`Theme` 角色化 token（暗/亮，对比度由测试机械断言）、新增 `Toggle`/`Dropdown`（连同既有 `Knob`/`Slider`/`Label`/`Button` 共 6 控件）、声明式 `Column`/`Row`（含 6 个布局 proptest）、`ParamBinder`+`ParamHost` 两向绑定（facade 以 `ViewContextHost` 适配 `ViewContext`），fixture 换真控件后**已无逐控件回调代码**并接入打包矩阵 | [run #77](https://github.com/aizcutei/sunmao/actions/runs/33965946234)（commit `aec872f`）三 job success，每 job **26 步零非成功**，artifacts 3 份。已下载三平台日志核实新 fixture 真被宿主执行：每平台 `SunMao Widgets GL` 出现 10 次、两格式各自 `Testing:` 一次，全 run **零失败套件**。本地打包 30→**32 套件**、600→**640 断言** | — （M2 完成；进入 M3） |
 | M3 text rendering 与输入 | 字体栅格化/度量、clipboard、IME/国际键盘、cursor/focus | **完成**（三平台 hosted 全绿）：`GlyphSource`/`Font`（字形缓存）+ fontdue `TtfFont`；`Clipboard`/`SystemClipboard` 与焦点控件 Ctrl/Cmd+C·V；`TextInput` 由 `Key::Character` 产生（跳过 `is_composing` 预编辑）＝国际键盘/IME 路径，三平台经 baseview 同一条；`Stack` 焦点模型 + 四个控件的键盘处理；VST3 `IPlugView::onKeyDown`/`onKeyUp` 由 stub 改为真实转发；GL `draw_text` 由空实现改为按覆盖率绘制（同覆盖率合并成行）| [run #84](https://github.com/aizcutei/sunmao/actions/runs/33976552655)（commit `8f959ba`）三 job success、每 job 26 步零非成功、artifacts 3 份。**关键证据不是 job 成功而是断言真的跑了**：三平台各 `GUI key verified` 1 次（VST3，`Gain moved 0 -> 1`）＋格式跳过 1 次（CLAP）。run #82 曾三平台全绿但该断言 0 次执行（fixture 不在 GUI 矩阵里），补入矩阵后才成立 | — （M3 完成；进入 M4） |
-| M4 可视化与 accessibility | `VizChannel`、`SpectrumAnalyzer`/meter、accessibility 树、floating CLAP editor | **部分完成，两项受阻**（详见下方“M4 受阻项”）。已落地：`sunmao_core::viz` 三缓冲 `VizChannel`（audio 侧 publish 零 alloc，含跨真实线程的撕裂读检测）、`SpectrumAnalyzer`（峰值即起、落差衰减、NaN/越界收敛）、`accessibility_tree` + `AccessibleNode`/`AccessibleRole`（角色由 `ParameterWidget::accessible_role` **声明**而非从显示文本推断）、CLAP `suggest_title` 由静默 stub 改为真实转发。fixture 已从 crate 内 `SpectrumPublisher` 换成 `VizChannel`+`SpectrumAnalyzer` | 待本轮 CI | 取得三平台绿后进入 M5 |
-| M5 Wayland 与总验收 | Wayland、GUI 侧兼容策略、proptest/文档收尾 | 未开始 | — | — |
+| M4 可视化与 accessibility | `VizChannel`、`SpectrumAnalyzer`/meter、accessibility 树、floating CLAP editor | **部分完成，两项受阻**（详见下方“M4 受阻项”）。已落地：`sunmao_core::viz` 三缓冲 `VizChannel`（audio 侧 publish 零 alloc，含跨真实线程的撕裂读检测）、`SpectrumAnalyzer`（峰值即起、落差衰减、NaN/越界收敛）、`accessibility_tree` + `AccessibleNode`/`AccessibleRole`（角色由 `ParameterWidget::accessible_role` **声明**而非从显示文本推断）、CLAP `suggest_title` 由静默 stub 改为真实转发。fixture 已从 crate 内 `SpectrumPublisher` 换成 `VizChannel`+`SpectrumAnalyzer` | [run #86](https://github.com/aizcutei/sunmao/actions/runs/33980911401)（commit `1ddc210`）三 job success，每 job **26 步零非成功**，artifacts 3 份可下载（macOS 53.0MB / Windows 78.3MB / Linux 971.2MB）。已下载三平台 job 日志核实新断言**真的执行且通过**：`the_editor_describes_itself_to_assistive_technology ... ok`、accessibility proptest 套件、`VizChannel` 跨线程撕裂读测试各 1 次/平台，`GUI scale negotiated` 由 16 增至 **18** 次（widgets fixture 入 GUI 矩阵后 9 插件 × 2 格式），三平台**零 FAILED 套件** | 已完成两项，两项受阻（见下） |
+| M5 Wayland 与总验收 | Wayland、GUI 侧兼容策略、proptest/文档收尾 | **部分完成；Wayland 原生受阻（规范级，非工程取舍）**。已落地：`docs/phase3/compatibility.md` 新增 §2bis GUI 兼容（受保护面 / 视觉不承诺但语义承诺 / accessibility role 规则 / 只能记录不能承诺的宿主侧行为）；accessibility proptest 4 条；补齐 `Knob`/`Slider` 缺失的 `host_sync_never_echoes_back_to_the_host`（此前只有 `Toggle`/`Dropdown` 有，而这正是防 automation 回声环的那条不变量）；`clap_sys` 补回上游遗漏的 `uikit` 成员与 `CLAP_WINDOW_API_UIKIT` 并加 union 布局断言 | 待本轮 CI | Wayland 见下方「M5 Wayland 受阻链」 |
 
 ## 完成规则
 
@@ -104,6 +104,29 @@ Slider/ComboBox/CheckBox 而非一个不透明矩形）。
 都没有 accessibility 通道——accessibility 走的是 OS API，必须先有上述桥接才存在可被
 hosted job 断言的宿主可见行为。（runner 里既有的 UIA helper 是**测试侧**用 UIA 拖动
 宿主滑块的工具，不是插件侧的可访问性实现，无法复用为验收手段。）
+
+## M5 Wayland 受阻链（每一环都有一手依据，不是推测）
+
+Wayland 原生支持在 Phase 4 内**无法交付**。这不是"没来得及"，而是三个独立事实叠起来
+的结果，其中两个是**规范层面**的，不由 SunMao 决定：
+
+1. **VST3 根本没有 Wayland 平台类型。** `vst3_sys/src/gui/iplugview.rs:39-42` 转录自上游
+   的平台类型只有 `HWND` / `NSView` / `UIView` / `X11EmbedWindowID`。VST3 插件在 Wayland
+   桌面上一律经 **XWayland** 运行——这是 VST3 规范的现状，不是本项目的取舍。
+2. **CLAP 声明了 `wayland`，但上游明确说不能嵌入。** `clap/ext/gui.h` 对
+   `CLAP_WINDOW_API_WAYLAND` 的原文注释是 *"embed is currently not supported, use floating
+   windows"*（已连同 `uikit` 一并补进 `clap_sys/src/ext/gui.rs` 的文档注释）。也就是说
+   **CLAP 在 Wayland 上要求浮动窗口**。
+3. **浮动窗口正是 M4 那条受阻项。** 于是 Wayland 与 floating editor 卡在**同一块**
+   baseview 工作上；而且 baseview 的 Linux 后端本身就是 X11 独占——`baseview/src/lib.rs:6`
+   只有 `mod x11`，全树零 Wayland 引用。
+
+**结论：** 真正的 Wayland 原生支持 = 给 baseview 写一个 Wayland 后端（当前不存在）
+＋ 非阻塞顶层窗口模式（M4 同一块）＋ 只有 CLAP 能受益（VST3 侧永远走 XWayland）。
+这是独立立项的规模，应当单独取三平台绿，而不是塞进 Phase 4 收尾。
+
+**现状不是"不能在 Wayland 上用"**：经 XWayland，X11 路径在 Wayland 桌面上照常工作，
+这也是目前 Ubuntu hosted job 所验证的那条路径。
 
 ## 已知遗留
 

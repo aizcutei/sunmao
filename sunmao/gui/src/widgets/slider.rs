@@ -425,4 +425,24 @@ mod tests {
         assert!(!consumed);
         assert_eq!(slider.value(), before);
     }
+
+    /// A host automation update must not be reported back to the host as a user
+    /// edit: that closes a feedback loop where the host's own write bounces
+    /// back, and with a smoothed parameter the two can chase each other.
+    #[test]
+    fn host_sync_never_echoes_back_to_the_host() {
+        let mut control = Slider::new("gain").with_bounds(Rect::new(0.0, 0.0, 120.0, 24.0));
+        let count = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&count);
+        control.on_value_changed(Box::new(move |_| {
+            seen.fetch_add(1, Ordering::SeqCst);
+        }));
+        control.set_value(0.75);
+        assert_eq!(control.value(), 0.75);
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            0,
+            "a host-driven update was echoed back as an edit"
+        );
+    }
 }

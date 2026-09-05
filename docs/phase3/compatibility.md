@@ -158,6 +158,66 @@ latency/tail、bus 激活状态与 speaker layout、`Meter` 读数、任何 GUI 
   strategy 的范围等于收紧承诺，必须走破坏性版本。本文件的每条承诺都应当能指到一个测试
   名；指不到的承诺是文档债，不是承诺。
 
+## 2bis. GUI 兼容（Phase 4 M5 补入）
+
+GUI 有一条别的轴没有的性质：**它的"行为"一部分不由 SunMao 决定，而由宿主与平台决定**。
+因此这一节把承诺分成"我们能承诺的"与"我们只能记录的"两类，后者不进 semver 保护面，
+但必须写在 `docs/phase2/semantics.md` 里附测试名。
+
+### 2bis.1 受 semver 保护的 GUI 面
+
+| 面 | 说明 |
+|---|---|
+| `sunmao::prelude` 中的 GUI 名字 | `Widget`/`ParameterWidget` trait 的既有方法签名；`Knob`/`Slider`/`Toggle`/`Dropdown`/`Button`/`Label`/`SpectrumAnalyzer` 的构造与 builder 方法；`Column`/`Row`/`Stack` 的布局方法；`Theme` 的字段名与角色语义；`accessibility_tree`/`AccessibleNode`/`AccessibleRole`；`viz_channel`/`VizPublisher`/`VizConsumer` |
+| `Widget` / `ParameterWidget` 的扩展方式 | 与 `SunmaoPlugin` 同规则：**只允许新增带默认实现的方法**（`as_parameter`、`set_from_text`、`accessible_role` 都是按此规则加入的）。新增无默认实现的方法会打断每一个自定义控件，属破坏性。 |
+| `ViewHandle` 的构造与钩子 | `ViewHandle::builder()` 的既有开关（`resizable`/`scalable`/`keyboard`）语义不变；新增开关必须有默认值。 |
+
+### 2bis.2 视觉不进兼容承诺，语义进
+
+**像素级外观不是承诺。** 主题配色、控件描边宽度、字形栅格化结果都可能在兼容版本里变，
+因为它们依赖字体、DPI 与 GPU 驱动，钉死它们等于禁止修 bug。
+
+**但下列语义是承诺**，因为用户与宿主依赖它们：
+
+- **`Theme` 的角色语义与对比度下限。** `background`/`surface`/`accent`/`text` 的用途不变，
+  且前景色对各表面的亮度对比不低于当前值——由
+  `sunmao_gui::theme::tests::both_themes_keep_text_readable_against_their_surfaces`
+  机械守卫（阈值 0.4），调暗任一对都会红。
+- **参数控件的归一化约定。** `ParameterWidget::value()`/`set_value()` 永远是 `0.0..=1.0`，
+  且 `set_value` **不得**触发 `on_value_changed`（否则宿主 automation 会被回显成用户编辑，
+  形成反馈环）。由各控件的 `host_sync_never_echoes_back_to_the_host` 守卫。
+- **`display_value()` 与 `set_from_text()` 的往返。** 从控件复制出来的文本必须能粘回同一
+  控件并还原同一个值；`set_from_text` 对不认识的文本返回 `false` 并**保持原值**，
+  而不是清零。
+- **accessibility 的 role 由控件声明。** 见 2bis.3。
+- **`VizChannel` 的投递语义**：消费者拿到的永远是**最新**帧（允许跳帧，不允许回退），
+  `latest()` 在无新帧时重复上一帧而不是回到 `default()`。由 `sunmao_core::viz` 的
+  跨线程测试守卫。改成队列语义（保证不丢帧）是破坏性变更——那会让 audio 线程在消费者
+  落后时被迫阻塞或分配。
+
+### 2bis.3 accessibility 的兼容规则
+
+`AccessibleRole` 是 `#[non_exhaustive]` 的候选：**新增 role 变体不算破坏性**（桥接层
+应当有 fallback），但**改变某个控件已声明的 role 算破坏性**——屏幕阅读器用户会据此
+学会怎么操作它，把下拉改叫滑块等于换掉交互契约。
+
+`accessible_role()` 必须**声明**，不得从 `display_value()` 推断。这条不只是风格：
+选项恰好是 `"1"`/`"2"` 的下拉会被任何基于文本的推断读成滑块。由
+`a_dropdown_of_numeric_options_is_still_a_dropdown` 守卫。
+
+### 2bis.4 只能记录、不能承诺的部分
+
+这些由宿主或平台决定，SunMao 只能如实上报能力并把差异写进 `docs/phase2/semantics.md`：
+
+- 宿主是否调用 `set_scale`（CLAP 上游明确说 cocoa/uikit **不该**调用，见
+  `clap_sys::ext::gui` 的常量文档）；
+- 宿主是否转发键盘（VST3 经 `IPlugView::onKeyDown`，CLAP 无宿主转发通道）；
+- 浮动窗口与 Wayland 原生嵌入（见 `docs/phase4/status.md` 的受阻项）；
+- 平台 accessibility 桥接是否存在（当前三平台都不存在）。
+
+**规则：能力不可用时一律如实回 `false`/降级，绝不出现"查询说支持、实际做不到"。**
+这是 Phase 2 起就贯穿的规则，GUI 侧同样适用。
+
 ## 3. 变更记录
 
 | crate 版本 | 类型 | 内容 | 迁移 |

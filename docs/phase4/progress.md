@@ -422,3 +422,42 @@
     原生实现。**runner 无法验收这一项**：runner 经 VST3/CLAP 插件 API 驱动，而两个格式都
     没有 accessibility 通道——它走 OS API，必须先有桥接才存在可被 hosted job 断言的宿主可见行为。
     （runner 里既有的 UIA helper 是测试侧拖动宿主滑块的工具，不是插件侧实现，不能复用为验收手段。）
+
+### 2026-09-06 — M4 验收（hosted run #86 三平台全绿且断言非空转）＋ M5 除 Wayland 外收尾
+
+- Command/platform: push `1ddc210` 触发 GitHub Actions #86：
+  https://github.com/aizcutei/sunmao/actions/runs/33980911401
+- Result: 三 job 同一 commit 全部 success，每 job **26 步零非成功**，artifacts 3 份可下载
+  （macOS 53.0MB / Windows 78.3MB / Linux 971.2MB）。Windows WGPU 收尾段错误未复现。
+- Evidence/artifact: **判定依据是断言真的跑了并通过**，已下载三平台 job 日志逐条数：
+  `the_editor_describes_itself_to_assistive_technology ... ok` 各 1 次、accessibility
+  proptest 套件各 1 次、`VizChannel` 跨真实线程撕裂读测试各 1 次；`GUI scale negotiated`
+  由 M1 的 16 次增至 **18** 次（widgets fixture 进 GUI 矩阵后 9 个 GUI 插件 × 2 格式），
+  三平台 **零 FAILED 套件**，打包 `Summary: 20 passed, 0 failed`。
+- Change（M5 本轮部分，Wayland 除外）:
+  - **`docs/phase3/compatibility.md` 新增 §2bis GUI 兼容**：受 semver 保护的 GUI 面；
+    **像素级外观不承诺、语义承诺**（主题角色与对比度下限、参数控件的归一化约定与
+    "set_value 不得回调"、`display_value`/`set_from_text` 往返、`VizChannel` 的
+    "最新帧、可跳不可退"投递语义）；accessibility 的 role 兼容规则（新增变体不算破坏、
+    改已声明的 role 算破坏）；以及**只能记录不能承诺**的宿主侧行为清单。
+  - **补齐 `Knob`/`Slider` 缺失的 `host_sync_never_echoes_back_to_the_host`**：
+    写兼容文档时去核对引用的测试名，发现四个参数控件里只有 `Toggle`/`Dropdown` 有这条
+    测试——而它正是防"宿主 automation 被回显成用户编辑"反馈环的那条不变量。两个控件的
+    实现本来就是对的，缺的是守卫。**教训：文档里引用测试名要真的去 grep，指不到的
+    承诺是文档债。**
+  - **`clap_sys` 补回上游遗漏项**：`clap_window_handle_u` 少了 `uikit` 成员、
+    少了 `CLAP_WINDOW_API_UIKIT` 常量、也没转录上游那些**载有语义**的注释
+    （cocoa/uikit "uses logical size, **don't call set_scale()**"；wayland
+    "embed is currently not supported, use floating windows"）。union 是 ABI 边界，
+    因此补成员的同时加了布局断言（所有成员都是指针宽或 c_ulong，union 仍是一个字）。
+- Result: `cargo test --locked` exit 0，**128 套件 / 660 测试**；fmt / diff / Windows
+  target check 全过。
+- Evidence/artifact: `/tmp/full5.log`、`/tmp/job_1013458386*.log`。
+- Unresolved: **Wayland 原生受阻，且是规范层面而非工程取舍**（详见 status.md
+  「M5 Wayland 受阻链」）。三个独立事实叠加：(1) VST3 **根本没有 Wayland 平台类型**
+  （上游只有 HWND/NSView/UIView/X11EmbedWindowID），VST3 在 Wayland 上一律走 XWayland；
+  (2) CLAP 虽声明 `wayland`，但上游 `gui.h` 原文说 *"embed is currently not supported,
+  use floating windows"*——即 **Wayland 上必须用浮动窗口**；(3) 浮动窗口正是 M4 那条
+  受阻项，且 baseview 的 Linux 后端本身 X11 独占（`baseview/src/lib.rs:6` 只有 `mod x11`，
+  全树零 Wayland 引用）。**现状不是"不能在 Wayland 上用"**：经 XWayland，X11 路径
+  在 Wayland 桌面上照常工作。
