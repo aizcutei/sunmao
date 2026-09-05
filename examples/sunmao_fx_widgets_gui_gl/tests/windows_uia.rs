@@ -29,13 +29,13 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, IUIAutomation, IUIAutomationElement, TreeScope_Descendants,
+    CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTreeWalker,
     UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId, UIA_SliderControlTypeId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, PeekMessageW, RegisterClassW,
-    TranslateMessage, CW_USEDEFAULT, MSG, PM_REMOVE, WINDOW_EX_STYLE, WNDCLASSW, WS_CLIPCHILDREN,
-    WS_OVERLAPPEDWINDOW,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetWindow, PeekMessageW,
+    RegisterClassW, TranslateMessage, CW_USEDEFAULT, GW_CHILD, MSG, PM_REMOVE, WINDOW_EX_STYLE,
+    WNDCLASSW, WS_CLIPCHILDREN, WS_OVERLAPPEDWINDOW,
 };
 
 /// Create a plain host window for the editor to embed in.
@@ -104,29 +104,51 @@ fn pump(duration: Duration) {
     }
 }
 
-/// Control types found under `root`, as UIA reports them.
-fn control_types(automation: &IUIAutomation, root: &IUIAutomationElement) -> Vec<i32> {
+/// Every descendant of `root`, as `(control type, name)`.
+///
+/// The name comes along because a bare list of numeric control types is nearly
+/// unreadable when this fails: "50000" could be the editor's button or the host
+/// window's close box.
+fn describe(automation: &IUIAutomation, root: &IUIAutomationElement) -> Vec<(i32, String)> {
     let mut found = Vec::new();
+    // The **raw** view, not the default control view. The control view hides
+    // elements it deems uninteresting — an unnamed pane, for one — which is
+    // exactly what a custom-drawn editor's container looks like. Walking the
+    // control view and finding nothing would be ambiguous between "no provider"
+    // and "provider filtered out".
     unsafe {
-        let Ok(condition) = automation.CreateTrueCondition() else {
+        let Ok(walker) = automation.RawViewWalker() else {
             return found;
         };
-        let Ok(children) = root.FindAll(TreeScope_Descendants, &condition) else {
-            return found;
-        };
-        let count = children.Length().unwrap_or(0);
-        for index in 0..count {
-            let Ok(element) = children.GetElement(index) else {
-                continue;
-            };
-            // `CurrentControlType` rather than the generic property getter:
-            // it returns the id directly instead of a VARIANT to unpack.
-            if let Ok(control_type) = element.CurrentControlType() {
-                found.push(control_type.0);
-            }
-        }
+        walk(&walker, root, 0, &mut found);
     }
     found
+}
+
+/// Depth-first raw-view walk, bounded so a cyclic or enormous tree cannot hang
+/// the test.
+unsafe fn walk(
+    walker: &IUIAutomationTreeWalker,
+    element: &IUIAutomationElement,
+    depth: usize,
+    out: &mut Vec<(i32, String)>,
+) {
+    if depth > 8 || out.len() > 200 {
+        return;
+    }
+    let control_type = unsafe { element.CurrentControlType() }
+        .map(|id| id.0)
+        .unwrap_or(0);
+    let name = unsafe { element.CurrentName() }
+        .map(|name| name.to_string())
+        .unwrap_or_default();
+    out.push((control_type, name));
+
+    let mut child = unsafe { walker.GetFirstChildElement(element) }.ok();
+    while let Some(current) = child {
+        unsafe { walk(walker, &current, depth + 1, out) };
+        child = unsafe { walker.GetNextSiblingElement(&current) }.ok();
+    }
 }
 
 /// The editor's knob, dropdown and toggle must be visible to UI Automation as a
@@ -173,24 +195,44 @@ fn a_screen_reader_can_see_the_editor_controls() {
         unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
             .expect("UI Automation is unavailable");
 
-    // Query from the host window: UIA walks into the embedded editor, which is
-    // exactly the traversal a screen reader performs in a DAW.
-    let hwnd = parent;
+    // The editor is a child HWND of the host window. Query it directly as well
+    // as through the parent: if the parent walk misses it but the direct query
+    // finds it, the provider works and the traversal is what needs fixing.
+    let child = unsafe { GetWindow(parent, GW_CHILD) }.ok();
 
     // Retry: UIA attaches asynchronously, and the first query can land before
     // the provider is registered.
-    let mut types = Vec::new();
+    let mut found: Vec<(i32, String)> = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
         pump(Duration::from_millis(200));
-        let Ok(element) = (unsafe { automation.ElementFromHandle(hwnd) }) else {
-            continue;
-        };
-        types = control_types(&automation, &element);
-        if types.contains(&UIA_SliderControlTypeId.0) {
+        for hwnd in [child, Some(parent)].into_iter().flatten() {
+            let Ok(element) = (unsafe { automation.ElementFromHandle(hwnd) }) else {
+                continue;
+            };
+            let described = describe(&automation, &element);
+            for entry in described {
+                if !found.contains(&entry) {
+                    found.push(entry);
+                }
+            }
+        }
+        if found
+            .iter()
+            .any(|(control_type, _)| *control_type == UIA_SliderControlTypeId.0)
+        {
             break;
         }
     }
+
+    println!("UIA child window present: {}", child.is_some());
+    for (control_type, name) in &found {
+        println!("UIA element: type={control_type} name={name:?}");
+    }
+    let types: Vec<i32> = found
+        .iter()
+        .map(|(control_type, _)| *control_type)
+        .collect();
 
     drop(handle);
     unsafe {
