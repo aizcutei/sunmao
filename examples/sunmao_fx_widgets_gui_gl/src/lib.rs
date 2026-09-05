@@ -267,84 +267,13 @@ impl SunmaoPlugin for WidgetsPlugin {
     }
 }
 
-// ============ Skeleton widgets (M2/M4 replace these) ============
-
-/// Boolean control. M2 replaces this with a framework `Toggle`.
-#[derive(Debug, Clone)]
-pub struct ToggleSkeleton {
-    pub bounds: Rect,
-    on: bool,
-}
-
-impl ToggleSkeleton {
-    pub fn new(on: bool) -> Self {
-        Self {
-            bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
-            on,
-        }
-    }
-
-    pub fn is_on(&self) -> bool {
-        self.on
-    }
-
-    pub fn set_on(&mut self, on: bool) {
-        self.on = on;
-    }
-
-    /// Returns `true` when the click landed on the toggle and flipped it.
-    pub fn click(&mut self, x: f32, y: f32) -> bool {
-        if !self.bounds.contains(x, y) {
-            return false;
-        }
-        self.on = !self.on;
-        true
-    }
-}
-
-/// Discrete control. M2 replaces this with a framework `Dropdown`.
-#[derive(Debug, Clone)]
-pub struct DropdownSkeleton {
-    pub bounds: Rect,
-    options: &'static [&'static str],
-    selected: usize,
-}
-
-impl DropdownSkeleton {
-    pub fn new(options: &'static [&'static str], selected: usize) -> Self {
-        Self {
-            bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
-            options,
-            selected: selected.min(options.len().saturating_sub(1)),
-        }
-    }
-
-    pub fn selected(&self) -> usize {
-        self.selected
-    }
-
-    pub fn label(&self) -> &'static str {
-        self.options.get(self.selected).copied().unwrap_or("")
-    }
-
-    /// Out-of-range indices are clamped rather than ignored, so a host writing
-    /// a stale automation value still lands on a valid option.
-    pub fn set_selected(&mut self, index: usize) {
-        self.selected = index.min(self.options.len().saturating_sub(1));
-    }
-
-    /// A click advances to the next option and wraps. A real dropdown opens a
-    /// popup; that needs the M3 focus model, so cycling stands in for now.
-    pub fn click(&mut self, x: f32, y: f32) -> bool {
-        if !self.bounds.contains(x, y) || self.options.is_empty() {
-            return false;
-        }
-        self.selected = (self.selected + 1) % self.options.len();
-        true
-    }
-}
+// ============ Spectrum display (M4 replaces with VizChannel) ============
 
 /// Spectrum display. M4 replaces this with `SpectrumAnalyzer` + `VizChannel`.
+///
+/// The toggle and dropdown that used to live here alongside it are gone: M2
+/// landed real framework widgets, so the editor below uses `Toggle` and
+/// `Dropdown` from `sunmao_gui` instead.
 pub struct SpectrumSkeleton {
     pub bounds: Rect,
     source: Arc<SpectrumPublisher>,
@@ -370,13 +299,18 @@ impl SpectrumSkeleton {
 
 // ============ View ============
 
+/// Widths the controls are declared at; the column stretches them across its
+/// padded width, so only the heights below are load-bearing.
+const CONTROL_HEIGHT: f32 = 28.0;
+const KNOB_SIZE: f32 = 72.0;
+
 struct WidgetsViewState {
-    knob: Knob,
-    dropdown: DropdownSkeleton,
-    toggle: ToggleSkeleton,
+    /// Every parameter control lives in this tree. The binder walks it, so
+    /// there is no per-control callback code in this file at all.
+    controls: Stack,
+    binder: ParamBinder,
     spectrum: SpectrumSkeleton,
-    context: Arc<dyn ViewContext>,
-    editing_gain: bool,
+    theme: Theme,
 }
 
 impl WidgetsViewState {
@@ -386,77 +320,56 @@ impl WidgetsViewState {
         width: f32,
         height: f32,
     ) -> Self {
+        let theme = Theme::dark();
+        let controls = Column::new()
+            .gap(10.0)
+            .padding(16.0)
+            .child(Knob::new("gain").with_bounds(Rect::new(0.0, 0.0, KNOB_SIZE, KNOB_SIZE)))
+            .child(
+                Dropdown::new("mode", &MODE_NAMES)
+                    .with_theme(theme)
+                    .with_bounds(Rect::new(0.0, 0.0, 140.0, CONTROL_HEIGHT)),
+            )
+            .child(
+                Toggle::new("bypass")
+                    .with_theme(theme)
+                    .with_label("Bypass")
+                    .with_bounds(Rect::new(0.0, 0.0, 56.0, CONTROL_HEIGHT)),
+            );
+
         let mut state = Self {
-            knob: Knob::new("gain").with_default(0.5),
-            dropdown: DropdownSkeleton::new(&MODE_NAMES, 0),
-            toggle: ToggleSkeleton::new(false),
+            controls,
+            binder: ParamBinder::new(ViewContextHost::shared(context)),
             spectrum: SpectrumSkeleton::new(spectrum),
-            context,
-            editing_gain: false,
+            theme,
         };
         state.relayout(width, height);
         state
     }
 
     fn relayout(&mut self, width: f32, height: f32) {
-        self.knob.set_bounds(Rect::new(24.0, 24.0, 72.0, 72.0));
-        self.dropdown.bounds = Rect::new(120.0, 40.0, 140.0, 28.0);
-        self.toggle.bounds = Rect::new(284.0, 40.0, 56.0, 28.0);
-        let top = 120.0;
+        // Controls take the top of the editor; the spectrum fills what is left.
+        let control_height = self.controls.content_extent();
+        self.controls
+            .layout(Rect::new(0.0, 0.0, width, control_height));
+        let top = control_height;
         self.spectrum.bounds = Rect::new(
-            24.0,
+            16.0,
             top,
-            (width - 48.0).max(0.0),
-            (height - top - 24.0).max(0.0),
+            (width - 32.0).max(0.0),
+            (height - top - 16.0).max(0.0),
         );
-    }
-
-    fn sync_from_params(&mut self) {
-        if let Some(value) = self.context.get_param("gain") {
-            self.knob.set_value(value);
-        }
-        if let Some(value) = self.context.get_param("mode") {
-            self.dropdown
-                .set_selected((value * (MODE_NAMES.len() - 1) as f32).round().max(0.0) as usize);
-        }
-        if let Some(value) = self.context.get_param("bypass") {
-            self.toggle.set_on(value >= 0.5);
-        }
     }
 }
 
 impl ViewState for WidgetsViewState {
     fn draw(&mut self, ctx: &mut dyn GuiContext, width: f32, height: f32) {
-        self.sync_from_params();
-        ctx.fill_rect(
-            0.0,
-            0.0,
-            width,
-            height,
-            Fill::Solid(Color::rgb(0.10, 0.10, 0.15)),
-        );
-        self.knob.draw(ctx);
+        // One call pulls every bound control up to date with the host.
+        self.binder.sync(&mut self.controls);
 
-        // Dropdown: a plate plus its current label.
-        let d = self.dropdown.bounds;
-        ctx.fill_rect(
-            d.x,
-            d.y,
-            d.width,
-            d.height,
-            Fill::Solid(Color::rgb(0.22, 0.22, 0.30)),
-        );
+        ctx.fill_rect(0.0, 0.0, width, height, Fill::Solid(self.theme.background));
 
-        // Toggle: colour carries the state so a pixel probe can see it change.
-        let t = self.toggle.bounds;
-        let tint = if self.toggle.is_on() {
-            Color::rgb(0.25, 0.75, 0.40)
-        } else {
-            Color::rgb(0.30, 0.30, 0.36)
-        };
-        ctx.fill_rect(t.x, t.y, t.width, t.height, Fill::Solid(tint));
-
-        // Spectrum: one bar per band.
+        // Spectrum first, so an open dropdown paints over it.
         let s = self.spectrum.bounds;
         ctx.fill_rect(
             s.x,
@@ -474,62 +387,17 @@ impl ViewState for WidgetsViewState {
                 s.y + s.height - bar_height,
                 (slot - 4.0).max(1.0),
                 bar_height,
-                Fill::Solid(Color::rgb(0.35, 0.65, 0.95)),
+                Fill::Solid(self.theme.accent),
             );
         }
+
+        self.controls.draw(ctx);
     }
 
     fn on_mouse_event(&mut self, event: &GuiEvent) -> bool {
-        let before = self.knob.value();
-        let handled = self.knob.handle_event(event);
-        let after = self.knob.value();
-
-        match event {
-            GuiEvent::MouseDown {
-                button: GuiMouseButton::Left,
-                ..
-            } if handled => {
-                self.editing_gain = true;
-                self.context.begin_edit("gain");
-            }
-            GuiEvent::MouseUp {
-                button: GuiMouseButton::Left,
-                ..
-            } if self.editing_gain => {
-                self.editing_gain = false;
-                self.context.end_edit("gain");
-            }
-            _ => {}
-        }
-        if handled && (after - before).abs() > f32::EPSILON {
-            self.context.set_param("gain", after);
-            return true;
-        }
-        if handled {
-            return true;
-        }
-
-        // The skeleton controls only act on a press.
-        if let GuiEvent::MouseDown {
-            x,
-            y,
-            button: GuiMouseButton::Left,
-            ..
-        } = event
-        {
-            if self.dropdown.click(*x, *y) {
-                let denominator = (MODE_NAMES.len() - 1) as f32;
-                self.context
-                    .set_param("mode", self.dropdown.selected() as f32 / denominator);
-                return true;
-            }
-            if self.toggle.click(*x, *y) {
-                self.context
-                    .set_param("bypass", if self.toggle.is_on() { 1.0 } else { 0.0 });
-                return true;
-            }
-        }
-        false
+        // The binder dispatches, detects the change, pushes it to the host and
+        // brackets the gesture. No hand-written callback.
+        self.binder.handle_event(&mut self.controls, event)
     }
 
     fn on_resize(&mut self, width: f32, height: f32) {
@@ -676,32 +544,6 @@ mod tests {
     }
 
     #[test]
-    fn toggle_only_reacts_inside_its_bounds() {
-        let mut toggle = ToggleSkeleton::new(false);
-        toggle.bounds = Rect::new(10.0, 10.0, 20.0, 20.0);
-        assert!(!toggle.click(0.0, 0.0));
-        assert!(!toggle.is_on());
-        assert!(toggle.click(15.0, 15.0));
-        assert!(toggle.is_on());
-        assert!(toggle.click(15.0, 15.0));
-        assert!(!toggle.is_on());
-    }
-
-    #[test]
-    fn dropdown_cycles_and_clamps() {
-        let mut dropdown = DropdownSkeleton::new(&MODE_NAMES, 0);
-        dropdown.bounds = Rect::new(0.0, 0.0, 50.0, 20.0);
-        assert_eq!(dropdown.label(), "Clean");
-        for expected in ["Warm", "Bright", "Crush", "Clean"] {
-            assert!(dropdown.click(5.0, 5.0));
-            assert_eq!(dropdown.label(), expected);
-        }
-        // A stale host value beyond the option list clamps to the last option.
-        dropdown.set_selected(99);
-        assert_eq!(dropdown.label(), "Crush");
-    }
-
-    #[test]
     fn spectrum_bars_are_clamped_for_display() {
         let publisher = Arc::new(SpectrumPublisher::default());
         publisher.publish(0, 4.0);
@@ -731,6 +573,62 @@ mod tests {
             plugin.process(&mut buffer, &events, &context)
         });
         assert_eq!(calls, 0, "the audio path allocated {calls} times");
+    }
+
+    /// The editor is now built from framework widgets and driven by
+    /// `ParamBinder`, so this asserts the tree rather than the deleted
+    /// skeletons: three bound controls, laid out without overlap, each
+    /// reporting the parameter id the plugin declares. The controls' own
+    /// behaviour is covered by `sunmao_gui`'s widget tests.
+    #[test]
+    fn the_editor_binds_one_control_per_parameter() {
+        struct StubContext;
+        impl ViewContext for StubContext {
+            fn get_param(&self, _id: &str) -> Option<f32> {
+                None
+            }
+            fn set_param(&self, _id: &str, _value: f32) {}
+            fn begin_edit(&self, _id: &str) {}
+            fn end_edit(&self, _id: &str) {}
+            fn request_resize(&self, _width: u32, _height: u32) -> bool {
+                false
+            }
+        }
+
+        let publisher = Arc::new(SpectrumPublisher::default());
+        let mut state = WidgetsViewState::new(
+            Arc::new(StubContext) as Arc<dyn ViewContext>,
+            publisher,
+            420.0,
+            260.0,
+        );
+
+        let ids: Vec<String> = (0..state.controls.len())
+            .filter_map(|index| {
+                state
+                    .controls
+                    .child_at_mut(index)
+                    .and_then(|child| child.as_parameter())
+                    .map(|param| param.param_id().to_string())
+            })
+            .collect();
+        assert_eq!(ids, vec!["gain", "mode", "bypass"]);
+
+        // Laid out top to bottom without overlapping.
+        let rects: Vec<Rect> = (0..state.controls.len())
+            .map(|index| state.controls.child_bounds(index).unwrap())
+            .collect();
+        for pair in rects.windows(2) {
+            assert!(
+                pair[1].y >= pair[0].y + pair[0].height,
+                "controls overlap: {:?} then {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+        // The spectrum sits below the controls, not on top of them.
+        let last = rects.last().unwrap();
+        assert!(state.spectrum.bounds.y >= last.y + last.height - 16.0);
     }
 
     #[test]

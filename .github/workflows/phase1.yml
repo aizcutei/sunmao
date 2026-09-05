@@ -44,6 +44,7 @@ jobs:
             sidechain-binary: target/debug/libsunmao_fx_sidechain_comp.so
             os-dist-binary: target/debug/libsunmao_fx_os_dist.so
             meter-binary: target/debug/libsunmao_fx_meter.so
+            widgets-gui-binary: target/debug/libsunmao_fx_widgets_gui_gl.so
             template-instrument-binary: target/debug/libsunmao_template_instrument.so
             executable-suffix: ""
           - name: macOS native
@@ -62,6 +63,7 @@ jobs:
             sidechain-binary: target/debug/libsunmao_fx_sidechain_comp.dylib
             os-dist-binary: target/debug/libsunmao_fx_os_dist.dylib
             meter-binary: target/debug/libsunmao_fx_meter.dylib
+            widgets-gui-binary: target/debug/libsunmao_fx_widgets_gui_gl.dylib
             template-instrument-binary: target/debug/libsunmao_template_instrument.dylib
             executable-suffix: ""
           - name: Windows x86_64
@@ -80,6 +82,7 @@ jobs:
             sidechain-binary: target/debug/sunmao_fx_sidechain_comp.dll
             os-dist-binary: target/debug/sunmao_fx_os_dist.dll
             meter-binary: target/debug/sunmao_fx_meter.dll
+            widgets-gui-binary: target/debug/sunmao_fx_widgets_gui_gl.dll
             template-instrument-binary: target/debug/sunmao_template_instrument.dll
             executable-suffix: .exe
 
@@ -434,6 +437,7 @@ jobs:
           sidechain_output="target/phase1-artifacts/SunMaoSidechainComp"
           os_dist_output="target/phase1-artifacts/SunMaoOsDistortion"
           meter_output="target/phase1-artifacts/SunMaoMeter"
+          widgets_gui_output="target/phase1-artifacts/SunMaoWidgetsGL"
           template_instrument_output="target/phase1-artifacts/SunMaoTemplateInstrument"
           standalone_dir="target/phase1-artifacts/standalone"
           gain_standalone="target/debug/sunmao_fx_gain_standalone${{ matrix.executable-suffix }}"
@@ -511,6 +515,15 @@ jobs:
               --name "SunMao Meter" \
               --bundle-id com.sunmao.fx.meter \
               --version 1.0.0
+            # Phase 4 M2 widgets fixture. Its dropdown is a stepped parameter
+            # and its bypass is a boolean; both only prove they survive the
+            # host's normalized round trip when a host reads and writes them.
+            "$packager" "$format" \
+              --binary "${{ matrix.widgets-gui-binary }}" \
+              --out "$widgets_gui_output" \
+              --name "SunMao Widgets GL" \
+              --bundle-id com.sunmao.fx.widgets-gl \
+              --version 1.0.0
             # The instrument template. `IS_INSTRUMENT` and
             # `MonoVoice::render` are claims about what a host sees, so a host
             # has to check them: the runner's synth suite asserts zero inputs,
@@ -562,6 +575,8 @@ jobs:
           "$runner" test "$os_dist_output.clap" 2>&1 | tee "$os_dist_output.clap.test.log"
           "$runner" test "$meter_output.vst3" 2>&1 | tee "$meter_output.vst3.test.log"
           "$runner" test "$meter_output.clap" 2>&1 | tee "$meter_output.clap.test.log"
+          "$runner" test "$widgets_gui_output.vst3" 2>&1 | tee "$widgets_gui_output.vst3.test.log"
+          "$runner" test "$widgets_gui_output.clap" 2>&1 | tee "$widgets_gui_output.clap.test.log"
           "$runner" test "$template_instrument_output.vst3" 2>&1 | tee "$template_instrument_output.vst3.test.log"
           "$runner" test "$template_instrument_output.clap" 2>&1 | tee "$template_instrument_output.clap.test.log"
           "$gain_standalone" --smoke 2>&1 | tee "$gain_standalone_output.raw.smoke.log"

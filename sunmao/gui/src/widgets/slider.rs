@@ -231,6 +231,10 @@ impl Widget for Slider {
         }
     }
 
+    fn as_parameter(&mut self) -> Option<&mut dyn ParameterWidget> {
+        Some(self)
+    }
+
     fn draw(&self, ctx: &mut dyn GuiContext) {
         let track_thickness = 4.0;
         let corner_radius = track_thickness / 2.0;

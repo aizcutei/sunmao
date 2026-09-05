@@ -22,15 +22,21 @@
 //! └─────────────────────────────────────────────┘
 //! ```
 
+mod binding;
 mod context;
 mod event;
 mod layout;
+mod stack;
+mod theme;
 mod widget;
 mod widgets;
 
+pub use binding::*;
 pub use context::*;
 pub use event::*;
 pub use layout::*;
+pub use stack::*;
+pub use theme::*;
 pub use widget::*;
 pub use widgets::*;
 

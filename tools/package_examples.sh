@@ -99,6 +99,13 @@ EXAMPLES=(
   # that a note-on takes effect at its *sample offset* rather than at the
   # start of the block. Compiling the template proves neither.
   "sunmao_template_instrument|SunMao Template Instrument|com.sunmao.template-instrument|||"
+  # Phase 4 M2 fixture. Packaged now that its dropdown and toggle are real
+  # framework widgets rather than crate-local skeletons: a stepped parameter
+  # (the dropdown's mode) and a boolean (bypass) only prove they survive the
+  # host's normalized round trip when a host actually reads and writes them.
+  # Held back at M0 deliberately, when those controls had no host-visible
+  # behaviour beyond what the existing gain GUI already covered.
+  "sunmao_fx_widgets_gui_gl|SunMao Widgets GL|com.sunmao.fx.widgets-gl|||"
 )
 
 supports_au() {

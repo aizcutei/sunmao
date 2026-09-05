@@ -35,6 +35,14 @@ impl Color {
     pub const ACCENT: Color = Color::rgb(0.2, 0.6, 1.0);
     pub const HIGHLIGHT: Color = Color::rgb(0.3, 0.7, 1.0);
 
+    /// Relative luminance, used to check that a colour pair stays readable.
+    ///
+    /// Rec. 709 coefficients on the stored (already linear) components. This is
+    /// a contrast *heuristic* for theme checks, not a colour-managed value.
+    pub fn luminance(&self) -> f32 {
+        0.2126 * self.r + 0.7152 * self.g + 0.0722 * self.b
+    }
+
     pub fn to_hex(&self) -> String {
         let r = (self.r.clamp(0.0, 1.0) * 255.0).round() as u8;
         let g = (self.g.clamp(0.0, 1.0) * 255.0).round() as u8;

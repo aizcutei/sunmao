@@ -144,3 +144,49 @@
 - Unresolved: M1 完成，进入 M2（布局与主题：`Column`/`Row`/gap/padding 与
   `Label`/`Knob`/`Slider`/`Toggle`/`Dropdown`、参数双向绑定、主题 token）。
   M2 同时要把 `sunmao_fx_widgets_gui_gl` 的三个 skeleton 换成框架控件并接入打包矩阵。
+
+### 2026-09-05 — M2：布局与主题、五个控件、参数双向绑定
+
+- Command/platform: macOS ARM64，分支 `phase4/gui-component-library`。
+- Change:
+  - **主题 token**（`sunmao/gui/src/theme.rs`）：按**角色**命名（`surface`/`accent`/`track`/`muted`）
+    而非按外观，这正是同一份控件代码能在 `Theme::dark()` 与 `Theme::light()` 下都正确渲染的
+    前提。`Color::luminance()` 为此新增，测试用它**机械断言两套主题的前景/背景对比度**都够读
+    ——只在暗色下好看的控件是那种"用户切主题才发现"的回归。
+  - **两个新控件**：`Toggle`（布尔）与 `Dropdown`（离散）。两者都实现 `ParameterWidget`，
+    值一律走归一化 `f32`——这是 VST3 与 CLAP 表达布尔/步进参数的共同形式。`Dropdown`
+    把选项 `i/(n-1)` 映射为归一化值并在读回时**四舍五入到最近步**，单选项时钉在 `0.0`
+    而不是除以零。
+  - **声明式布局**（`Column`/`Row`/`gap`/`padding`/`child`）：主轴保持子控件自身尺寸、
+    交叉轴拉伸填满，规则小到可以记住；没有半吊子 flex。`content_extent()` 供编辑器按内容
+    请求宿主改窗口大小。
+  - **参数双向绑定**（`ParamBinder` + `ParamHost`）：编辑器过去每个控件都要手写三件事——
+    绘制前拉取宿主值、编辑后推回、拖拽期间用 begin/end-edit 把一次手势包成一条自动化。
+    现在 binder 对整棵树做完这三件事。为此在 `Widget` 上加了 `as_parameter()`，
+    binder 借它在树里找控件而**不必 downcast 到具体类型**（否则 binder 要认识所有未来控件）。
+    `sunmao_gui` 不依赖 `sunmao_core`，故 `ParamHost` 是 gui 侧自定义的最小面，
+    由 facade 的 `ViewContextHost` 适配 `ViewContext`（本地类型，避免 orphan rule）。
+  - **fixture 换真控件并进打包矩阵**：`ToggleSkeleton`/`DropdownSkeleton` 删除，编辑器改为
+    `Column` + `Knob`/`Dropdown`/`Toggle` + `ParamBinder`，**本文件里已无任何逐控件回调代码**。
+    `SpectrumSkeleton` 保留（M4 才换 `VizChannel`）。CI 的打包矩阵与 `package_examples.sh`
+    同时加入该 fixture。
+- Result:
+  - 完整 `cargo test --locked` **exit 0，127 套件 / 578 测试**（M1 为 126 / 540）。
+    新增含 `sunmao_gui` 的 **6 个布局 proptest**（相邻不重叠、尺寸永不为负、主轴尺寸保持而
+    交叉轴填充、`content_extent` 与实际落位一致、**重复 layout 幂等**、逐边 padding）。
+  - **一个真实缺陷由本轮新写的测试当场抓出**：`Dropdown::set_value` 收到 NaN 时会回退到
+    index 0，即宿主发一个非有限值就会把控件**静默跳到第一个选项**。改为
+    `index_for_value` 返回 `Option` 并让调用方保持原选择——与 `Toggle`/`Knob` 的既有约定一致。
+  - `tools/package_examples.sh --debug --test` exit 0，**32 套件 / 640 断言**
+    （M1 为 30 / 600，增量恰为新 fixture × 两格式）。**该 fixture 在两格式真实宿主下各 20/20**
+    ——这正是 M0 推迟进矩阵时说的"有真实宿主可见行为时再做"。
+  - `--target x86_64-pc-windows-msvc` 检查 exit 0；fmt/diff/metadata 全过。
+- Evidence/artifact: macOS ARM64 本地日志（`/tmp/m2_test.log`、`/tmp/m2_pkg.log`）。
+- Unresolved:
+  - 本 commit 需三平台 hosted 全绿才算 M2 完成。
+  - **两个 skeleton 单测随类型一起删除**（`toggle_only_reacts_inside_its_bounds`、
+    `dropdown_cycles_and_clamps`）。不算覆盖倒退：它们测的是已删除的类型，等价行为现由
+    `sunmao_gui` 的 `Toggle`（6 测试）与 `Dropdown`（11 测试）覆盖，另在 fixture 层新增
+    `the_editor_binds_one_control_per_parameter` 断言控件树与绑定。**这一点如实记下，
+    因为 M0 当时写的是"这些测试跨替换保持不变"，实际是行为测试不变、skeleton 测试被取代。**
+  - `Label`/`Slider`/`Button` 已存在，M2 未重写；M3 的字体栅格化落地后再看 `Label` 的度量。

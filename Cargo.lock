@@ -4524,6 +4524,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "glow 0.16.0",
+ "proptest",
  "serde",
  "serde_json",
  "wgpu 23.0.1",

@@ -52,6 +52,18 @@ pub trait Widget {
     fn hit_test(&self, x: f32, y: f32) -> bool {
         self.bounds().contains(x, y)
     }
+
+    /// View this widget as a parameter control, if it is one.
+    ///
+    /// Every [`ParameterWidget`] overrides this. It exists so [`ParamBinder`]
+    /// can find the controls inside a widget tree without downcasting to a
+    /// concrete type, which would force the binder to know every widget that
+    /// will ever exist.
+    ///
+    /// [`ParamBinder`]: crate::ParamBinder
+    fn as_parameter(&mut self) -> Option<&mut dyn ParameterWidget> {
+        None
+    }
 }
 
 /// A parameter-bound widget that syncs with plugin parameters.

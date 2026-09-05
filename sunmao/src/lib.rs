@@ -70,6 +70,12 @@ macro_rules! sunmao_standalone {
 #[cfg(feature = "gui")]
 pub use sunmao_gui as gui;
 
+/// Bridges the host-facing `ViewContext` to the GUI layer's `ParamHost`.
+#[cfg(feature = "gui")]
+mod binding;
+#[cfg(feature = "gui")]
+pub use binding::ViewContextHost;
+
 /// Baseview-backed editor views. Enable one of `gui-gl`, `gui-wgpu`, or
 /// `gui-webview` to expose the corresponding renderer types through the
 /// facade.
@@ -111,11 +117,14 @@ pub mod prelude {
     };
 
     #[cfg(feature = "gui")]
+    pub use crate::binding::ViewContextHost;
+    #[cfg(feature = "gui")]
     pub use sunmao_gui::{
-        Alignment, Button, ButtonType, Color, Direction, Event as GuiEvent, Fill, FontStyle,
-        GuiContext, KeyCode, Knob, Label, Layout, Modifiers, MouseButton,
-        MouseButton as GuiMouseButton, NullContext, Orientation, ParameterWidget, Point, Rect,
-        Size, Slider, Stroke, TextAlign, TextVAlign, Widget, WidgetContainer,
+        Alignment, Axis, Button, ButtonType, Color, Column, Direction, Dropdown, Event as GuiEvent,
+        Fill, FontStyle, GuiContext, KeyCode, Knob, Label, Layout, Modifiers, MouseButton,
+        MouseButton as GuiMouseButton, NullContext, Orientation, ParamBinder, ParamHost,
+        ParameterWidget, Point, Rect, Row, Size, Slider, Stack, Stroke, TextAlign, TextVAlign,
+        Theme, Toggle, Widget, WidgetContainer,
     };
 
     #[cfg(feature = "gui-wgpu")]

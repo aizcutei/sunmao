@@ -201,6 +201,10 @@ impl Widget for Knob {
         }
     }
 
+    fn as_parameter(&mut self) -> Option<&mut dyn ParameterWidget> {
+        Some(self)
+    }
+
     fn draw(&self, ctx: &mut dyn GuiContext) {
         let cx = self.bounds.center_x();
         let cy = self.bounds.center_y();
