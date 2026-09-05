@@ -92,9 +92,21 @@ impl ParamBinder {
             }
         }
 
+        // A keyboard nudge is a complete gesture on its own: there is no
+        // press/release to bracket it with, so wrap each change in its own
+        // begin/end. Without this the host records an automation point with no
+        // surrounding gesture, which some DAWs discard.
+        let keyboard_edit = matches!(event, Event::KeyDown { .. }) && self.editing.is_none();
+
         for ((id, old), (_, new)) in before.iter().zip(after.iter()) {
             if old != new {
+                if keyboard_edit {
+                    self.host.begin_edit(id);
+                }
                 self.host.set(id, *new);
+                if keyboard_edit {
+                    self.host.end_edit(id);
+                }
             }
         }
 
@@ -317,5 +329,56 @@ mod tests {
             .unwrap()
             .value();
         assert_eq!(value, 1.0, "an unknown id reset the control");
+    }
+
+    #[test]
+    fn a_keyboard_nudge_is_a_gesture_of_its_own() {
+        let host = Arc::new(RecordingHost::default());
+        host.seed("bypass", 0.0);
+        let mut binder = ParamBinder::new(host.clone());
+        let mut stack = stack_with_toggle();
+        stack.set_focus(Some(0));
+
+        binder.handle_event(
+            &mut stack,
+            &Event::KeyDown {
+                key: crate::KeyCode::Space,
+                modifiers: Modifiers::default(),
+            },
+        );
+
+        // A key press has no release to bracket it, so the binder must supply
+        // the whole gesture itself. Some DAWs discard an automation point that
+        // arrives outside one.
+        assert_eq!(
+            host.log(),
+            vec![
+                "begin bypass".to_string(),
+                "set bypass=1".to_string(),
+                "end bypass".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_keystroke_that_changes_nothing_records_no_gesture() {
+        let host = Arc::new(RecordingHost::default());
+        host.seed("bypass", 0.0);
+        let mut binder = ParamBinder::new(host.clone());
+        let mut stack = stack_with_toggle();
+        stack.set_focus(Some(0));
+
+        binder.handle_event(
+            &mut stack,
+            &Event::KeyDown {
+                key: crate::KeyCode::F1,
+                modifiers: Modifiers::default(),
+            },
+        );
+        assert!(
+            host.log().is_empty(),
+            "an inert key logged {:?}",
+            host.log()
+        );
     }
 }

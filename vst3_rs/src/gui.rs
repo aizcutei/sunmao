@@ -65,6 +65,23 @@ pub trait GuiPlugin: crate::Plugin {
     fn gui_set_scale(&mut self, _factor: f32) -> bool {
         false
     }
+
+    /// Host-forwarded key press or release, via `IPlugView::onKeyDown`/`onKeyUp`.
+    ///
+    /// `character` is the UTF-16 code unit the host reported, already decoded
+    /// where it forms a valid scalar. Return `true` only if the editor used the
+    /// key: the wrapper reports `false` as `kResultFalse` so the host applies
+    /// its own shortcut instead. An editor that swallowed every key would break
+    /// the DAW's keyboard while its window has focus.
+    fn gui_key(
+        &mut self,
+        _character: Option<char>,
+        _key_code: i16,
+        _modifiers: i16,
+        _pressed: bool,
+    ) -> bool {
+        false
+    }
 }
 
 // =============================================================================

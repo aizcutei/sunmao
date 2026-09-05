@@ -141,6 +141,36 @@ impl Slider {
             }
         }
     }
+
+    /// Keyboard nudge for a focused control.
+    ///
+    /// Arrow keys move by 1%, Page keys by 10%, Home/End jump to the ends.
+    /// A modifier-held arrow is left alone so host shortcuts still work.
+    /// Returns whether the key was consumed.
+    fn handle_key(&mut self, event: &Event) -> bool {
+        let Event::KeyDown { key, modifiers } = event else {
+            return false;
+        };
+        if !self.state.focused || self.state.disabled {
+            return false;
+        }
+        if modifiers.ctrl || modifiers.alt || modifiers.meta {
+            return false;
+        }
+        // Shift is the conventional fine-adjust modifier.
+        let step = if modifiers.shift { 0.001 } else { 0.01 };
+        let target = match key {
+            crate::KeyCode::Right | crate::KeyCode::Up => self.value + step,
+            crate::KeyCode::Left | crate::KeyCode::Down => self.value - step,
+            crate::KeyCode::PageUp => self.value + step * 10.0,
+            crate::KeyCode::PageDown => self.value - step * 10.0,
+            crate::KeyCode::Home => 0.0,
+            crate::KeyCode::End => 1.0,
+            _ => return false,
+        };
+        self.set_value_internal(target.clamp(0.0, 1.0), true);
+        true
+    }
 }
 
 impl Widget for Slider {
@@ -161,6 +191,9 @@ impl Widget for Slider {
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
+        if self.handle_key(event) {
+            return true;
+        }
         if self.state.disabled {
             self.state.hovered = false;
             self.state.pressed = false;

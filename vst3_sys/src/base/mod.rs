@@ -2,6 +2,7 @@
 
 pub mod ibstream;
 pub mod ipluginbase;
+pub mod keycodes;
 pub mod types;
 
 pub use ibstream::*;

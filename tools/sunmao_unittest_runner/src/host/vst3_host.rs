@@ -1096,6 +1096,30 @@ impl HostPlugin for Vst3HostPlugin {
         }
     }
 
+    fn send_gui_key(&mut self, key_code: i16, character: char) -> Result<bool, String> {
+        unsafe {
+            if self.view.is_null() {
+                return Err("VST3 GUI is not attached".into());
+            }
+            let view_vtbl = *(self.view as *const *const IPlugViewVtbl);
+            if view_vtbl.is_null() {
+                return Err("VST3 IPlugView vtable is null".into());
+            }
+            // A DAW sends the UTF-16 code unit plus the SDK's virtual key code.
+            let unit = character as u32;
+            let key = if unit <= 0xFFFF { unit as u16 } else { 0 };
+            let down = ((*view_vtbl).on_key_down)(self.view, key, key_code, 0);
+            let up = ((*view_vtbl).on_key_up)(self.view, key, key_code, 0);
+            if down == kResultOk || up == kResultOk {
+                Ok(true)
+            } else if down == kResultFalse && up == kResultFalse {
+                Ok(false)
+            } else {
+                Err(format!("IPlugView::onKeyDown/Up failed: {down}/{up}"))
+            }
+        }
+    }
+
     fn gui_gesture_evidence(&self) -> Option<GuiGestureEvidence> {
         Some(GuiGestureEvidence {
             begin_count: self._component_handler.begin_count.load(Ordering::Acquire),

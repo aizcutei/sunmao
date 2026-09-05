@@ -400,6 +400,13 @@ impl ViewState for WidgetsViewState {
         self.binder.handle_event(&mut self.controls, event)
     }
 
+    /// Keyboard reaches parameters through the same binder as the mouse: Tab
+    /// moves focus, arrows and Space edit the focused control, and each edit is
+    /// bracketed as its own automation gesture.
+    fn on_keyboard_event(&mut self, event: &GuiEvent) -> bool {
+        self.binder.handle_event(&mut self.controls, event)
+    }
+
     fn on_resize(&mut self, width: f32, height: f32) {
         self.relayout(width, height);
     }

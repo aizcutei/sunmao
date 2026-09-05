@@ -21,7 +21,7 @@ pub use params::{
 pub use plugin::{ProcessContext, ProcessStatus, SunmaoPlugin};
 pub use view::{
     ParamsViewContext, ParentWindow, StandaloneViewOptions, StandaloneViewResult, SunmaoView,
-    ViewContext, ViewHandle,
+    ViewContext, ViewHandle, ViewKey, ViewKeyCode,
 };
 
 /// Common imports for SunMao plugins.

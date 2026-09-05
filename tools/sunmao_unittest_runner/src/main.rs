@@ -7,6 +7,12 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::time::Instant;
 
+/// VST3 `KeyCodes` values, transcribed from `pluginterfaces/base/keycodes.h`.
+/// The runner speaks the format's own numbering here because it is acting as
+/// the host.
+const KEY_TAB: i16 = 2;
+const KEY_END: i16 = 9;
+
 pub(crate) fn plugin_extension(path: &Path) -> String {
     path.extension()
         .and_then(|extension| extension.to_str())
@@ -2254,6 +2260,71 @@ fn cmd_gui_test(args: &[String]) -> bool {
                 return false;
             }
         }
+    }
+
+    // Phase 4 M3: a host-forwarded key has to reach a parameter.
+    //
+    // Only VST3 has a host-to-editor key path (`IPlugView::onKeyDown`); a CLAP
+    // editor's own window receives keys from the OS, so there is nothing for a
+    // host to forward. The asymmetry is recorded in docs/phase2/semantics.md;
+    // here it means CLAP takes the skip path rather than failing.
+    //
+    // Tab focuses the first control, then End drives it to its maximum. Reading
+    // the parameter back through the host API is the point: it proves the key
+    // travelled the whole way — host ABI, wrapper, view handle, window thread,
+    // widget, binder — and not merely that a widget's own unit test passes.
+    let key_capable = matches!(plugin.send_gui_key(KEY_TAB, '\t'), Ok(_));
+    if key_capable {
+        let Some(parameter) = (0..plugin.param_count()).find_map(|index| plugin.param_info(index))
+        else {
+            eprintln!("GUI key verification requires at least one parameter");
+            plugin.close_gui();
+            plugin.shutdown();
+            return false;
+        };
+        // Park the parameter away from its maximum so the change is visible.
+        if let Err(error) = plugin.param_set(parameter.id, 0.0) {
+            eprintln!("GUI key verification could not stage the parameter: {error}");
+            plugin.close_gui();
+            plugin.shutdown();
+            return false;
+        }
+        // A frame has to run for the editor to pick the key up off the queue.
+        if let Err(error) = gui_test_render_delay(plugin.as_mut()) {
+            eprintln!("GUI key render failed: {error}");
+            plugin.close_gui();
+            plugin.shutdown();
+            return false;
+        }
+        let before = plugin.param_get(parameter.id).unwrap_or(0.0);
+        if let Err(error) = plugin.send_gui_key(KEY_END, '\0') {
+            eprintln!("GUI key delivery failed: {error}");
+            plugin.close_gui();
+            plugin.shutdown();
+            return false;
+        }
+        if let Err(error) = gui_test_render_delay(plugin.as_mut()) {
+            eprintln!("GUI key render failed: {error}");
+            plugin.close_gui();
+            plugin.shutdown();
+            return false;
+        }
+        let after = plugin.param_get(parameter.id).unwrap_or(before);
+        if (after - before).abs() <= f64::EPSILON {
+            eprintln!(
+                "GUI key did not reach a parameter: {} stayed at {before}",
+                parameter.name
+            );
+            plugin.close_gui();
+            plugin.shutdown();
+            return false;
+        }
+        println!(
+            "GUI key verified: {} moved {before} -> {after} via host key forwarding",
+            parameter.name
+        );
+    } else {
+        println!("GUI key forwarding not offered by this format; skipped");
     }
 
     // Phase 4 M1: DPI scale negotiation, driven through the real format API on

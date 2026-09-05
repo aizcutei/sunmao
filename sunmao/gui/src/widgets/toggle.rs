@@ -98,6 +98,28 @@ impl Toggle {
             }
         }
     }
+
+    /// Space or Enter flips a focused toggle, which is what every platform's
+    /// accessibility layer expects of a switch.
+    fn handle_key(&mut self, event: &Event) -> bool {
+        let Event::KeyDown { key, modifiers } = event else {
+            return false;
+        };
+        if !self.state.focused || self.state.disabled {
+            return false;
+        }
+        if modifiers.ctrl || modifiers.alt || modifiers.meta {
+            return false;
+        }
+        match key {
+            crate::KeyCode::Space | crate::KeyCode::Enter => {
+                let flipped = if self.is_on() { 0.0 } else { 1.0 };
+                self.set_value_internal(flipped, true);
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 impl Widget for Toggle {
@@ -122,6 +144,9 @@ impl Widget for Toggle {
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
+        if self.handle_key(event) {
+            return true;
+        }
         if self.state.disabled {
             return false;
         }
@@ -340,6 +365,55 @@ mod tests {
         toggle.draw(&mut ctx);
     }
 
+    #[test]
+    fn space_and_enter_flip_a_focused_toggle() {
+        let mut toggle = toggle_at_origin();
+        // Unfocused controls ignore keys, otherwise every toggle in the editor
+        // would flip together.
+        assert!(!toggle.handle_event(&Event::KeyDown {
+            key: crate::KeyCode::Space,
+            modifiers: Modifiers::default(),
+        }));
+        assert!(!toggle.is_on());
+
+        toggle.set_focused(true);
+        assert!(toggle.handle_event(&Event::KeyDown {
+            key: crate::KeyCode::Space,
+            modifiers: Modifiers::default(),
+        }));
+        assert!(toggle.is_on());
+        assert!(toggle.handle_event(&Event::KeyDown {
+            key: crate::KeyCode::Enter,
+            modifiers: Modifiers::default(),
+        }));
+        assert!(!toggle.is_on());
+    }
+
+    #[test]
+    fn a_modified_keystroke_is_left_for_the_host() {
+        let mut toggle = toggle_at_origin();
+        toggle.set_focused(true);
+        for modifiers in [
+            Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+            Modifiers {
+                meta: true,
+                ..Default::default()
+            },
+            Modifiers {
+                alt: true,
+                ..Default::default()
+            },
+        ] {
+            assert!(!toggle.handle_event(&Event::KeyDown {
+                key: crate::KeyCode::Space,
+                modifiers,
+            }));
+        }
+        assert!(!toggle.is_on(), "a host shortcut edited the parameter");
+    }
     #[test]
     fn display_value_reads_as_a_state_not_a_number() {
         let mut toggle = toggle_at_origin();

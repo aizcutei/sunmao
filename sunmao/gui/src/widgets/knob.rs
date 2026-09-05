@@ -104,6 +104,36 @@ impl Knob {
         let range = PI * 1.5;
         start_angle + value * range
     }
+
+    /// Keyboard nudge for a focused control.
+    ///
+    /// Arrow keys move by 1%, Page keys by 10%, Home/End jump to the ends.
+    /// A modifier-held arrow is left alone so host shortcuts still work.
+    /// Returns whether the key was consumed.
+    fn handle_key(&mut self, event: &Event) -> bool {
+        let Event::KeyDown { key, modifiers } = event else {
+            return false;
+        };
+        if !self.state.focused || self.state.disabled {
+            return false;
+        }
+        if modifiers.ctrl || modifiers.alt || modifiers.meta {
+            return false;
+        }
+        // Shift is the conventional fine-adjust modifier.
+        let step = if modifiers.shift { 0.001 } else { 0.01 };
+        let target = match key {
+            crate::KeyCode::Right | crate::KeyCode::Up => self.value + step,
+            crate::KeyCode::Left | crate::KeyCode::Down => self.value - step,
+            crate::KeyCode::PageUp => self.value + step * 10.0,
+            crate::KeyCode::PageDown => self.value - step * 10.0,
+            crate::KeyCode::Home => 0.0,
+            crate::KeyCode::End => 1.0,
+            _ => return false,
+        };
+        self.set_value_internal(target.clamp(0.0, 1.0), true);
+        true
+    }
 }
 
 impl Widget for Knob {
@@ -124,6 +154,9 @@ impl Widget for Knob {
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
+        if self.handle_key(event) {
+            return true;
+        }
         if self.state.disabled {
             self.state.hovered = false;
             self.state.pressed = false;
@@ -314,5 +347,64 @@ mod tests {
         let calls_before_sync = calls.load(Ordering::Relaxed);
         knob.set_value(0.25);
         assert_eq!(calls.load(Ordering::Relaxed), calls_before_sync);
+    }
+
+    #[test]
+    fn arrow_keys_nudge_a_focused_knob_and_home_end_jump_to_the_extremes() {
+        let mut knob = Knob::new("gain").with_default(0.5);
+        let press = |code, modifiers| Event::KeyDown {
+            key: code,
+            modifiers,
+        };
+        let plain = crate::Modifiers::default();
+
+        // Unfocused knobs ignore keys; otherwise one arrow press would move
+        // every knob in the editor.
+        assert!(!knob.handle_event(&press(crate::KeyCode::Right, plain)));
+        assert_eq!(knob.value(), 0.5);
+
+        knob.set_focused(true);
+        assert!(knob.handle_event(&press(crate::KeyCode::Right, plain)));
+        assert!((knob.value() - 0.51).abs() < 1.0e-5, "got {}", knob.value());
+        assert!(knob.handle_event(&press(crate::KeyCode::Left, plain)));
+        assert!((knob.value() - 0.5).abs() < 1.0e-5);
+
+        // Shift is fine adjust.
+        let shift = crate::Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        knob.handle_event(&press(crate::KeyCode::Right, shift));
+        assert!(
+            (knob.value() - 0.501).abs() < 1.0e-5,
+            "got {}",
+            knob.value()
+        );
+
+        knob.handle_event(&press(crate::KeyCode::Home, plain));
+        assert_eq!(knob.value(), 0.0);
+        knob.handle_event(&press(crate::KeyCode::End, plain));
+        assert_eq!(knob.value(), 1.0);
+        // Already at the top: clamped, not wrapped.
+        knob.handle_event(&press(crate::KeyCode::PageUp, plain));
+        assert_eq!(knob.value(), 1.0);
+    }
+
+    #[test]
+    fn a_keyboard_nudge_reports_the_change_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let mut knob = Knob::new("gain").with_default(0.5);
+        knob.set_focused(true);
+        let count = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&count);
+        knob.on_value_changed(Box::new(move |_| {
+            seen.fetch_add(1, Ordering::SeqCst);
+        }));
+        knob.handle_event(&Event::KeyDown {
+            key: crate::KeyCode::Up,
+            modifiers: crate::Modifiers::default(),
+        });
+        assert_eq!(count.load(Ordering::SeqCst), 1);
     }
 }

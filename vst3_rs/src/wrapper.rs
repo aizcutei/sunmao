@@ -2492,21 +2492,55 @@ impl<P: GuiPlugin> PlugViewWrapper<P> {
     unsafe extern "system" fn on_wheel(_this: *mut c_void, _distance: f32) -> tresult {
         kResultFalse
     }
-    unsafe extern "system" fn on_key_down(
-        _this: *mut c_void,
-        _key: char16,
-        _key_code: int16,
-        _modifiers: int16,
+    /// Decode the host's UTF-16 code unit into a character.
+    ///
+    /// A lone surrogate is not a character; reporting `None` is honest, and the
+    /// key code still identifies the key.
+    fn decode_key_character(key: char16) -> Option<char> {
+        (key != 0).then(|| char::from_u32(key as u32)).flatten()
+    }
+
+    unsafe extern "system" fn on_key(
+        this: *mut c_void,
+        key: char16,
+        key_code: int16,
+        modifiers: int16,
+        pressed: bool,
     ) -> tresult {
-        kResultFalse
+        ffi_guard(kResultFalse, || unsafe {
+            if this.is_null() {
+                return kInvalidArgument;
+            }
+            let plugin = (*(this as *mut Self)).plugin;
+            if plugin.is_null() {
+                return kResultFalse;
+            }
+            let character = Self::decode_key_character(key);
+            if (*plugin).gui_key(character, key_code, modifiers, pressed) {
+                kResultOk
+            } else {
+                // Not an error: the editor did not want this key, so the host
+                // is free to use its own shortcut.
+                kResultFalse
+            }
+        })
+    }
+
+    unsafe extern "system" fn on_key_down(
+        this: *mut c_void,
+        key: char16,
+        key_code: int16,
+        modifiers: int16,
+    ) -> tresult {
+        unsafe { Self::on_key(this, key, key_code, modifiers, true) }
     }
     unsafe extern "system" fn on_key_up(
-        _this: *mut c_void,
-        _key: char16,
-        _key_code: int16,
-        _modifiers: int16,
+        this: *mut c_void,
+        key: char16,
+        key_code: int16,
+        modifiers: int16,
     ) -> tresult {
-        kResultFalse
+        unsafe { Self::on_key(this, key, key_code, modifiers, false) }
     }
 
     unsafe extern "system" fn get_size(this: *mut c_void, size: *mut ViewRect) -> tresult {
@@ -3962,6 +3996,12 @@ mod tests {
     /// When false, the test plugin declines the factor so the wrapper's
     /// `kResultFalse` path can be exercised.
     static ACCEPT_SCALE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+    /// Packed record of the last key the wrapper forwarded: code, low byte of
+    /// the character, and whether it was a press. `u32::MAX` means never called.
+    static LAST_KEY: AtomicU32 = AtomicU32::new(u32::MAX);
+    /// When false, the test plugin declines the key so the wrapper's
+    /// `kResultFalse` path can be exercised.
+    static ACCEPT_KEY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
     impl GuiPlugin for HostGuiTestPlugin {
         fn gui_size() -> GuiSize {
@@ -3977,6 +4017,22 @@ mod tests {
         fn gui_set_scale(&mut self, factor: f32) -> bool {
             LAST_SCALE_BITS.store(factor.to_bits(), Ordering::SeqCst);
             ACCEPT_SCALE.load(Ordering::SeqCst)
+        }
+
+        fn gui_key(
+            &mut self,
+            character: Option<char>,
+            key_code: i16,
+            _modifiers: i16,
+            pressed: bool,
+        ) -> bool {
+            LAST_KEY.store(
+                ((key_code as u32) << 8)
+                    | (character.map(|c| c as u32 & 0xFF).unwrap_or(0) << 1)
+                    | u32::from(pressed),
+                Ordering::SeqCst,
+            );
+            ACCEPT_KEY.load(Ordering::SeqCst)
         }
     }
 
@@ -4968,6 +5024,58 @@ mod tests {
 
             // The interface shares the view's refcount.
             assert_eq!(((*scale_vtbl).release)(obj), 1);
+            assert_eq!(
+                PlugViewWrapper::<HostGuiTestPlugin>::release(view.cast::<c_void>()),
+                0
+            );
+            assert_eq!(
+                GuiControllerWrapper::<HostGuiTestPlugin>::release(controller.cast::<c_void>()),
+                0
+            );
+        }
+    }
+
+    /// `onKeyDown`/`onKeyUp` were stubs returning kResultFalse, so a host that
+    /// forwarded a key to the editor was silently ignored. This drives the real
+    /// vtable.
+    #[test]
+    fn plug_view_forwards_host_keys_to_the_plugin() {
+        unsafe {
+            let controller = GuiControllerWrapper::<HostGuiTestPlugin>::new();
+            let plugin = (*controller).plugin.as_mut().unwrap() as *mut HostGuiTestPlugin;
+            let view = PlugViewWrapper::new(controller, plugin, (*controller).host.clone());
+            let view_vtbl = *(view as *const *const PlugViewVtblLocal);
+            LAST_KEY.store(u32::MAX, Ordering::SeqCst);
+            ACCEPT_KEY.store(true, Ordering::SeqCst);
+
+            // KEY_RIGHT is 13 in the upstream KeyCodes enum.
+            assert_eq!(
+                ((*view_vtbl).on_key_down)(view.cast::<c_void>(), 0, 13, 0),
+                kResultOk
+            );
+            let recorded = LAST_KEY.load(Ordering::SeqCst);
+            assert_eq!(recorded >> 8, 13, "the key code did not survive");
+            assert_eq!(recorded & 1, 1, "a press was reported as a release");
+
+            // A release reaches the plugin too.
+            assert_eq!(
+                ((*view_vtbl).on_key_up)(view.cast::<c_void>(), 0, 13, 0),
+                kResultOk
+            );
+            assert_eq!(LAST_KEY.load(Ordering::SeqCst) & 1, 0);
+
+            // A character is decoded from its UTF-16 code unit.
+            ((*view_vtbl).on_key_down)(view.cast::<c_void>(), b'q' as char16, 0, 0);
+            assert_eq!((LAST_KEY.load(Ordering::SeqCst) >> 1) & 0x7F, b'q' as u32);
+
+            // An editor that does not want the key must report kResultFalse so
+            // the host can apply its own shortcut instead of losing it.
+            ACCEPT_KEY.store(false, Ordering::SeqCst);
+            assert_eq!(
+                ((*view_vtbl).on_key_down)(view.cast::<c_void>(), 0, 13, 0),
+                kResultFalse
+            );
+
             assert_eq!(
                 PlugViewWrapper::<HostGuiTestPlugin>::release(view.cast::<c_void>()),
                 0

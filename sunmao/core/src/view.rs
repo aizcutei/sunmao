@@ -83,18 +83,64 @@ pub trait ViewContext: Send + Sync {
     fn request_resize(&self, width: u32, height: u32) -> bool;
 }
 
+/// A host-forwarded key event, in a form both plugin formats can express.
+///
+/// VST3 hosts forward keys to the editor through
+/// `IPlugView::onKeyDown`/`onKeyUp`. CLAP has no equivalent — a CLAP editor's
+/// own window receives keys straight from the OS — so this arrives only on the
+/// VST3 path. See `docs/phase2/semantics.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ViewKey {
+    /// The character the key produced, if any. `None` for pure navigation and
+    /// modifier keys.
+    pub character: Option<char>,
+    /// Which key it was, in format-neutral terms.
+    ///
+    /// The raw code stays in the backend that understands it: VST3's codes are
+    /// the SDK's own enumeration, and letting them travel this far would make
+    /// every consumer depend on one format's numbering.
+    pub code: ViewKeyCode,
+    /// `true` for a press, `false` for a release.
+    pub pressed: bool,
+}
+
+/// The keys an editor acts on, independent of plugin format.
+///
+/// Anything a backend cannot map is [`ViewKeyCode::Unknown`], which widgets
+/// ignore — so the host keeps its own shortcut rather than having it silently
+/// swallowed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewKeyCode {
+    Backspace,
+    Tab,
+    Enter,
+    Escape,
+    Space,
+    End,
+    Home,
+    Left,
+    Up,
+    Right,
+    Down,
+    PageUp,
+    PageDown,
+    Unknown,
+}
+
 trait ErasedViewHandle {
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
     fn resize(&mut self, width: u32, height: u32) -> bool;
     fn is_resizable(&self) -> bool;
     fn set_scale(&mut self, factor: f32) -> bool;
+    fn send_key(&mut self, key: ViewKey) -> bool;
 }
 
 struct StoredViewHandle<T> {
     value: T,
     resize: Option<fn(&mut T, u32, u32) -> bool>,
     set_scale: Option<fn(&mut T, f32) -> bool>,
+    send_key: Option<fn(&mut T, ViewKey) -> bool>,
 }
 
 impl<T: 'static> ErasedViewHandle for StoredViewHandle<T> {
@@ -119,6 +165,12 @@ impl<T: 'static> ErasedViewHandle for StoredViewHandle<T> {
     fn set_scale(&mut self, factor: f32) -> bool {
         self.set_scale
             .map(|set_scale| set_scale(&mut self.value, factor))
+            .unwrap_or(false)
+    }
+
+    fn send_key(&mut self, key: ViewKey) -> bool {
+        self.send_key
+            .map(|send_key| send_key(&mut self.value, key))
             .unwrap_or(false)
     }
 }
@@ -184,6 +236,7 @@ impl ViewHandle {
                 value,
                 resize: None,
                 set_scale: None,
+                send_key: None,
             }),
         }
     }
@@ -198,6 +251,7 @@ impl ViewHandle {
                 value,
                 resize: Some(resize),
                 set_scale: None,
+                send_key: None,
             }),
         }
     }
@@ -218,6 +272,7 @@ impl ViewHandle {
                 value,
                 resize,
                 set_scale: Some(set_scale),
+                send_key: None,
             }),
         }
     }
@@ -229,6 +284,28 @@ impl ViewHandle {
 
     pub fn is_resizable(&self) -> bool {
         self.inner.is_resizable()
+    }
+
+    /// Build a handle with any combination of capabilities.
+    ///
+    /// The three-argument [`ViewHandle::scalable`] stops scaling as more
+    /// host-driven operations appear; this replaces it for new code.
+    pub fn builder<T: 'static>(value: T) -> ViewHandleBuilder<T> {
+        ViewHandleBuilder {
+            value,
+            resize: None,
+            set_scale: None,
+            send_key: None,
+        }
+    }
+
+    /// Forward a host key event to the editor.
+    ///
+    /// `false` means the editor did not use it, which the VST3 wrapper reports
+    /// as `kResultFalse` so the host can apply its own shortcut instead —
+    /// swallowing every key would break the DAW's keyboard.
+    pub fn send_key(&mut self, key: ViewKey) -> bool {
+        self.inner.send_key(key)
     }
 
     /// Apply a host-provided DPI scale factor.
@@ -246,6 +323,42 @@ impl ViewHandle {
 
     pub fn downcast_mut<T: 'static>(&mut self) -> Option<&mut T> {
         self.inner.as_any_mut().downcast_mut()
+    }
+}
+
+/// Incremental builder for [`ViewHandle`].
+pub struct ViewHandleBuilder<T> {
+    value: T,
+    resize: Option<fn(&mut T, u32, u32) -> bool>,
+    set_scale: Option<fn(&mut T, f32) -> bool>,
+    send_key: Option<fn(&mut T, ViewKey) -> bool>,
+}
+
+impl<T: 'static> ViewHandleBuilder<T> {
+    pub fn resizable(mut self, resize: fn(&mut T, u32, u32) -> bool) -> Self {
+        self.resize = Some(resize);
+        self
+    }
+
+    pub fn scalable(mut self, set_scale: fn(&mut T, f32) -> bool) -> Self {
+        self.set_scale = Some(set_scale);
+        self
+    }
+
+    pub fn keyboard(mut self, send_key: fn(&mut T, ViewKey) -> bool) -> Self {
+        self.send_key = Some(send_key);
+        self
+    }
+
+    pub fn build(self) -> ViewHandle {
+        ViewHandle {
+            inner: Box::new(StoredViewHandle {
+                value: self.value,
+                resize: self.resize,
+                set_scale: self.set_scale,
+                send_key: self.send_key,
+            }),
+        }
     }
 }
 

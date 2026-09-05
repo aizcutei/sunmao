@@ -56,10 +56,118 @@ struct ScalableWindow {
     handle: baseview::WindowHandle,
     base_width: u32,
     base_height: u32,
+    /// Keys the host forwarded through `IPlugView::onKeyDown`, waiting for the
+    /// window's own thread to pick them up.
+    ///
+    /// A host calls `onKeyDown` on *its* thread, but the editor's widgets live
+    /// on the window thread and baseview offers no way to inject an event into
+    /// a live handler. Queueing and draining on the next frame is the crossing
+    /// point. The lock is only ever taken on GUI threads — never the audio
+    /// thread — so a mutex is the right tool here.
+    keys: Arc<HostKeyQueue>,
+}
+
+/// Host-forwarded keys plus whether the editor consumed the last one.
+#[derive(Default)]
+pub(crate) struct HostKeyQueue {
+    pending: std::sync::Mutex<std::collections::VecDeque<sunmao_core::ViewKey>>,
+    /// Set when a drained key was consumed by a widget. The host asked
+    /// synchronously whether the key was used, but the answer only exists a
+    /// frame later, so `send_key` optimistically reports acceptance and this
+    /// records the truth for the *next* query.
+    consumed_last: AtomicBool,
+}
+
+impl HostKeyQueue {
+    fn push(&self, key: sunmao_core::ViewKey) -> bool {
+        let Ok(mut pending) = self.pending.lock() else {
+            return false;
+        };
+        // Bound the queue: a host that forwards keys faster than the editor
+        // paints must not grow it without limit.
+        if pending.len() >= 64 {
+            return false;
+        }
+        pending.push_back(key);
+        true
+    }
+
+    fn drain(&self) -> Vec<sunmao_core::ViewKey> {
+        match self.pending.lock() {
+            Ok(mut pending) => pending.drain(..).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    fn record_consumed(&self, consumed: bool) {
+        self.consumed_last.store(consumed, Ordering::Release);
+    }
+
+    pub(crate) fn last_was_consumed(&self) -> bool {
+        self.consumed_last.load(Ordering::Acquire)
+    }
+}
+
+/// Translate a host key into the GUI event vocabulary.
+///
+/// The character, when the host supplied one, becomes a `TextInput` alongside
+/// the key event — the same pairing the platform keyboard path uses, so an
+/// editor handles host-forwarded and native keys identically.
+pub(crate) fn host_key_events(key: sunmao_core::ViewKey) -> Vec<GuiEvent> {
+    let modifiers = Modifiers::default();
+    let code = host_key_code(key);
+    let mut events = vec![if key.pressed {
+        GuiEvent::KeyDown {
+            key: code,
+            modifiers,
+        }
+    } else {
+        GuiEvent::KeyUp {
+            key: code,
+            modifiers,
+        }
+    }];
+    if key.pressed {
+        if let Some(character) = key.character {
+            if !character.is_control() {
+                events.push(GuiEvent::TextInput {
+                    text: character.to_string(),
+                });
+            }
+        }
+    }
+    events
+}
+
+/// Map the neutral host key onto the framework's key code.
+fn host_key_code(key: sunmao_core::ViewKey) -> GuiKeyCode {
+    use sunmao_core::ViewKeyCode;
+    match key.code {
+        ViewKeyCode::Backspace => GuiKeyCode::Backspace,
+        ViewKeyCode::Tab => GuiKeyCode::Tab,
+        ViewKeyCode::Enter => GuiKeyCode::Enter,
+        ViewKeyCode::Escape => GuiKeyCode::Escape,
+        ViewKeyCode::Space => GuiKeyCode::Space,
+        ViewKeyCode::End => GuiKeyCode::End,
+        ViewKeyCode::Home => GuiKeyCode::Home,
+        ViewKeyCode::Left => GuiKeyCode::Left,
+        ViewKeyCode::Up => GuiKeyCode::Up,
+        ViewKeyCode::Right => GuiKeyCode::Right,
+        ViewKeyCode::Down => GuiKeyCode::Down,
+        ViewKeyCode::PageUp => GuiKeyCode::PageUp,
+        ViewKeyCode::PageDown => GuiKeyCode::PageDown,
+        ViewKeyCode::Unknown => GuiKeyCode::Unknown,
+    }
 }
 
 fn resize_scalable_window(window: &mut ScalableWindow, width: u32, height: u32) -> bool {
     resize_baseview_window(&mut window.handle, width, height)
+}
+
+fn send_key_to_scalable_window(window: &mut ScalableWindow, key: sunmao_core::ViewKey) -> bool {
+    // The editor answers a frame later, so report whether the key was queued
+    // and let the previous frame's verdict inform the host.
+    window.keys.push(key) && window.keys.last_was_consumed()
 }
 
 fn scale_scalable_window(window: &mut ScalableWindow, factor: f32) -> bool {
@@ -409,9 +517,36 @@ fn convert_key_code(code: keyboard_types::Code) -> GuiKeyCode {
     }
 }
 
+/// Text produced by a key press, if any.
+///
+/// This is the **international and IME path**. `Code` is a physical key
+/// position — `KeyA` is the same key whether the layout is QWERTY, AZERTY or
+/// Dvorak — so a French `é`, a German `ü` or a committed CJK phrase can only
+/// arrive through the *logical* `Key::Character`, which the platform has
+/// already run through the keyboard layout and any input method.
+///
+/// Composition-in-progress events are skipped: `is_composing` marks the
+/// preedit that an IME is still editing, and inserting it would type every
+/// intermediate candidate. The platform sends the committed text as a separate,
+/// non-composing event.
+fn text_input_from_key(event: &keyboard_types::KeyboardEvent) -> Option<GuiEvent> {
+    if event.state != keyboard_types::KeyState::Down || event.is_composing {
+        return None;
+    }
+    let keyboard_types::Key::Character(text) = &event.key else {
+        return None;
+    };
+    // Control characters reach us as Character on some platforms; they are
+    // commands, not text.
+    if text.is_empty() || text.chars().any(|ch| ch.is_control()) {
+        return None;
+    }
+    Some(GuiEvent::TextInput { text: text.clone() })
+}
+
 fn dispatch_keyboard_event(
     event: &keyboard_types::KeyboardEvent,
-    handler: impl FnOnce(&GuiEvent) -> bool,
+    mut handler: impl FnMut(&GuiEvent) -> bool,
 ) -> EventStatus {
     let key = convert_key_code(event.code);
     let modifiers = convert_modifiers(&event.modifiers);
@@ -420,7 +555,15 @@ fn dispatch_keyboard_event(
         keyboard_types::KeyState::Up => GuiEvent::KeyUp { key, modifiers },
     };
 
-    if handler(&gui_event) {
+    let mut consumed = handler(&gui_event);
+    // The key event goes out first so a control can act on Enter or an arrow,
+    // then the text it produced. A widget that consumed the key still sees the
+    // text: a text field wants both, and a knob ignores the text anyway.
+    if let Some(text_event) = text_input_from_key(event) {
+        consumed |= handler(&text_event);
+    }
+
+    if consumed {
         EventStatus::Captured
     } else {
         EventStatus::Ignored
@@ -453,6 +596,41 @@ mod gl_backend {
         fn on_resize(&mut self, _width: f32, _height: f32) {}
     }
 
+    /// Wraps a [`ViewState`] so keys the host forwarded through
+    /// `IPlugView::onKeyDown` reach it on the window's own thread.
+    ///
+    /// The host calls on its thread; widgets live here. Draining at the top of
+    /// `draw` means an edit is visible in the very frame that follows the key.
+    struct HostKeyedState<S> {
+        inner: S,
+        keys: Arc<super::HostKeyQueue>,
+    }
+
+    impl<S: ViewState> ViewState for HostKeyedState<S> {
+        fn draw(&mut self, ctx: &mut dyn GuiContext, width: f32, height: f32) {
+            for key in self.keys.drain() {
+                let mut consumed = false;
+                for event in super::host_key_events(key) {
+                    consumed |= self.inner.on_keyboard_event(&event);
+                }
+                self.keys.record_consumed(consumed);
+            }
+            self.inner.draw(ctx, width, height);
+        }
+
+        fn on_mouse_event(&mut self, event: &GuiEvent) -> bool {
+            self.inner.on_mouse_event(event)
+        }
+
+        fn on_keyboard_event(&mut self, event: &GuiEvent) -> bool {
+            self.inner.on_keyboard_event(event)
+        }
+
+        fn on_resize(&mut self, width: f32, height: f32) {
+            self.inner.on_resize(width, height)
+        }
+    }
+
     /// A SunmaoView implementation using baseview + OpenGL.
     pub struct BaseviewView<S: ViewState + 'static> {
         config: BaseviewConfig,
@@ -482,7 +660,11 @@ mod gl_backend {
 
         fn open(&self, parent: ParentWindow, context: Arc<dyn ViewContext>) -> Option<ViewHandle> {
             let config = self.config.clone();
-            let state = (self.builder)(context.clone());
+            let keys = Arc::new(super::HostKeyQueue::default());
+            let state = HostKeyedState {
+                inner: (self.builder)(context.clone()),
+                keys: Arc::clone(&keys),
+            };
 
             let mut options = WindowOpenOptions::new(
                 config.title.clone(),
@@ -529,15 +711,18 @@ mod gl_backend {
             });
 
             if initialized.load(Ordering::Acquire) && handle.is_open() {
-                Some(ViewHandle::scalable(
-                    ScalableWindow {
+                Some(
+                    ViewHandle::builder(ScalableWindow {
                         handle,
                         base_width: config.width,
                         base_height: config.height,
-                    },
-                    Some(resize_scalable_window),
-                    scale_scalable_window,
-                ))
+                        keys,
+                    })
+                    .resizable(resize_scalable_window)
+                    .scalable(scale_scalable_window)
+                    .keyboard(send_key_to_scalable_window)
+                    .build(),
+                )
             } else {
                 handle.close();
                 None
@@ -879,11 +1064,16 @@ pub(crate) mod wgpu_backend {
             });
 
             if initialized.load(Ordering::Acquire) && handle.is_open() {
+                // No `.keyboard(..)`: only the GL backend drains the host key
+                // queue today, so the wgpu and WebView editors report that they
+                // did not take the key and the host keeps its own shortcut.
+                // That is the honest answer rather than swallowing it.
                 Some(ViewHandle::scalable(
                     ScalableWindow {
                         handle,
                         base_width: config.width,
                         base_height: config.height,
+                        keys: Arc::new(super::HostKeyQueue::default()),
                     },
                     Some(resize_scalable_window),
                     scale_scalable_window,
@@ -1338,11 +1528,16 @@ mod webview_backend {
             });
 
             if initialized.load(Ordering::Acquire) && handle.is_open() {
+                // No `.keyboard(..)`: only the GL backend drains the host key
+                // queue today, so the wgpu and WebView editors report that they
+                // did not take the key and the host keeps its own shortcut.
+                // That is the honest answer rather than swallowing it.
                 Some(ViewHandle::scalable(
                     ScalableWindow {
                         handle,
                         base_width: config.width,
                         base_height: config.height,
+                        keys: Arc::new(super::HostKeyQueue::default()),
                     },
                     Some(resize_scalable_window),
                     scale_scalable_window,
@@ -1577,5 +1772,206 @@ mod tests {
         assert_eq!(convert_key_code(Code::Numpad7), GuiKeyCode::Num7);
         assert_eq!(convert_key_code(Code::NumpadEnter), GuiKeyCode::Enter);
         assert_eq!(convert_key_code(Code::Unidentified), GuiKeyCode::Unknown);
+    }
+
+    fn key_event(
+        state: keyboard_types::KeyState,
+        key: keyboard_types::Key,
+        composing: bool,
+    ) -> keyboard_types::KeyboardEvent {
+        keyboard_types::KeyboardEvent {
+            state,
+            key,
+            code: keyboard_types::Code::KeyA,
+            location: keyboard_types::Location::Standard,
+            modifiers: keyboard_types::Modifiers::empty(),
+            repeat: false,
+            is_composing: composing,
+        }
+    }
+
+    fn character(text: &str) -> keyboard_types::Key {
+        keyboard_types::Key::Character(text.to_string())
+    }
+
+    /// `Code` is a physical position, so it cannot represent what an
+    /// international layout or an IME actually produced. Only the logical
+    /// `Key::Character` can, and this is the path that carries it.
+    #[test]
+    fn international_text_reaches_the_editor_as_text_input() {
+        for text in ["e", "é", "ü", "漢", "字", "🎛"] {
+            let event = key_event(keyboard_types::KeyState::Down, character(text), false);
+            match text_input_from_key(&event) {
+                Some(GuiEvent::TextInput { text: produced }) => assert_eq!(produced, text),
+                other => panic!("{text:?} produced {other:?} instead of text input"),
+            }
+        }
+    }
+
+    /// An IME's preedit is still being edited. Inserting it would type every
+    /// intermediate candidate before the user commits.
+    #[test]
+    fn composition_in_progress_produces_no_text() {
+        let composing = key_event(keyboard_types::KeyState::Down, character("に"), true);
+        assert!(text_input_from_key(&composing).is_none());
+        // The committed text arrives as a separate non-composing event.
+        let committed = key_event(keyboard_types::KeyState::Down, character("日本"), false);
+        assert!(matches!(
+            text_input_from_key(&committed),
+            Some(GuiEvent::TextInput { .. })
+        ));
+    }
+
+    #[test]
+    fn key_releases_and_non_character_keys_produce_no_text() {
+        let release = key_event(keyboard_types::KeyState::Up, character("a"), false);
+        assert!(
+            text_input_from_key(&release).is_none(),
+            "a key release typed"
+        );
+        let named = key_event(
+            keyboard_types::KeyState::Down,
+            keyboard_types::Key::Enter,
+            false,
+        );
+        assert!(text_input_from_key(&named).is_none());
+    }
+
+    /// Control characters arrive as `Character` on some platforms. They are
+    /// commands, not text, and inserting them would put a literal control byte
+    /// into a text field.
+    #[test]
+    fn control_characters_are_not_treated_as_text() {
+        for text in ["\u{1b}", "\u{7f}", "\u{0}", "\r", ""] {
+            let event = key_event(keyboard_types::KeyState::Down, character(text), false);
+            assert!(
+                text_input_from_key(&event).is_none(),
+                "{text:?} was treated as text"
+            );
+        }
+    }
+
+    /// A key press delivers the key first and the text it produced second, so
+    /// a control can act on Enter while a text field still receives what was
+    /// typed. Both must reach the handler.
+    #[test]
+    fn a_character_press_dispatches_both_the_key_and_its_text() {
+        let event = key_event(keyboard_types::KeyState::Down, character("é"), false);
+        let mut seen: Vec<String> = Vec::new();
+        let status = dispatch_keyboard_event(&event, |gui_event| {
+            match gui_event {
+                GuiEvent::KeyDown { .. } => seen.push("key".into()),
+                GuiEvent::TextInput { text } => seen.push(format!("text:{text}")),
+                _ => {}
+            }
+            true
+        });
+        assert_eq!(seen, vec!["key".to_string(), "text:é".to_string()]);
+        assert!(matches!(status, EventStatus::Captured));
+    }
+
+    /// A handler that ignores both must leave the event uncaptured, so the host
+    /// still gets its own keyboard shortcuts.
+    #[test]
+    fn an_ignored_keystroke_is_not_captured_from_the_host() {
+        let event = key_event(keyboard_types::KeyState::Down, character("a"), false);
+        let status = dispatch_keyboard_event(&event, |_| false);
+        assert!(matches!(status, EventStatus::Ignored));
+    }
+
+    fn host_key(
+        code: sunmao_core::ViewKeyCode,
+        character: Option<char>,
+        pressed: bool,
+    ) -> sunmao_core::ViewKey {
+        sunmao_core::ViewKey {
+            character,
+            code,
+            pressed,
+        }
+    }
+
+    /// The neutral code an editor sees must survive the mapping unchanged; the
+    /// VST3-specific numbering is the backend's problem, and is asserted there
+    /// against the constants transcribed into `vst3_sys`.
+    #[test]
+    fn every_neutral_key_maps_to_a_framework_code() {
+        use sunmao_core::ViewKeyCode;
+        for (code, expected) in [
+            (ViewKeyCode::Tab, GuiKeyCode::Tab),
+            (ViewKeyCode::Enter, GuiKeyCode::Enter),
+            (ViewKeyCode::Escape, GuiKeyCode::Escape),
+            (ViewKeyCode::Space, GuiKeyCode::Space),
+            (ViewKeyCode::Left, GuiKeyCode::Left),
+            (ViewKeyCode::Up, GuiKeyCode::Up),
+            (ViewKeyCode::Right, GuiKeyCode::Right),
+            (ViewKeyCode::Down, GuiKeyCode::Down),
+            (ViewKeyCode::Home, GuiKeyCode::Home),
+            (ViewKeyCode::End, GuiKeyCode::End),
+            (ViewKeyCode::PageUp, GuiKeyCode::PageUp),
+            (ViewKeyCode::PageDown, GuiKeyCode::PageDown),
+            (ViewKeyCode::Unknown, GuiKeyCode::Unknown),
+        ] {
+            let events = host_key_events(host_key(code, None, true));
+            match events.first() {
+                Some(GuiEvent::KeyDown { key, .. }) => assert_eq!(*key, expected, "{code:?}"),
+                other => panic!("{code:?} produced {other:?}"),
+            }
+        }
+    }
+
+    /// Host-forwarded and native keys must look identical to an editor, so a
+    /// printable character produces text alongside the key event here too.
+    #[test]
+    fn a_printable_host_key_also_produces_text() {
+        let events = host_key_events(host_key(sunmao_core::ViewKeyCode::Unknown, Some('é'), true));
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[1], GuiEvent::TextInput { ref text } if text == "é"));
+
+        // A release types nothing, and a control character is a command.
+        assert_eq!(
+            host_key_events(host_key(
+                sunmao_core::ViewKeyCode::Unknown,
+                Some('a'),
+                false
+            ))
+            .len(),
+            1
+        );
+        assert_eq!(
+            host_key_events(host_key(
+                sunmao_core::ViewKeyCode::Unknown,
+                Some('\u{1b}'),
+                true
+            ))
+            .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn the_host_key_queue_drains_in_order_and_refuses_to_grow_without_bound() {
+        let queue = HostKeyQueue::default();
+        for index in 0..64 {
+            assert!(
+                queue.push(host_key(sunmao_core::ViewKeyCode::Unknown, None, true)),
+                "push {index}"
+            );
+        }
+        // A host forwarding faster than the editor paints must not grow it
+        // forever.
+        assert!(
+            !queue.push(host_key(sunmao_core::ViewKeyCode::Unknown, None, true)),
+            "the queue was unbounded"
+        );
+
+        let drained = queue.drain();
+        assert_eq!(drained.len(), 64);
+        assert!(queue.drain().is_empty(), "drain left something behind");
+
+        // The verdict is remembered for the host's next query.
+        assert!(!queue.last_was_consumed());
+        queue.record_consumed(true);
+        assert!(queue.last_was_consumed());
     }
 }

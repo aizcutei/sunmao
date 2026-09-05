@@ -48,6 +48,8 @@ pub struct Stack {
     padding: Padding,
     children: Vec<Box<dyn Widget + Send>>,
     bounds: Rect,
+    /// Index of the keyboard-focused child, if any.
+    focused: Option<usize>,
 }
 
 impl Stack {
@@ -58,6 +60,7 @@ impl Stack {
             padding: Padding::all(0.0),
             children: Vec::new(),
             bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
+            focused: None,
         }
     }
 
@@ -179,13 +182,95 @@ impl Stack {
         }
     }
 
-    /// Offer the event to children in reverse paint order, so the child drawn
-    /// on top gets first refusal.
+    /// Index of the focused child.
+    pub fn focused(&self) -> Option<usize> {
+        self.focused
+    }
+
+    /// Move keyboard focus. An out-of-range index clears focus rather than
+    /// leaving a stale one, which would send keys to a child that no longer
+    /// exists.
+    pub fn set_focus(&mut self, index: Option<usize>) {
+        let index = index.filter(|i| *i < self.children.len());
+        if index == self.focused {
+            return;
+        }
+        if let Some(previous) = self.focused.and_then(|i| self.children.get_mut(i)) {
+            previous.set_focused(false);
+        }
+        if let Some(next) = index.and_then(|i| self.children.get_mut(i)) {
+            next.set_focused(true);
+        }
+        self.focused = index;
+    }
+
+    /// Focus the next child, wrapping. Called for Tab.
+    pub fn focus_next(&mut self) {
+        if self.children.is_empty() {
+            return;
+        }
+        let next = match self.focused {
+            Some(current) => (current + 1) % self.children.len(),
+            None => 0,
+        };
+        self.set_focus(Some(next));
+    }
+
+    /// Focus the previous child, wrapping. Called for Shift-Tab.
+    pub fn focus_prev(&mut self) {
+        if self.children.is_empty() {
+            return;
+        }
+        let previous = match self.focused {
+            Some(0) | None => self.children.len() - 1,
+            Some(current) => current - 1,
+        };
+        self.set_focus(Some(previous));
+    }
+
+    /// Dispatch an event.
+    ///
+    /// Keyboard and text events go **only** to the focused child: broadcasting
+    /// them would let one keystroke move several controls at once. Mouse events
+    /// go to children in reverse paint order, so the child drawn on top gets
+    /// first refusal, and a press moves focus to whatever accepted it.
     pub fn handle_event(&mut self, event: &Event) -> bool {
-        for child in self.children.iter_mut().rev() {
-            if child.handle_event(event) {
+        match event {
+            Event::KeyDown {
+                key: crate::KeyCode::Tab,
+                modifiers,
+            } => {
+                if modifiers.shift {
+                    self.focus_prev();
+                } else {
+                    self.focus_next();
+                }
                 return true;
             }
+            Event::KeyDown { .. } | Event::KeyUp { .. } | Event::TextInput { .. } => {
+                let Some(index) = self.focused else {
+                    return false;
+                };
+                return self
+                    .children
+                    .get_mut(index)
+                    .is_some_and(|child| child.handle_event(event));
+            }
+            _ => {}
+        }
+
+        let mut consumed_by = None;
+        for (index, child) in self.children.iter_mut().enumerate().rev() {
+            if child.handle_event(event) {
+                consumed_by = Some(index);
+                break;
+            }
+        }
+        if let Some(index) = consumed_by {
+            if matches!(event, Event::MouseDown { .. }) {
+                self.set_focus(Some(index));
+            }
+            return true;
         }
         false
     }
@@ -288,6 +373,103 @@ mod tests {
         assert_eq!(Column::new().content_extent(), 0.0);
     }
 
+    fn key(code: crate::KeyCode) -> crate::Event {
+        crate::Event::KeyDown {
+            key: code,
+            modifiers: crate::Modifiers::default(),
+        }
+    }
+
+    fn shift_key(code: crate::KeyCode) -> crate::Event {
+        crate::Event::KeyDown {
+            key: code,
+            modifiers: crate::Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn tab_walks_focus_forward_and_shift_tab_walks_it_back() {
+        let mut column = Column::new()
+            .child(toggle(40.0, 20.0))
+            .child(toggle(40.0, 20.0))
+            .child(toggle(40.0, 20.0));
+        column.layout(Rect::new(0.0, 0.0, 100.0, 200.0));
+        assert_eq!(column.focused(), None);
+
+        column.handle_event(&key(crate::KeyCode::Tab));
+        assert_eq!(column.focused(), Some(0));
+        column.handle_event(&key(crate::KeyCode::Tab));
+        assert_eq!(column.focused(), Some(1));
+        // Forward wraps.
+        column.handle_event(&key(crate::KeyCode::Tab));
+        column.handle_event(&key(crate::KeyCode::Tab));
+        assert_eq!(column.focused(), Some(0));
+        // Backward wraps too.
+        column.handle_event(&shift_key(crate::KeyCode::Tab));
+        assert_eq!(column.focused(), Some(2));
+    }
+
+    /// A keystroke must reach exactly one control. Broadcasting it would let a
+    /// single arrow press move every knob in the editor at once.
+    #[test]
+    fn keys_reach_only_the_focused_child() {
+        let mut column = Column::new()
+            .child(Toggle::new("a").with_bounds(Rect::new(0.0, 0.0, 40.0, 20.0)))
+            .child(Toggle::new("b").with_bounds(Rect::new(0.0, 0.0, 40.0, 20.0)));
+        column.layout(Rect::new(0.0, 0.0, 100.0, 100.0));
+        column.set_focus(Some(1));
+
+        assert!(column.handle_event(&key(crate::KeyCode::Space)));
+        let values: Vec<f32> = (0..2)
+            .map(|i| {
+                column
+                    .child_at_mut(i)
+                    .unwrap()
+                    .as_parameter()
+                    .unwrap()
+                    .value()
+            })
+            .collect();
+        assert_eq!(
+            values,
+            vec![0.0, 1.0],
+            "the keystroke hit the wrong control"
+        );
+    }
+
+    #[test]
+    fn keys_with_no_focus_are_ignored_rather_than_broadcast() {
+        let mut column = Column::new().child(toggle(40.0, 20.0));
+        column.layout(Rect::new(0.0, 0.0, 100.0, 100.0));
+        assert!(!column.handle_event(&key(crate::KeyCode::Space)));
+    }
+
+    #[test]
+    fn a_mouse_press_moves_focus_to_what_it_hit() {
+        let mut column = Column::new()
+            .gap(0.0)
+            .child(toggle(40.0, 20.0))
+            .child(toggle(40.0, 20.0));
+        column.layout(Rect::new(0.0, 0.0, 100.0, 100.0));
+        let press = crate::Event::MouseDown {
+            x: 5.0,
+            y: 25.0,
+            button: crate::MouseButton::Left,
+            modifiers: crate::Modifiers::default(),
+        };
+        assert!(column.handle_event(&press));
+        assert_eq!(column.focused(), Some(1));
+    }
+
+    #[test]
+    fn focus_rejects_an_index_past_the_end() {
+        let mut column = Column::new().child(toggle(40.0, 20.0));
+        column.set_focus(Some(99));
+        assert_eq!(column.focused(), None, "a stale index kept focus");
+    }
     #[test]
     fn events_reach_the_topmost_child_first() {
         // Two children at the same spot: the later one paints on top and must

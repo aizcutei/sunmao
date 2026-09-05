@@ -251,3 +251,46 @@
 - Unresolved: **M3 尚未完成**——下半（GL 真正绘制字形、clipboard、IME/国际键盘、
   cursor/focus 模型、runner 的按键→参数断言）未开始。本条只是把已绿的上半钉住，
   避免下半失败时连度量层一起回滚。
+
+### 2026-09-05 — M3 下半：焦点模型、键盘控制、国际输入、宿主键盘转发
+
+- Command/platform: macOS ARM64，分支 `phase4/gui-component-library`。
+- 出发点：`IPlugView::onKeyDown`/`onKeyUp` 是**返回 `kResultFalse` 的 stub**——宿主转发的
+  按键从来没到过插件；`Event::TextInput` 从未被产生过——国际键盘与输入法的文本路径不存在；
+  没有任何控件响应键盘。
+- Change（自底向上）：
+  - **`_sys`**：`vst3_sys::base::keycodes` 转录上游 `pluginterfaces/base/keycodes.h` 的
+    `KeyCodes` 枚举。
+  - **`_rs`**：`vst3_rs` 实现 `on_key_down`/`on_key_up`，经新钩子 `GuiPlugin::gui_key`
+    下发；编辑器不要的键回 `kResultFalse`，宿主保留自己的快捷键。
+  - **core**：`ViewKey` + **格式中立**的 `ViewKeyCode`；`ViewHandle::builder()` 取代不断
+    加参数的 `scalable()`，新增 `send_key`。
+  - **backend_vst3**：把 VST3 编号翻译成中立码——原始编号只有 backend 该认识。
+  - **view_baseview**：`HostKeyQueue`（有界 64）+ `HostKeyedState` 适配器。宿主在**它自己的
+    线程**调用，控件活在窗口线程，baseview 没有"向活着的 handler 注入事件"的接口，故排队并在
+    下一帧 `draw` 开头排空。**`TextInput` 从 `Key::Character` 产生**（国际键盘/IME 路径），
+    跳过 `is_composing` 的预编辑串。
+  - **sunmao_gui**：`Stack` 焦点模型（Tab/Shift-Tab、按下鼠标转移焦点、键盘**只**投递给
+    焦点控件）；`Knob`/`Slider` 方向键微调（Shift 精调、Home/End 到端点）、`Toggle`
+    Space/Enter、`Dropdown` 方向键/Home/End/Escape；`ParamBinder` 把键盘编辑包成**独立手势**
+    （没有 press/release 可以包夹，缺 begin/end 的自动化点会被部分 DAW 丢弃）。
+  - **runner**：`HostPlugin::send_gui_key`，VST3 侧走真实 `IPlugView` vtable；`gui-test`
+    断言 Tab 聚焦 → End 推满 → **经宿主 API 读回参数确认真的变了**。
+- Result:
+  - 完整 `cargo test --locked` **exit 0，127 套件 / 624 测试**（M3 上半为 599）。
+  - **本地实测整条链打通**：`GUI key verified: Gain moved 0 -> 1 via host key forwarding`
+    ——宿主 ABI → wrapper → backend → ViewHandle → 跨线程队列 → 窗口线程 → 焦点 → 控件 →
+    binder → 宿主参数。CLAP 侧如实走 skip 路径。
+  - `tools/package_examples.sh --debug --test` exit 0，32 套件 / 640 断言不变。
+  - 8 个触及平台代码的 crate `--target x86_64-pc-windows-msvc` 检查 exit 0。
+- Evidence/artifact: `/tmp/m3b_test.log`、`/tmp/m3b_pkg.log`、`/tmp/keytest_vst3.log`。
+- Unresolved:
+  - 本 commit 需三平台 hosted 全绿。
+  - **本轮最该记的一条**：VST3 `KeyCodes` 编号最初凭记忆写，13 个里 12 个错
+    （`KEY_RETURN` 实为 4 而非 6、`KEY_LEFT` 实为 11 而非 13……），而**单测照着错误实现写
+    所以全绿**。是按硬性规则去读上游头文件才发现的。现在
+    `vst3_key_codes_match_the_upstream_numbering` 直接钉住上游整数字面量，而不是引用常量
+    ——引用常量的话常量本身写错就测不出来。
+  - **M3 仍有未做项**：GL 后端把字形上传为纹理并真正绘制（`draw_text` 仍是空实现，
+    度量已真实）、clipboard、wgpu/WebView 后端的宿主键盘队列排空。这三项如实列为遗留，
+    不算 M3 完成。

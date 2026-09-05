@@ -148,6 +148,49 @@ impl Dropdown {
             }
         }
     }
+
+    /// Arrows move the selection; Space/Enter opens or closes the list;
+    /// Escape closes it without changing anything.
+    fn handle_key(&mut self, event: &Event) -> bool {
+        let Event::KeyDown { key, modifiers } = event else {
+            return false;
+        };
+        if !self.state.focused || self.state.disabled || self.options.is_empty() {
+            return false;
+        }
+        if modifiers.ctrl || modifiers.alt || modifiers.meta {
+            return false;
+        }
+        match key {
+            crate::KeyCode::Down | crate::KeyCode::Right => {
+                let next = (self.selected + 1).min(self.options.len() - 1);
+                self.select_internal(next, true);
+                true
+            }
+            crate::KeyCode::Up | crate::KeyCode::Left => {
+                let previous = self.selected.saturating_sub(1);
+                self.select_internal(previous, true);
+                true
+            }
+            crate::KeyCode::Home => {
+                self.select_internal(0, true);
+                true
+            }
+            crate::KeyCode::End => {
+                self.select_internal(self.options.len() - 1, true);
+                true
+            }
+            crate::KeyCode::Space | crate::KeyCode::Enter => {
+                self.open = !self.open;
+                true
+            }
+            crate::KeyCode::Escape => {
+                self.open = false;
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 impl Widget for Dropdown {
@@ -184,6 +227,9 @@ impl Widget for Dropdown {
     }
 
     fn handle_event(&mut self, event: &Event) -> bool {
+        if self.handle_key(event) {
+            return true;
+        }
         if self.state.disabled || self.options.is_empty() {
             return false;
         }
@@ -430,6 +476,62 @@ mod tests {
         assert_eq!(*seen.lock().unwrap(), vec![1.0]);
     }
 
+    #[test]
+    fn arrows_walk_the_options_and_clamp_at_the_ends() {
+        let mut d = dropdown();
+        let press = |code| Event::KeyDown {
+            key: code,
+            modifiers: Modifiers::default(),
+        };
+        // Unfocused: ignored.
+        assert!(!d.handle_event(&press(crate::KeyCode::Down)));
+        d.set_focused(true);
+
+        assert!(d.handle_event(&press(crate::KeyCode::Down)));
+        assert_eq!(d.selected_label(), "Warm");
+        assert!(d.handle_event(&press(crate::KeyCode::Up)));
+        assert_eq!(d.selected_label(), "Clean");
+        // Already at the first option: stays put rather than wrapping, so a
+        // held arrow key cannot silently jump to the far end.
+        d.handle_event(&press(crate::KeyCode::Up));
+        assert_eq!(d.selected_index(), 0);
+
+        assert!(d.handle_event(&press(crate::KeyCode::End)));
+        assert_eq!(d.selected_label(), "Crush");
+        d.handle_event(&press(crate::KeyCode::Down));
+        assert_eq!(d.selected_index(), 3);
+        assert!(d.handle_event(&press(crate::KeyCode::Home)));
+        assert_eq!(d.selected_index(), 0);
+    }
+
+    #[test]
+    fn space_opens_the_list_and_escape_closes_it_without_changing_the_value() {
+        let mut d = dropdown();
+        d.set_focused(true);
+        let press = |code| Event::KeyDown {
+            key: code,
+            modifiers: Modifiers::default(),
+        };
+        assert!(d.handle_event(&press(crate::KeyCode::Space)));
+        assert!(d.is_open());
+        assert!(d.handle_event(&press(crate::KeyCode::Escape)));
+        assert!(!d.is_open());
+        assert_eq!(d.selected_index(), 0, "escape changed the selection");
+    }
+
+    #[test]
+    fn a_keyboard_pick_reports_the_normalized_value() {
+        let mut d = dropdown();
+        d.set_focused(true);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        d.on_value_changed(Box::new(move |value| sink.lock().unwrap().push(value)));
+        d.handle_event(&Event::KeyDown {
+            key: crate::KeyCode::End,
+            modifiers: Modifiers::default(),
+        });
+        assert_eq!(*seen.lock().unwrap(), vec![1.0]);
+    }
     #[test]
     fn an_empty_or_single_option_dropdown_is_inert_rather_than_panicking() {
         let mut empty = Dropdown::new("mode", &[]).with_bounds(Rect::new(0.0, 0.0, 60.0, 20.0));

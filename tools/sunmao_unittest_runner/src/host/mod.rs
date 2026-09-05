@@ -279,6 +279,18 @@ pub trait HostPlugin: Send {
         ))
     }
 
+    /// Forward a key to the open editor, the way a DAW does.
+    ///
+    /// `Ok(true)` means the editor took the key. `Err` means the format has no
+    /// host-to-editor key path at all — CLAP is in that position, where the
+    /// editor's own window receives keys straight from the OS.
+    fn send_gui_key(&mut self, _key_code: i16, _character: char) -> Result<bool, String> {
+        Err(format!(
+            "{} has no host-to-editor key forwarding",
+            self.info().format
+        ))
+    }
+
     /// Close the plugin's native GUI.
     fn close_gui(&mut self) {}
 

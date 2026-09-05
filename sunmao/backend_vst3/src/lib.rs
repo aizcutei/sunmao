@@ -15,7 +15,7 @@ use sunmao_core::plugin::{
     BusRole as SunmaoBusRole, ProcessContext as SunmaoProcessContext,
     RenderMode as SunmaoRenderMode, TailLength as SunmaoTailLength,
 };
-use sunmao_core::view::ViewContext;
+use sunmao_core::view::{ViewContext, ViewKey, ViewKeyCode};
 use sunmao_core::{
     AudioBuffer, Event, EventQueue, ParamDescriptor, Params, ParentWindow, SunmaoPlugin, ViewHandle,
 };
@@ -782,6 +782,39 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
     }
 }
 
+/// Map a VST3 virtual key code onto the framework's neutral code.
+///
+/// The numbers are the SDK's own `KeyCodes` enum — not a platform scancode and
+/// not ASCII — so they are referenced through the constants transcribed into
+/// `vst3_sys` rather than written inline. A host that sends no code but does
+/// send a character still drives Space and Enter, which are the keys a control
+/// acts on. Anything unmapped stays `Unknown`, which widgets ignore so the DAW
+/// keeps its shortcut.
+fn vst3_key_code(key_code: i16, character: Option<char>) -> ViewKeyCode {
+    use vst3_rs::vst3_sys::base::keycodes::key_codes as vst3_keys;
+    match key_code {
+        vst3_keys::KEY_BACK => ViewKeyCode::Backspace,
+        vst3_keys::KEY_TAB => ViewKeyCode::Tab,
+        vst3_keys::KEY_RETURN => ViewKeyCode::Enter,
+        vst3_keys::KEY_ESCAPE => ViewKeyCode::Escape,
+        vst3_keys::KEY_SPACE => ViewKeyCode::Space,
+        vst3_keys::KEY_END => ViewKeyCode::End,
+        vst3_keys::KEY_HOME => ViewKeyCode::Home,
+        vst3_keys::KEY_LEFT => ViewKeyCode::Left,
+        vst3_keys::KEY_UP => ViewKeyCode::Up,
+        vst3_keys::KEY_RIGHT => ViewKeyCode::Right,
+        vst3_keys::KEY_DOWN => ViewKeyCode::Down,
+        vst3_keys::KEY_PAGEUP => ViewKeyCode::PageUp,
+        vst3_keys::KEY_PAGEDOWN => ViewKeyCode::PageDown,
+        _ => match character {
+            Some(' ') => ViewKeyCode::Space,
+            Some('\r') | Some('\n') => ViewKeyCode::Enter,
+            Some('\t') => ViewKeyCode::Tab,
+            _ => ViewKeyCode::Unknown,
+        },
+    }
+}
+
 impl<P: SunmaoPlugin> GuiPlugin for SunmaoVst3Wrapper<P> {
     fn gui_size() -> GuiSize {
         let plugin = P::default();
@@ -853,6 +886,30 @@ impl<P: SunmaoPlugin> GuiPlugin for SunmaoVst3Wrapper<P> {
         self.view_handle
             .as_mut()
             .map(|handle| handle.set_scale(factor))
+            .unwrap_or(false)
+    }
+
+    /// `IPlugView::onKeyDown`/`onKeyUp`.
+    ///
+    /// Routed to the live editor. With no editor open there is nothing to
+    /// receive the key, so this reports `false` and the host keeps its own
+    /// shortcut.
+    fn gui_key(
+        &mut self,
+        character: Option<char>,
+        key_code: i16,
+        modifiers: i16,
+        pressed: bool,
+    ) -> bool {
+        let _ = modifiers;
+        let key = ViewKey {
+            character,
+            code: vst3_key_code(key_code, character),
+            pressed,
+        };
+        self.view_handle
+            .as_mut()
+            .map(|handle| handle.send_key(key))
             .unwrap_or(false)
     }
 }
@@ -2319,6 +2376,40 @@ mod tests {
         ) -> ProcessStatus {
             ProcessStatus::Normal
         }
+    }
+
+    /// The VST3 numbering is the SDK's own `KeyCodes` enum, not a scancode and
+    /// not ASCII. Getting it wrong is invisible — the editor simply responds to
+    /// the wrong key — so this pins the literal integers from the upstream
+    /// header against the mapping, independently of the constants.
+    #[test]
+    fn vst3_key_codes_match_the_upstream_numbering() {
+        for (raw, expected) in [
+            (1i16, ViewKeyCode::Backspace),
+            (2, ViewKeyCode::Tab),
+            (4, ViewKeyCode::Enter),
+            (6, ViewKeyCode::Escape),
+            (7, ViewKeyCode::Space),
+            (9, ViewKeyCode::End),
+            (10, ViewKeyCode::Home),
+            (11, ViewKeyCode::Left),
+            (12, ViewKeyCode::Up),
+            (13, ViewKeyCode::Right),
+            (14, ViewKeyCode::Down),
+            (15, ViewKeyCode::PageUp),
+            (16, ViewKeyCode::PageDown),
+        ] {
+            assert_eq!(vst3_key_code(raw, None), expected, "raw code {raw}");
+        }
+        // 3, 5 and 8 are KEY_CLEAR, KEY_PAUSE and KEY_NEXT: real keys the
+        // editor has no use for, so they must not alias onto a navigation key.
+        for unused in [3i16, 5, 8, 99, -1] {
+            assert_eq!(vst3_key_code(unused, None), ViewKeyCode::Unknown);
+        }
+        // With no code, the character stands in for the keys controls act on.
+        assert_eq!(vst3_key_code(0, Some(' ')), ViewKeyCode::Space);
+        assert_eq!(vst3_key_code(0, Some('\r')), ViewKeyCode::Enter);
+        assert_eq!(vst3_key_code(0, Some('q')), ViewKeyCode::Unknown);
     }
 
     #[test]
