@@ -67,6 +67,41 @@ impl GlyphBitmap {
     pub fn is_blank(&self) -> bool {
         self.coverage.is_empty()
     }
+
+    /// Horizontal runs of identical non-zero coverage.
+    ///
+    /// Each entry is `(row, start_column, length, coverage)`. A renderer
+    /// without a glyph atlas draws one rectangle per run, which keeps a solid
+    /// stem to a single draw instead of one per pixel. Zero-coverage pixels are
+    /// skipped entirely: they are transparent, and drawing them would be both
+    /// wasted work and — with blending on — visible banding.
+    pub fn runs(&self) -> Vec<(u32, u32, u32, u8)> {
+        let width = self.metrics.width as usize;
+        if width == 0 || self.coverage.len() < width {
+            return Vec::new();
+        }
+        let mut runs = Vec::new();
+        for row in 0..self.metrics.height as usize {
+            let base = row * width;
+            if base + width > self.coverage.len() {
+                break;
+            }
+            let mut column = 0usize;
+            while column < width {
+                let coverage = self.coverage[base + column];
+                if coverage == 0 {
+                    column += 1;
+                    continue;
+                }
+                let start = column;
+                while column < width && self.coverage[base + column] == coverage {
+                    column += 1;
+                }
+                runs.push((row as u32, start as u32, (column - start) as u32, coverage));
+            }
+        }
+        runs
+    }
 }
 
 /// Something that can turn a `char` into metrics and pixels.
@@ -476,5 +511,45 @@ mod tests {
         assert_eq!(metrics.width, 0.0);
         assert_eq!(metrics.lines, 1);
         assert!(font.layout("", 12.0, Some(100.0)).is_empty());
+    }
+
+    #[test]
+    fn coverage_runs_coalesce_equal_neighbours_and_skip_transparent_pixels() {
+        let bitmap = GlyphBitmap {
+            metrics: GlyphMetrics {
+                advance: 4.0,
+                bearing_x: 0.0,
+                bearing_y: 0.0,
+                width: 4,
+                height: 2,
+            },
+            // Row 0: two solid, one transparent, one faint.
+            // Row 1: entirely transparent.
+            coverage: vec![255, 255, 0, 80, 0, 0, 0, 0],
+        };
+        let runs = bitmap.runs();
+        assert_eq!(
+            runs,
+            vec![(0, 0, 2, 255), (0, 3, 1, 80)],
+            "runs did not coalesce, or a transparent pixel was drawn"
+        );
+    }
+
+    #[test]
+    fn a_malformed_bitmap_yields_no_runs_rather_than_indexing_out_of_bounds() {
+        // Coverage shorter than width*height: a rasterizer bug must not become
+        // a panic in the renderer.
+        let bitmap = GlyphBitmap {
+            metrics: GlyphMetrics {
+                advance: 4.0,
+                bearing_x: 0.0,
+                bearing_y: 0.0,
+                width: 4,
+                height: 4,
+            },
+            coverage: vec![255, 255],
+        };
+        assert!(bitmap.runs().is_empty());
+        assert!(GlyphBitmap::blank(3.0).runs().is_empty());
     }
 }

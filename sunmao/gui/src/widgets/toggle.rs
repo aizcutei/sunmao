@@ -258,6 +258,28 @@ impl ParameterWidget for Toggle {
         if self.is_on() { "On" } else { "Off" }.to_string()
     }
 
+    /// Accepts what `display_value` produces, plus the numeric form a
+    /// continuous control would paste.
+    fn set_from_text(&mut self, text: &str) -> bool {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "on" | "true" | "1" => {
+                self.set_value_internal(1.0, false);
+                true
+            }
+            "off" | "false" | "0" => {
+                self.set_value_internal(0.0, false);
+                true
+            }
+            other => match other.parse::<f32>() {
+                Ok(value) if value.is_finite() => {
+                    self.set_value_internal(value.clamp(0.0, 1.0), false);
+                    true
+                }
+                _ => false,
+            },
+        }
+    }
+
     fn on_value_changed(&mut self, callback: Box<dyn Fn(f32) + Send>) {
         self.value_changed = Some(callback);
     }

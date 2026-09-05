@@ -329,3 +329,31 @@
 - Result: 待三平台 hosted 复验；判定标准是三平台各出现 **1 次** `GUI key verified`
   （VST3）与 1 次格式跳过（CLAP），而不只是 job success。
 - Unresolved: M3 在该验证通过前不算完成。
+
+### 2026-09-06 — M3 收口：clipboard 与 GL 字形绘制
+
+- Command/platform: macOS ARM64，分支 `phase4/gui-component-library`。
+- Change:
+  - **clipboard**：`Clipboard` trait + `MemoryClipboard`（测试与降级用）+ `SystemClipboard`
+    （`clipboard` feature，arboard 支撑；**arboard 已在 workspace lockfile 里**，经 eframe 引入）。
+    连接失败**不是致命错误**——无剪贴板会话（无头 CI）下插件仍要能开编辑器，故握手失败后
+    每次操作如实回 false 而不是 panic。
+  - 真实消费方：`ParamBinder` 处理焦点控件的 Ctrl/Cmd+C / +V。复制写的是
+    `display_value()`（下拉是 "Warm" 这样的标签，不是裸浮点），粘贴经新增的
+    `ParameterWidget::set_from_text`——默认解析归一化浮点，`Toggle` 认 On/Off、
+    `Dropdown` 认选项名。**无剪贴板时快捷键不处理**，宿主因此保住自己的 Ctrl+C，
+    而不是被静默吞掉。
+  - **GL `draw_text` 不再是空实现**：按字形覆盖率绘制，同一扫描线上覆盖率相同的像素
+    合并成一个矩形（实心竖干因此是 1 次绘制而非逐像素）。覆盖率直接当 alpha，
+    抗锯齿得以保留（混合本来就已开启）。合并逻辑抽成 `GlyphBitmap::runs()`，
+    因此**不需要 GL 上下文就能测**，并覆盖了"覆盖率数组短于 width×height"的畸形位图
+    ——栅格化器的 bug 不该变成渲染器里的越界 panic。
+- Result: `cargo test --locked` **exit 0，127 套件 / 631 测试**；打包 32 套件 / 640 断言不变；
+  Windows target check exit 0；fmt/diff/metadata 全过。
+- Evidence/artifact: `/tmp/m3c_test.log`、`/tmp/m3c_pkg.log`。
+- Unresolved（**如实说明，不要读成"文字已经能显示"**）:
+  - **默认字体仍然没有**，所以 `draw_text` 默认画不出字形：`Font::default()` 是
+    `MetricsOnlyFont`，只量不画。栅格化、度量、布局、run 合并、GL 绘制路径都已实现并有测试，
+    但要真正看到字，调用方需经 `GlContext::set_font` 提供字体。捆绑字体是许可与体积决策，
+    留给发行插件的人——这一条从 M3 上半起就是这样，此处再次点明以免误读。
+  - wgpu / WebView 后端仍不排空宿主键盘队列（如实回"未使用"）。

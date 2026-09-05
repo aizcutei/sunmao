@@ -4549,6 +4549,7 @@ dependencies = [
 name = "sunmao_gui"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "bytemuck",
  "epaint_default_fonts",
  "fontdue",

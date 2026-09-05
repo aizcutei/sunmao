@@ -23,6 +23,7 @@
 //! ```
 
 mod binding;
+mod clipboard;
 mod context;
 mod event;
 mod layout;
@@ -35,6 +36,7 @@ mod widget;
 mod widgets;
 
 pub use binding::*;
+pub use clipboard::*;
 pub use context::*;
 pub use event::*;
 pub use layout::*;

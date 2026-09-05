@@ -354,6 +354,31 @@ impl ParameterWidget for Dropdown {
         self.selected_label().to_string()
     }
 
+    /// Accepts an option label, so a value copied out of one dropdown pastes
+    /// back meaningfully. A bare number is still accepted as the normalized
+    /// form.
+    fn set_from_text(&mut self, text: &str) -> bool {
+        let trimmed = text.trim();
+        if let Some(index) = self
+            .options
+            .iter()
+            .position(|option| option.eq_ignore_ascii_case(trimmed))
+        {
+            self.select_internal(index, false);
+            return true;
+        }
+        match trimmed.parse::<f32>() {
+            Ok(value) if value.is_finite() => {
+                if let Some(index) = self.index_for_value(value) {
+                    self.select_internal(index, false);
+                    return true;
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
     fn on_value_changed(&mut self, callback: Box<dyn Fn(f32) + Send>) {
         self.value_changed = Some(callback);
     }

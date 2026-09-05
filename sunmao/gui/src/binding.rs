@@ -6,7 +6,7 @@
 //! one gesture instead of a hundred. [`ParamBinder`] does all three for a whole
 //! widget tree, so an editor declares its controls and nothing else.
 
-use crate::{Event, MouseButton, ParameterWidget, Stack};
+use crate::{Clipboard, Event, KeyCode, MouseButton, ParameterWidget, Stack};
 use std::sync::Arc;
 
 /// The editor's view onto host parameters.
@@ -35,6 +35,8 @@ pub struct ParamBinder {
     host: Arc<dyn ParamHost>,
     /// Parameter id of the control currently mid-gesture, if any.
     editing: Option<String>,
+    /// Optional clipboard for copy/paste of the focused control's value.
+    clipboard: Option<Box<dyn Clipboard>>,
 }
 
 impl ParamBinder {
@@ -42,6 +44,54 @@ impl ParamBinder {
         Self {
             host,
             editing: None,
+            clipboard: None,
+        }
+    }
+
+    /// Enable copy/paste of the focused control's value.
+    ///
+    /// Without a clipboard the shortcuts are simply not handled, so the host
+    /// keeps Ctrl+C for itself rather than having it silently swallowed.
+    pub fn with_clipboard(mut self, clipboard: Box<dyn Clipboard>) -> Self {
+        self.clipboard = Some(clipboard);
+        self
+    }
+
+    /// Copy or paste the focused control's value.
+    ///
+    /// Returns whether the shortcut was handled. Paste reports the resulting
+    /// value so the caller can publish it as an edit.
+    fn handle_clipboard(&mut self, stack: &mut Stack, event: &Event) -> bool {
+        let Event::KeyDown { key, modifiers } = event else {
+            return false;
+        };
+        // Ctrl on Windows/X11, Command on macOS. Accepting either keeps one
+        // code path and costs nothing: no platform sends both.
+        if !(modifiers.ctrl || modifiers.meta) {
+            return false;
+        }
+        let Some(clipboard) = self.clipboard.as_mut() else {
+            return false;
+        };
+        let Some(index) = stack.focused() else {
+            return false;
+        };
+        let Some(param) = stack
+            .child_at_mut(index)
+            .and_then(|child| child.as_parameter())
+        else {
+            return false;
+        };
+
+        match key {
+            KeyCode::C => clipboard.set_text(&param.display_value()),
+            KeyCode::V => {
+                let Some(text) = clipboard.get_text() else {
+                    return false;
+                };
+                param.set_from_text(&text)
+            }
+            _ => false,
         }
     }
 
@@ -74,6 +124,22 @@ impl ParamBinder {
         // Snapshot before/after values so a change is detected wherever it came
         // from, rather than requiring each widget to report through a callback.
         let before: Vec<(String, f32)> = collect_values(stack);
+
+        // Copy/paste is handled here rather than in a widget: only the binder
+        // knows which control has focus and how to publish the result. A paste
+        // shows up in the before/after diff below like any other edit.
+        if self.handle_clipboard(stack, event) {
+            let after = collect_values(stack);
+            for ((id, old), (_, new)) in before.iter().zip(after.iter()) {
+                if old != new {
+                    self.host.begin_edit(id);
+                    self.host.set(id, *new);
+                    self.host.end_edit(id);
+                }
+            }
+            return true;
+        }
+
         let consumed = stack.handle_event(event);
         let after = collect_values(stack);
 
@@ -380,5 +446,117 @@ mod tests {
             "an inert key logged {:?}",
             host.log()
         );
+    }
+
+    fn stack_with_dropdown() -> Stack {
+        let mut stack = Column::new().child(
+            crate::Dropdown::new("mode", &["Clean", "Warm", "Bright"])
+                .with_bounds(Rect::new(0.0, 0.0, 100.0, 20.0)),
+        );
+        stack.layout(Rect::new(0.0, 0.0, 100.0, 40.0));
+        stack
+    }
+
+    fn ctrl(code: crate::KeyCode) -> Event {
+        Event::KeyDown {
+            key: code,
+            modifiers: Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn copy_and_paste_move_a_focused_parameter() {
+        let host = Arc::new(RecordingHost::default());
+        host.seed("mode", 0.0);
+        let mut binder = ParamBinder::new(host.clone())
+            .with_clipboard(Box::new(crate::MemoryClipboard::default()));
+        let mut source = stack_with_dropdown();
+        source.set_focus(Some(0));
+        source
+            .child_at_mut(0)
+            .unwrap()
+            .as_parameter()
+            .unwrap()
+            .set_value(1.0);
+
+        // Copy writes the label a user would recognise, not a raw float.
+        assert!(binder.handle_event(&mut source, &ctrl(crate::KeyCode::C)));
+
+        let mut target = stack_with_dropdown();
+        target.set_focus(Some(0));
+        assert!(binder.handle_event(&mut target, &ctrl(crate::KeyCode::V)));
+        assert_eq!(
+            target
+                .child_at_mut(0)
+                .unwrap()
+                .as_parameter()
+                .unwrap()
+                .value(),
+            1.0
+        );
+        // The paste is published as a complete gesture, like a keyboard nudge.
+        assert!(host.log().contains(&"begin mode".to_string()));
+        assert!(host.log().contains(&"end mode".to_string()));
+    }
+
+    /// Without a clipboard the shortcut must go unhandled so the host keeps
+    /// Ctrl+C for itself rather than having it silently swallowed.
+    #[test]
+    fn clipboard_shortcuts_are_unhandled_when_no_clipboard_is_attached() {
+        let host = Arc::new(RecordingHost::default());
+        host.seed("bypass", 0.0);
+        let mut binder = ParamBinder::new(host.clone());
+        let mut stack = stack_with_toggle();
+        stack.set_focus(Some(0));
+        assert!(!binder.handle_event(&mut stack, &ctrl(crate::KeyCode::C)));
+        assert!(!binder.handle_event(&mut stack, &ctrl(crate::KeyCode::V)));
+    }
+
+    #[test]
+    fn pasting_text_the_control_cannot_parse_leaves_it_alone() {
+        let host = Arc::new(RecordingHost::default());
+        host.seed("mode", 0.0);
+        let mut clipboard = crate::MemoryClipboard::default();
+        clipboard.set_text("not an option");
+        let mut binder = ParamBinder::new(host.clone()).with_clipboard(Box::new(clipboard));
+        let mut stack = stack_with_dropdown();
+        stack.set_focus(Some(0));
+
+        assert!(!binder.handle_event(&mut stack, &ctrl(crate::KeyCode::V)));
+        assert_eq!(
+            stack
+                .child_at_mut(0)
+                .unwrap()
+                .as_parameter()
+                .unwrap()
+                .value(),
+            0.0,
+            "unparseable text moved the control"
+        );
+        assert!(host.log().is_empty());
+    }
+
+    #[test]
+    fn clipboard_shortcuts_need_focus_and_a_modifier() {
+        let host = Arc::new(RecordingHost::default());
+        let mut binder = ParamBinder::new(host.clone())
+            .with_clipboard(Box::new(crate::MemoryClipboard::default()));
+        let mut stack = stack_with_toggle();
+
+        // No focus: nothing to copy from.
+        assert!(!binder.handle_event(&mut stack, &ctrl(crate::KeyCode::C)));
+
+        // Focused but unmodified: a bare "c" is text, not a copy command.
+        stack.set_focus(Some(0));
+        assert!(!binder.handle_event(
+            &mut stack,
+            &Event::KeyDown {
+                key: crate::KeyCode::C,
+                modifiers: Modifiers::default(),
+            }
+        ));
     }
 }

@@ -556,9 +556,51 @@ impl GuiContext for GlContext {
         self.draw_vertices(&vertices);
     }
 
+    /// Draw text by painting each glyph's coverage.
+    ///
+    /// Runs of equal coverage on a scanline are coalesced into one rectangle,
+    /// which keeps a typical label to tens of draws rather than hundreds. This
+    /// is deliberately not a texture atlas: an atlas is a *performance*
+    /// optimisation, and painting nothing at all — which is what this did
+    /// before — is a correctness problem. The atlas can replace this without
+    /// changing a single caller.
+    ///
+    /// Coverage becomes alpha, so anti-aliasing survives; blending is already
+    /// enabled for the rest of the widget set.
     fn draw_text(&mut self, text: &str, x: f32, y: f32, size: f32, color: Color, align: TextAlign) {
-        // Placeholder: text rendering not implemented for GL backend
-        let _ = (text, x, y, size, color, align);
+        if text.is_empty() || !size.is_finite() || size <= 0.0 {
+            return;
+        }
+        let metrics = self.font.measure(text, size);
+        // `y` is the text's vertical centre, matching what the widgets pass.
+        let baseline = y + (metrics.ascent - metrics.descent) * 0.5;
+        let origin_x = match align {
+            TextAlign::Left => x,
+            TextAlign::Center => x - metrics.width * 0.5,
+            TextAlign::Right => x - metrics.width,
+        };
+
+        let placed = self.font.layout(text, size, None);
+        for glyph in placed {
+            // Take the bitmap out of the cache by value: `self.font` is
+            // borrowed mutably to rasterise, and drawing borrows `self` again.
+            let bitmap = self.font.glyph(glyph.ch, size).clone();
+            if bitmap.is_blank() {
+                continue;
+            }
+            let left = origin_x + glyph.x + bitmap.metrics.bearing_x;
+            let top = baseline + glyph.baseline - metrics.ascent - bitmap.metrics.bearing_y;
+            for (row, start, length, coverage) in bitmap.runs() {
+                let alpha = color.a * (coverage as f32 / 255.0);
+                self.fill_rect(
+                    left + start as f32,
+                    top + row as f32,
+                    length as f32,
+                    1.0,
+                    Fill::Solid(Color::rgba(color.r, color.g, color.b, alpha)),
+                );
+            }
+        }
     }
 
     fn measure_text(&self, text: &str, size: f32) -> f32 {

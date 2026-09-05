@@ -85,6 +85,26 @@ pub trait ParameterWidget: Widget {
         format!("{:.2}", self.value())
     }
 
+    /// Apply a value parsed from text, as produced by [`Self::display_value`].
+    ///
+    /// The default reads a normalized `0.0..=1.0` float, which is what a
+    /// continuous control shows. Discrete controls override it to accept their
+    /// own labels, so copying "Warm" out of a dropdown and pasting it back
+    /// works. Returns whether the text was understood; `false` leaves the
+    /// control alone rather than resetting it to zero.
+    ///
+    /// This is a *user* edit, so implementations notify like any other.
+    fn set_from_text(&mut self, text: &str) -> bool {
+        let Ok(value) = text.trim().parse::<f32>() else {
+            return false;
+        };
+        if !value.is_finite() {
+            return false;
+        }
+        self.set_value(value.clamp(0.0, 1.0));
+        true
+    }
+
     /// Register a callback for value changes caused by user interaction.
     fn on_value_changed(&mut self, _callback: Box<dyn Fn(f32) + Send>) {}
 }

@@ -12,6 +12,7 @@ bytemuck = { version = "1.18", features = ["derive"], optional = true }
 serde = { version = "1.0", features = ["derive"], optional = true }
 serde_json = { version = "1.0", optional = true }
 fontdue = { version = "0.9", optional = true }
+arboard = { version = "3", optional = true, default-features = false }
 
 [dev-dependencies]
 proptest = "1.11.0"
@@ -27,3 +28,6 @@ webview = ["serde", "serde_json"]
 # TTF rasterization. Off by default: a plugin that draws no text should not
 # pay for a font parser.
 text = ["dep:fontdue"]
+# Platform clipboard. Off by default so a plugin that never copies text does
+# not link an X11/AppKit/Win32 clipboard connection.
+clipboard = ["dep:arboard"]
