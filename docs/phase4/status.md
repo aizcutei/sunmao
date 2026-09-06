@@ -63,17 +63,17 @@ Linux GUI 面的风险。计划在 **M2 真控件落地时接入**——Phase 3 
 | M2 布局与主题 | `Column`/`Row`/gap/padding、五个控件、参数双向绑定、主题 token | **完成**（三平台 hosted 全绿）：`Theme` 角色化 token（暗/亮，对比度由测试机械断言）、新增 `Toggle`/`Dropdown`（连同既有 `Knob`/`Slider`/`Label`/`Button` 共 6 控件）、声明式 `Column`/`Row`（含 6 个布局 proptest）、`ParamBinder`+`ParamHost` 两向绑定（facade 以 `ViewContextHost` 适配 `ViewContext`），fixture 换真控件后**已无逐控件回调代码**并接入打包矩阵 | [run #77](https://github.com/aizcutei/sunmao/actions/runs/33965946234)（commit `aec872f`）三 job success，每 job **26 步零非成功**，artifacts 3 份。已下载三平台日志核实新 fixture 真被宿主执行：每平台 `SunMao Widgets GL` 出现 10 次、两格式各自 `Testing:` 一次，全 run **零失败套件**。本地打包 30→**32 套件**、600→**640 断言** | — （M2 完成；进入 M3） |
 | M3 text rendering 与输入 | 字体栅格化/度量、clipboard、IME/国际键盘、cursor/focus | **完成**（三平台 hosted 全绿）：`GlyphSource`/`Font`（字形缓存）+ fontdue `TtfFont`；`Clipboard`/`SystemClipboard` 与焦点控件 Ctrl/Cmd+C·V；`TextInput` 由 `Key::Character` 产生（跳过 `is_composing` 预编辑）＝国际键盘/IME 路径，三平台经 baseview 同一条；`Stack` 焦点模型 + 四个控件的键盘处理；VST3 `IPlugView::onKeyDown`/`onKeyUp` 由 stub 改为真实转发；GL `draw_text` 由空实现改为按覆盖率绘制（同覆盖率合并成行）| [run #84](https://github.com/aizcutei/sunmao/actions/runs/33976552655)（commit `8f959ba`）三 job success、每 job 26 步零非成功、artifacts 3 份。**关键证据不是 job 成功而是断言真的跑了**：三平台各 `GUI key verified` 1 次（VST3，`Gain moved 0 -> 1`）＋格式跳过 1 次（CLAP）。run #82 曾三平台全绿但该断言 0 次执行（fixture 不在 GUI 矩阵里），补入矩阵后才成立 | — （M3 完成；进入 M4） |
 | M4 可视化与 accessibility | `VizChannel`、`SpectrumAnalyzer`/meter、accessibility 树、floating CLAP editor | **完成**（[run #100](https://github.com/aizcutei/sunmao/actions/runs/33999399095) 三平台绿）。已落地：`sunmao_core::viz` 三缓冲 `VizChannel`（audio 侧 publish 零 alloc，含跨真实线程的撕裂读检测）、`SpectrumAnalyzer`（峰值即起、落差衰减、NaN/越界收敛）、`accessibility_tree` + `AccessibleNode`/`AccessibleRole`（角色由 `ParameterWidget::accessible_role` **声明**而非从显示文本推断）、CLAP `suggest_title` 由静默 stub 改为真实转发。fixture 已从 crate 内 `SpectrumPublisher` 换成 `VizChannel`+`SpectrumAnalyzer` | [run #86](https://github.com/aizcutei/sunmao/actions/runs/33980911401)（commit `1ddc210`）三 job success，每 job **26 步零非成功**，artifacts 3 份可下载（macOS 53.0MB / Windows 78.3MB / Linux 971.2MB）。已下载三平台 job 日志核实新断言**真的执行且通过**：`the_editor_describes_itself_to_assistive_technology ... ok`、accessibility proptest 套件、`VizChannel` 跨线程撕裂读测试各 1 次/平台，`GUI scale negotiated` 由 16 增至 **18** 次（widgets fixture 入 GUI 矩阵后 9 插件 × 2 格式），三平台**零 FAILED 套件**。⚠️ **但其中的跨线程测试当时是 flaky 的**：run #87 在 Linux 上以 `the consumer never saw a frame` 失败，根因是该测试固定轮询 50000 次、断言依赖线程调度而非通道行为（详见 progress.md）。已改为轮询至生产者置位再做收尾 take。**#86 对其余确定性断言的验收不受影响，但"跨线程行为已三平台验证"这一条要等修复版取绿才成立** | **完成**（三平台 hosted 全绿）：floating editor 与 accessibility 三平台桥接均已补上，Windows 侧有真实 UIA 往返断言 |
-| M5 Wayland 与总验收 | Wayland、GUI 侧兼容策略、proptest/文档收尾 | **完成**：原生 Wayland 顶层窗口路径（`wl_surface`/`xdg_surface`/`xdg_toplevel`/`wl_shm`）与 CLAP 浮动窗口边界已落地；兼容策略、proptest 与上游窗口 API 校验保持通过 | [run #106](https://github.com/aizcutei/sunmao/actions/runs/34015968358)（commit `cbb39b0`）macOS ARM64、Windows x86_64、Ubuntu x86_64 全部 success；三个 job 均完成全部 blocking 步骤并上传未过期 artifacts；Ubuntu 的 Wayland compositor probe 与顶层窗口测试均成功 |
+| M5 Wayland 与总验收 | Wayland、GUI 侧兼容策略、proptest/文档收尾 | **未完成**：窗口协议探针已存在，原生编辑器渲染、事件循环与输入尚未接入 | [run #106](https://github.com/aizcutei/sunmao/actions/runs/34015968358)（`cbb39b0`）三平台 jobs success，三个 artifacts 已上传且未过期；尚未核实下载和日志 | 接入原生 Wayland 编辑器并由 hosted runner 验证 |
 
 ## 完成规则
 
 Phase 4 完成的唯一判定：同一 commit 三平台 hosted native jobs 全绿 + artifacts 可下载
 + 本文件 Milestone 矩阵 M0–M5 全部标记完成。本地结果任何情况下都不构成完成证据。
 
-### 当前判定：**Phase 4 已完成**
+### 当前判定：**Phase 4 未完成，M5 原生编辑器接线待实现**
 
 三平台 hosted 全绿 + artifacts 可下载这两条长期满足；Milestone 矩阵里
-**M0–M5 全部完成**。
+**M0–M4 已有验收记录**；M5 的窗口探针不等于原生 Wayland 编辑器。
 
 | Milestone | 验收 run |
 |---|---|
@@ -84,8 +84,9 @@ Phase 4 完成的唯一判定：同一 commit 三平台 hosted native jobs 全�
 | M4 可视化与 accessibility（含 floating editor、三平台 a11y 桥接、Windows UIA 往返） | #86 / #90 / #94 / #100 |
 | M5 GUI 兼容策略、proptest/Wayland/总验收 | #88 / #102 / #106 |
 
-run #106 满足本文件的完成规则：同一 commit 三平台 hosted native jobs 全绿，且三个
-artifacts 均可下载。Phase 4 现可标记为完成。
+run #106 的三平台 jobs 全部 success，三个 artifacts 已上传且未过期；下载尚未核实。
+这只证明当前提交通过既有测试。`Window::open_floating` 在 Linux 仍分派到 X11，
+Wayland 模块尚无编辑器 renderer/event-loop/input 接线，因此 Phase 4 不能标记完成。
 
 **两次判断被自己推翻，都记在这里而不是抹掉**：floating editor 与 accessibility
 平台桥接都曾被我判为"受阻、规模大于 M4 其余全部"，两次都是**读了函数名而没读函数**
