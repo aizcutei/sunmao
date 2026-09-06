@@ -902,3 +902,10 @@
 - Change: 新增可选 EGL 上下文，持有 Wayland 连接并清理部分初始化资源；新增真实窗口红/绿像素读回、resize、swap、teardown 测试。Ubuntu Wayland 步骤启用 OpenGL、软件渲染、180 秒超时并强制 EGL 成功标记。
 - Result: cargo metadata --locked、cargo fmt --all -- --check、git diff --check、RUSTFLAGS=-Awarnings cargo test --locked 均 exit 0；Windows target check exit 0。Linux 交叉检查因 X11 pkg-config 缺少 sysroot 失败，未编译到新增 EGL 代码。完整本地测试日志 `/tmp/sunmao-phase4-egl-tests.log`。此前 CI gate 修正已作为 `67596ef` 推送，run #108 的 Linux/macOS 已 success，Windows 尚在运行。
 - Unresolved: EGL 新代码待 hosted 编译和实际渲染验证，不能据 macOS 测试判定通过。Window::open_floating 分派、编辑器接线、事件循环与输入仍未完成。
+
+### 2026-09-06 — EGL hosted 验证通过；接入统一 GL 上下文
+
+- Command/platform: run #109 / commit `7fcd65e` 三平台 hosted；统一 GL 分派改动在 macOS ARM64 跑完整本地测试并执行 Windows target check。
+- Change: GlContext 增加 EGL 后端分派，保留原生上下文路径；Wayland 像素验收测试改为通过统一接口执行。
+- Result: [run #109](https://github.com/aizcutei/sunmao/actions/runs/34031561111) 三平台 success，Ubuntu EGL 像素、resize、swap、teardown 步骤 success，三份 artifacts 已上传且未过期（尚未下载核验）。当前分派改动 metadata、fmt、diff 检查及完整 cargo test --locked 均通过，Windows target check 通过；日志 `/tmp/sunmao-phase4-gl-dispatch-tests.log`。
+- Unresolved: 统一 GL 分派待提交及 hosted 验证；浮动窗口分派、事件循环、输入和实际编辑器接线仍需完成。

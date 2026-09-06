@@ -68,6 +68,8 @@ pub enum GlError {
     InvalidWindowHandle,
     VersionNotSupported,
     CreationFailed(platform::CreationFailedError),
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    Wayland(String),
 }
 
 impl fmt::Display for GlError {
@@ -79,8 +81,14 @@ impl fmt::Display for GlError {
 impl std::error::Error for GlError {}
 
 pub struct GlContext {
-    context: platform::GlContext,
+    context: ContextBackend,
     phantom: PhantomData<*mut ()>,
+}
+
+enum ContextBackend {
+    Native(platform::GlContext),
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    Wayland(crate::wayland::egl::Context),
 }
 
 impl GlContext {
@@ -90,7 +98,7 @@ impl GlContext {
         config: GlConfig,
     ) -> Result<GlContext, GlError> {
         platform::GlContext::create(parent, config).map(|context| GlContext {
-            context,
+            context: ContextBackend::Native(context),
             phantom: PhantomData,
         })
     }
@@ -101,30 +109,64 @@ impl GlContext {
     #[cfg(target_os = "linux")]
     pub(crate) fn new(context: platform::GlContext) -> GlContext {
         GlContext {
-            context,
+            context: ContextBackend::Native(context),
             phantom: PhantomData,
         }
     }
 
     pub unsafe fn make_current(&self) -> Result<(), GlError> {
-        self.context.make_current()
+        match &self.context {
+            ContextBackend::Native(context) => context.make_current(),
+            #[cfg(all(target_os = "linux", feature = "wayland"))]
+            ContextBackend::Wayland(context) => context.make_current().map_err(GlError::Wayland),
+        }
     }
 
     pub unsafe fn make_not_current(&self) -> Result<(), GlError> {
-        self.context.make_not_current()
+        match &self.context {
+            ContextBackend::Native(context) => context.make_not_current(),
+            #[cfg(all(target_os = "linux", feature = "wayland"))]
+            ContextBackend::Wayland(context) => {
+                context.make_not_current().map_err(GlError::Wayland)
+            }
+        }
     }
 
     pub fn get_proc_address(&self, symbol: &str) -> *const c_void {
-        self.context.get_proc_address(symbol)
+        match &self.context {
+            ContextBackend::Native(context) => context.get_proc_address(symbol),
+            #[cfg(all(target_os = "linux", feature = "wayland"))]
+            ContextBackend::Wayland(context) => context.get_proc_address(symbol),
+        }
     }
 
     pub fn swap_buffers(&self) -> Result<(), GlError> {
-        self.context.swap_buffers()
+        match &self.context {
+            ContextBackend::Native(context) => context.swap_buffers(),
+            #[cfg(all(target_os = "linux", feature = "wayland"))]
+            ContextBackend::Wayland(context) => context.swap_buffers().map_err(GlError::Wayland),
+        }
+    }
+
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    pub(crate) fn from_wayland(context: crate::wayland::egl::Context) -> Self {
+        Self {
+            context: ContextBackend::Wayland(context),
+            phantom: PhantomData,
+        }
+    }
+
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    pub(crate) fn resize_wayland(&self, width: i32, height: i32) {
+        if let ContextBackend::Wayland(context) = &self.context {
+            context.resize(width, height);
+        }
     }
 
     /// On macOS the `NSOpenGLView` needs to be resized separtely from our main view.
     #[cfg(target_os = "macos")]
     pub(crate) fn resize(&self, size: cocoa::foundation::NSSize) {
-        self.context.resize(size);
+        let ContextBackend::Native(context) = &self.context;
+        context.resize(size);
     }
 }

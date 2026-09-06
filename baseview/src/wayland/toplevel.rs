@@ -358,12 +358,15 @@ mod tests {
         };
         let context =
             super::super::egl::Context::new(&connection, &surface, 64, 48, &config).unwrap();
-        context.make_current().unwrap();
+        let context = crate::gl::GlContext::from_wayland(context);
+        unsafe {
+            context.make_current().unwrap();
+        }
         let gl =
             unsafe { glow::Context::from_loader_function(|name| context.get_proc_address(name)) };
         for (width, height, expected) in [(64, 48, [255_u8, 0, 0, 255]), (96, 72, [0, 255, 0, 255])]
         {
-            context.resize(width, height);
+            context.resize_wayland(width, height);
             // Swap once to apply the native resize before inspecting the new buffer.
             context.swap_buffers().unwrap();
             unsafe {
@@ -391,7 +394,9 @@ mod tests {
             context.swap_buffers().unwrap();
             queue.roundtrip(&mut state).unwrap();
         }
-        context.make_not_current().unwrap();
+        unsafe {
+            context.make_not_current().unwrap();
+        }
         drop(gl);
         drop(context);
         toplevel.destroy();
