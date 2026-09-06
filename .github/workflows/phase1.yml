@@ -411,10 +411,10 @@ jobs:
             sleep 0.25
           done
           if [ ! -S "$XDG_RUNTIME_DIR/wayland-ci" ]; then
-            echo "::warning title=No headless compositor::weston did not create a socket; Wayland stays unverified this run"
+            echo "::error title=No headless compositor::weston did not create the required Wayland test socket"
             sed -n '1,40p' "$RUNNER_TEMP/weston.log" || true
             kill "$weston_pid" 2>/dev/null || true
-            exit 0
+            exit 1
           fi
           echo "weston is up on wayland-ci"
           WAYLAND_DISPLAY=wayland-ci cargo test --locked -p baseview --features wayland -- --nocapture \
@@ -425,14 +425,15 @@ jobs:
             echo "::error title=Wayland probe failed::cargo test exited with $status"
             exit "$status"
           fi
-          # Non-blocking for now: this step exists to establish the testbed. It
-          # becomes blocking once a backend depends on it.
+          # The Wayland tests require a live compositor. Missing infrastructure
+          # must fail the gate instead of turning skipped tests into success.
           if grep -q "WAYLAND PROBE: connected" "$RUNNER_TEMP/wayland-probe.log"; then
             echo "Wayland testbed confirmed:"
             grep "WAYLAND GLOBAL:" "$RUNNER_TEMP/wayland-probe.log" | head -30
           else
-            echo "::warning title=Compositor not reached::the probe ran but found no compositor"
+            echo "::error title=Compositor not reached::the probe ran but found no compositor"
             grep "WAYLAND PROBE:" "$RUNNER_TEMP/wayland-probe.log" || true
+            exit 1
           fi
           # With a compositor present, a real top-level window must map. A skip
           # here would be indistinguishable from a pass, so say which happened.

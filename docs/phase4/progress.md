@@ -888,3 +888,10 @@
 - Change: `wl_shm` 文件原先全部为零，ARGB alpha 为零，现写入不透明实色像素；缓冲区 stride/size 使用 checked arithmetic 并限制到协议 i32 范围，拒绝零尺寸。
 - Result: `cargo metadata --locked`、`cargo fmt --all -- --check`、`git diff --check` 和 `RUSTFLAGS=-Awarnings cargo test --locked` 均通过（完整测试 exit 0，日志 `/tmp/sunmao-phase4-local-tests.log`）。修正 Rust 2018 下 `TryFrom` 导入与数组迭代兼容性。新增尺寸边界测试为 Linux-only，尚未执行；Docker 应用启动后 daemon 仍不可连接。
 - Unresolved: 本改动未提交；仍需 Linux 测试、完整本地 gates 和 hosted 验证。原生编辑器 renderer/event-loop/input 接线仍未完成。
+
+### 2026-09-06 — run #107 通过；堵住 Wayland CI 环境缺失时误报成功的路径
+
+- Command/platform: commit `4ac29c7` 的 GitHub Actions run #107；本次 workflow 修正在 macOS ARM64 执行本地 gates。
+- Change: Weston 未创建 socket、探针未连接 compositor 两种情况改为 error 并 exit 1，避免缺失测试环境仍得到绿色结果。
+- Result: [run #107](https://github.com/aizcutei/sunmao/actions/runs/34027056116) 三平台 job success，Linux Wayland 步骤 success；三个 artifacts 已上传且未过期（仅核实 API，尚未下载验证）。本次修正的 cargo metadata --locked、cargo fmt --all -- --check、git diff --check、RUSTFLAGS=-Awarnings cargo test --locked 均 exit 0，完整测试日志为 `/tmp/sunmao-phase4-ci-gate-tests.log`。
+- Unresolved: 本次 workflow 修正待提交及 hosted 验证。原生 Wayland 编辑器的 EGL、窗口分派、事件循环与输入尚未实现；M5 不标记完成。
