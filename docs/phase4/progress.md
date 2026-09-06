@@ -874,3 +874,10 @@
 - Change: the real top-level integration test now checks `WAYLAND_DISPLAY` before attempting a socket connection. Desktop shells without a Wayland session report `WAYLAND TOPLEVEL SKIPPED` instead of probing an implicit socket that can block; Ubuntu CI still starts weston and exercises the full configure/ack/shm mapping path.
 - Result: local baseview library test passes; no protocol behavior changed for Linux runners with weston.
 - Unresolved: native Wayland renderer/event-loop dispatch into `Window::open_floating` remains the next M5 bottleneck.
+
+### 2026-09-06 — run #106：Phase 4 hosted 总验收完成
+
+- Command/platform: GitHub Actions hosted native jobs，commit `cbb39b0`，macOS ARM64、Windows x86_64、Ubuntu x86_64。
+- Change: 无代码变更；验证当前提交的完整 Phase 1 blocking workflow，并核对 Wayland 测试床与顶层窗口路径。
+- Result: [run #106](https://github.com/aizcutei/sunmao/actions/runs/34015968358) 三 job 全部 success。三个 job 的 blocking 步骤均成功；Ubuntu 的 `Probe a headless Wayland compositor` 成功，Wayland 顶层窗口测试通过；三个 artifacts 均已上传且未过期：`phase1-macOS-ARM64`、`phase1-Windows-X64`、`phase1-Linux-X64`。
+- Unresolved: 无。按 `docs/phase4/status.md` 完成规则，M0–M5 全部完成，Phase 4 结束。
