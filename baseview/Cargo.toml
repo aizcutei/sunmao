@@ -26,7 +26,7 @@ accessibility = ["dep:accesskit", "dep:accesskit_windows", "dep:accesskit_macos"
 # Native Wayland. Off by default and Linux-only: the X11 backend already works
 # on Wayland desktops through XWayland, so this is an improvement (no X server,
 # proper per-output scaling) rather than a prerequisite.
-wayland = ["dep:wayland-client", "dep:wayland-protocols"]
+wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:wayland-backend", "dep:wayland-sys", "dep:khronos-egl"]
 
 [dependencies]
 keyboard-types = { version = "0.6.1", default-features = false }
@@ -42,6 +42,9 @@ gtk = { version = "0.18", features = ["unsafe-assume-initialized"], optional = t
 gdk = { version = "0.18", features = ["unsafe-assume-initialized"], optional = true }
 accesskit_unix = { version = "0.23", optional = true }
 wayland-client = { version = "0.31", optional = true }
+wayland-backend = { version = "0.3", features = ["client_system", "dlopen"], optional = true }
+wayland-sys = { version = "0.31", features = ["egl", "dlopen"], optional = true }
+khronos-egl = { version = "6", features = ["dynamic"], optional = true }
 wayland-protocols = { version = "0.32", features = ["client", "staging"], optional = true }
 
 [target.'cfg(target_os="windows")'.dependencies]
@@ -57,6 +60,7 @@ uuid = { version = "0.8", features = ["v4"] }
 accesskit_macos = { version = "0.27", optional = true }
 
 [dev-dependencies]
+glow = "0.16"
 rtrb = "0.2"
 softbuffer = "0.4.8"
 

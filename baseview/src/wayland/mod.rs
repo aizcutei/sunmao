@@ -15,3 +15,6 @@
 pub mod probe;
 #[cfg(feature = "wayland")]
 pub mod toplevel;
+
+#[cfg(feature = "opengl")]
+pub(crate) mod egl;

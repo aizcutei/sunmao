@@ -401,7 +401,7 @@ jobs:
           # real Wayland session apart from code that merely compiled.
           export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$RUNNER_TEMP/sunmao-xdg}"
           mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
-          weston --backend=headless-backend.so --socket=wayland-ci --idle-time=0 \
+          weston --backend=headless-backend.so --use-gl --socket=wayland-ci --idle-time=0 \
             >"$RUNNER_TEMP/weston.log" 2>&1 &
           weston_pid=$!
           # Wait for the socket rather than sleeping a fixed amount: weston's
@@ -417,13 +417,17 @@ jobs:
             exit 1
           fi
           echo "weston is up on wayland-ci"
-          WAYLAND_DISPLAY=wayland-ci cargo test --locked -p baseview --features wayland -- --nocapture \
+          WAYLAND_DISPLAY=wayland-ci LIBGL_ALWAYS_SOFTWARE=1 timeout 180s cargo test --locked -p baseview --features wayland,opengl -- --nocapture \
             2>&1 | tee "$RUNNER_TEMP/wayland-probe.log"
           status=${PIPESTATUS[0]}
           kill "$weston_pid" 2>/dev/null || true
           if [ "$status" -ne 0 ]; then
             echo "::error title=Wayland probe failed::cargo test exited with $status"
             exit "$status"
+          fi
+          if ! grep -q "WAYLAND EGL VERIFIED" "$RUNNER_TEMP/wayland-probe.log"; then
+            echo "::error::Wayland EGL rendering was not verified"
+            exit 1
           fi
           # The Wayland tests require a live compositor. Missing infrastructure
           # must fail the gate instead of turning skipped tests into success.

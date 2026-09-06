@@ -323,6 +323,84 @@ fn tempfile_of(size: usize) -> std::io::Result<std::fs::File> {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "opengl")]
+    #[test]
+    fn egl_renders_and_resizes_a_wayland_surface() {
+        use glow::HasContext;
+        if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+            println!("WAYLAND EGL SKIPPED: WAYLAND_DISPLAY is unset");
+            return;
+        }
+        let connection = Connection::connect_to_env().expect("Wayland connection");
+        let mut queue = connection.new_event_queue();
+        let handle = queue.handle();
+        connection.display().get_registry(&handle, ());
+        let mut state = State::default();
+        queue.roundtrip(&mut state).unwrap();
+        let surface = state
+            .compositor
+            .as_ref()
+            .unwrap()
+            .create_surface(&handle, ());
+        let shell_surface = state
+            .wm_base
+            .as_ref()
+            .unwrap()
+            .get_xdg_surface(&surface, &handle, ());
+        let toplevel = shell_surface.get_toplevel(&handle, ());
+        toplevel.set_title("SunMao EGL acceptance".into());
+        surface.commit();
+        queue.roundtrip(&mut state).unwrap();
+        assert!(state.progress.configured);
+        let config = crate::gl::GlConfig {
+            srgb: false,
+            ..Default::default()
+        };
+        let context =
+            super::super::egl::Context::new(&connection, &surface, 64, 48, &config).unwrap();
+        context.make_current().unwrap();
+        let gl =
+            unsafe { glow::Context::from_loader_function(|name| context.get_proc_address(name)) };
+        for (width, height, expected) in [(64, 48, [255_u8, 0, 0, 255]), (96, 72, [0, 255, 0, 255])]
+        {
+            context.resize(width, height);
+            // Swap once to apply the native resize before inspecting the new buffer.
+            context.swap_buffers().unwrap();
+            unsafe {
+                gl.viewport(0, 0, width, height);
+                gl.clear_color(
+                    expected[0] as f32 / 255.0,
+                    expected[1] as f32 / 255.0,
+                    0.0,
+                    1.0,
+                );
+                gl.clear(glow::COLOR_BUFFER_BIT);
+                let mut pixel = [0_u8; 4];
+                gl.read_pixels(
+                    width - 1,
+                    height - 1,
+                    1,
+                    1,
+                    glow::RGBA,
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelPackData::Slice(Some(&mut pixel)),
+                );
+                assert_eq!(gl.get_error(), glow::NO_ERROR);
+                assert_eq!(pixel, expected, "rendered pixel after resize");
+            }
+            context.swap_buffers().unwrap();
+            queue.roundtrip(&mut state).unwrap();
+        }
+        context.make_not_current().unwrap();
+        drop(gl);
+        drop(context);
+        toplevel.destroy();
+        shell_surface.destroy();
+        surface.destroy();
+        queue.roundtrip(&mut state).unwrap();
+        println!("WAYLAND EGL VERIFIED: pixels, resize, swap and teardown");
+    }
+
     #[test]
     fn shm_layout_rejects_zero_and_overflowing_dimensions() {
         assert_eq!(buffer_layout(320, 180).unwrap(), (1280, 230400));

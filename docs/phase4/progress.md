@@ -895,3 +895,10 @@
 - Change: Weston 未创建 socket、探针未连接 compositor 两种情况改为 error 并 exit 1，避免缺失测试环境仍得到绿色结果。
 - Result: [run #107](https://github.com/aizcutei/sunmao/actions/runs/34027056116) 三平台 job success，Linux Wayland 步骤 success；三个 artifacts 已上传且未过期（仅核实 API，尚未下载验证）。本次修正的 cargo metadata --locked、cargo fmt --all -- --check、git diff --check、RUSTFLAGS=-Awarnings cargo test --locked 均 exit 0，完整测试日志为 `/tmp/sunmao-phase4-ci-gate-tests.log`。
 - Unresolved: 本次 workflow 修正待提交及 hosted 验证。原生 Wayland 编辑器的 EGL、窗口分派、事件循环与输入尚未实现；M5 不标记完成。
+
+### 2026-09-06 — Wayland EGL 上下文与真实像素测试
+
+- Command/platform: macOS ARM64 完整本地 gates；Windows MSVC target check；Linux target check 尝试。
+- Change: 新增可选 EGL 上下文，持有 Wayland 连接并清理部分初始化资源；新增真实窗口红/绿像素读回、resize、swap、teardown 测试。Ubuntu Wayland 步骤启用 OpenGL、软件渲染、180 秒超时并强制 EGL 成功标记。
+- Result: cargo metadata --locked、cargo fmt --all -- --check、git diff --check、RUSTFLAGS=-Awarnings cargo test --locked 均 exit 0；Windows target check exit 0。Linux 交叉检查因 X11 pkg-config 缺少 sysroot 失败，未编译到新增 EGL 代码。完整本地测试日志 `/tmp/sunmao-phase4-egl-tests.log`。此前 CI gate 修正已作为 `67596ef` 推送，run #108 的 Linux/macOS 已 success，Windows 尚在运行。
+- Unresolved: EGL 新代码待 hosted 编译和实际渲染验证，不能据 macOS 测试判定通过。Window::open_floating 分派、编辑器接线、事件循环与输入仍未完成。
