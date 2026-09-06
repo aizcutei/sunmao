@@ -923,3 +923,10 @@
 - Change: 新增基于 poll 的事件分派和带期限的同步握手；probe、顶层窗口和 EGL 验收使用五秒握手期限；新增 Unix socket 无响应对端测试。
 - Result: metadata、fmt、diff、完整 cargo test --locked 和 Windows target check 均通过；日志 `/tmp/sunmao-dispatch-tests.log`。Linux 新路径仍待 hosted 验证。
 - Unresolved: 本次超时改动待 hosted 验证；原生浮动窗口分派、编辑器事件循环与输入接线仍未完成。
+
+### 2026-09-06 — run #111 通过；补齐遗漏的顶层握手期限
+
+- Command/platform: GitHub Actions run #111 / `51f7103`；macOS ARM64 本地完整 gates 和 Windows MSVC target check。
+- Change: 源码复核发现上一条记录不准确：probe 已使用有期限握手，但 toplevel 与 EGL 测试仍保留 7 处 queue.roundtrip。现全部改为五秒期限的 dispatch::roundtrip。
+- Result: run #111 三平台 jobs success，三个 artifacts 已上传且未过期（本轮仅核实 API，未下载）；当前修正 metadata、fmt、diff、完整 RUSTFLAGS=-Awarnings cargo test --locked、Windows target check 均 exit 0。测试日志 /tmp/sunmao-wayland-timeout-tests.log。
+- Unresolved: 当前修正待提交及 hosted 验证；原生浮动编辑器窗口分派、事件循环与输入仍未接入，M5 未完成。
