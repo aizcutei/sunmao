@@ -867,3 +867,10 @@
   macOS 上不编译）；`cargo metadata --locked` exit 0；fmt / diff 全过。
 - Unresolved: 下一轮看 Ubuntu 日志里是 `WAYLAND TOPLEVEL VERIFIED` 还是卡在哪一段。
   之后是 EGL/GL 接入与 `open_floating` 的分派（无 `wl_seat` 的 runner 上输入无法验收）。
+
+### 2026-09-06 — Wayland probe skips cleanly outside a Wayland session
+
+- Command/platform: macOS ARM64, `cargo test --locked -p baseview --features wayland --lib`.
+- Change: the real top-level integration test now checks `WAYLAND_DISPLAY` before attempting a socket connection. Desktop shells without a Wayland session report `WAYLAND TOPLEVEL SKIPPED` instead of probing an implicit socket that can block; Ubuntu CI still starts weston and exercises the full configure/ack/shm mapping path.
+- Result: local baseview library test passes; no protocol behavior changed for Linux runners with weston.
+- Unresolved: native Wayland renderer/event-loop dispatch into `Window::open_floating` remains the next M5 bottleneck.

@@ -303,6 +303,14 @@ mod tests {
     /// pass.
     #[test]
     fn a_toplevel_window_reaches_the_compositor() {
+        // `connect_to_env` may consult the compositor socket selected by the
+        // desktop environment.  On a normal X11/macOS development shell
+        // there is no Wayland session at all; avoid probing an implicit
+        // socket in that case, which can block while the socket is absent.
+        if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+            println!("WAYLAND TOPLEVEL SKIPPED: WAYLAND_DISPLAY is unset");
+            return;
+        }
         match open_toplevel("SunMao Wayland", 320, 180) {
             Ok(progress) => {
                 println!("WAYLAND TOPLEVEL: {progress:?}");
