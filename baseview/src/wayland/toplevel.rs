@@ -11,6 +11,7 @@
 //! `wl_shm`, which is enough to prove the protocol handshake end to end and is
 //! testable on a headless compositor with no GPU.
 
+use std::convert::TryFrom;
 use std::os::fd::AsFd;
 
 use wayland_client::protocol::{
@@ -243,10 +244,23 @@ fn solid_buffer(
     width: u32,
     height: u32,
 ) -> Result<wl_buffer::WlBuffer, ToplevelError> {
-    let stride = width * 4;
-    let size = (stride * height) as usize;
+    use std::io::Write;
+    let (stride, size) = buffer_layout(width, height)?;
 
-    let file = tempfile_of(size).map_err(|error| ToplevelError::Buffer(error.to_string()))?;
+    let mut file =
+        tempfile_of(size as usize).map_err(|error| ToplevelError::Buffer(error.to_string()))?;
+    // ARGB is a native-endian packed integer; alpha must be opaque.
+    let pixel = 0xff305060_u32.to_ne_bytes();
+    let row: Vec<u8> = pixel
+        .iter()
+        .copied()
+        .cycle()
+        .take(stride as usize)
+        .collect();
+    for _ in 0..height {
+        file.write_all(&row)
+            .map_err(|error| ToplevelError::Buffer(error.to_string()))?;
+    }
     let pool = shm.create_pool(file.as_fd(), size as i32, handle, ());
     let buffer = pool.create_buffer(
         0,
@@ -261,6 +275,19 @@ fn solid_buffer(
     // as soon as the buffer exists.
     pool.destroy();
     Ok(buffer)
+}
+
+fn buffer_layout(width: u32, height: u32) -> Result<(i32, i32), ToplevelError> {
+    let invalid = || ToplevelError::Buffer("dimensions exceed the wl_shm signed size range".into());
+    if width == 0 || height == 0 {
+        return Err(invalid());
+    }
+    let stride = width.checked_mul(4).ok_or_else(invalid)?;
+    let size = stride.checked_mul(height).ok_or_else(invalid)?;
+    Ok((
+        i32::try_from(stride).map_err(|_| invalid())?,
+        i32::try_from(size).map_err(|_| invalid())?,
+    ))
 }
 
 /// An anonymous, unlinked file of exactly `size` bytes to share with the
@@ -295,6 +322,14 @@ fn tempfile_of(size: usize) -> std::io::Result<std::fs::File> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shm_layout_rejects_zero_and_overflowing_dimensions() {
+        assert_eq!(buffer_layout(320, 180).unwrap(), (1280, 230400));
+        for (width, height) in [(0, 1), (1, 0), (u32::MAX, 1), (1, u32::MAX), (32768, 32768)] {
+            assert!(buffer_layout(width, height).is_err());
+        }
+    }
 
     /// Open a real window on whatever compositor is present.
     ///

@@ -881,3 +881,10 @@
 - Change: 无代码变更；验证当前提交的完整 Phase 1 blocking workflow，并核对 Wayland 测试床与顶层窗口路径。
 - Result: [run #106](https://github.com/aizcutei/sunmao/actions/runs/34015968358) 三 job 全部 success。三个 job 的 blocking 步骤均成功；Ubuntu 的 `Probe a headless Wayland compositor` 成功，Wayland 顶层窗口测试通过；三个 artifacts 均已上传且未过期：`phase1-macOS-ARM64`、`phase1-Windows-X64`、`phase1-Linux-X64`。
 - Unresolved: 撤回本轮最初的总验收完成判断。Wayland 探针没有接入 `Window::open_floating`、编辑器 renderer/event-loop/input；M5 尚未完成。API 只核实了 artifacts 存在且未过期，下载及测试日志仍需核实。不能用当前 CI 全绿替代缺失实现的验收。
+
+### 2026-09-06 — 修正 Wayland 探针透明缓冲区
+
+- Command/platform: macOS 上源码检查；Docker daemon 未运行，尚无本地 Linux 执行结果。
+- Change: `wl_shm` 文件原先全部为零，ARGB alpha 为零，现写入不透明实色像素；缓冲区 stride/size 使用 checked arithmetic 并限制到协议 i32 范围，拒绝零尺寸。
+- Result: `cargo metadata --locked`、`cargo fmt --all -- --check`、`git diff --check` 和 `RUSTFLAGS=-Awarnings cargo test --locked` 均通过（完整测试 exit 0，日志 `/tmp/sunmao-phase4-local-tests.log`）。修正 Rust 2018 下 `TryFrom` 导入与数组迭代兼容性。新增尺寸边界测试为 Linux-only，尚未执行；Docker 应用启动后 daemon 仍不可连接。
+- Unresolved: 本改动未提交；仍需 Linux 测试、完整本地 gates 和 hosted 验证。原生编辑器 renderer/event-loop/input 接线仍未完成。
