@@ -3922,6 +3922,36 @@ mod tests {
         assert!(!wrapper.gui_floating);
     }
 
+    /// What a Wayland host is told.
+    ///
+    /// Upstream CLAP says Wayland cannot embed and a plugin should use a
+    /// floating window there. SunMao's answer has to be exact in both
+    /// directions, because a host acts on it: embedded Wayland is refused
+    /// (baseview has no Wayland backend, so the honest answer is no), while X11
+    /// is accepted and is what a Wayland desktop actually gets through
+    /// XWayland.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn embedded_wayland_is_refused_while_x11_is_accepted() {
+        let mut host_state = NotificationHostState::default();
+        let raw_host = notification_host(&mut host_state);
+        let host = unsafe { HostHandle::from_raw(&raw_host) };
+        let mut wrapper = <SunmaoClapWrapper<FloatingViewPlugin> as Plugin>::new(host);
+
+        assert!(
+            !wrapper.is_api_supported(GuiApi::Wayland, false),
+            "claimed embedded Wayland support that baseview cannot deliver"
+        );
+        assert!(!wrapper.gui_create(GuiApi::Wayland, false));
+        assert!(wrapper.is_api_supported(GuiApi::X11, false));
+
+        // Floating deliberately ignores the windowing API: CLAP lets the host
+        // pass a null one, because the plugin owns the window and picks its own
+        // toolkit. On a Wayland desktop that window is an X11 one under
+        // XWayland — accepted here, and recorded in semantics.md.
+        assert!(wrapper.is_api_supported(GuiApi::Wayland, true));
+    }
+
     /// Embedding still works on a floating-capable view: supporting one mode
     /// must not disable the other.
     #[test]

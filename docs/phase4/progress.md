@@ -785,3 +785,23 @@
   可访问性这种"输出给别的进程看"的能力，只有拿消费方的真实 API 去问才算验过。
 - Unresolved: macOS/Linux 仍只有编译级证据（AXUIElement 受 TCC、AT-SPI 需要总线）；
   三平台共同的降级是 action 未接（能读不能改）。Phase 4 只剩 **Wayland 原生** 一项。
+
+### 2026-09-06 — Wayland：把"我们对 Wayland 宿主怎么回答"钉死，并如实划定未做的部分
+
+- Command/platform: macOS ARM64（该测试 Linux only，靠 CI 执行）。
+- Change: 新增 `embedded_wayland_is_refused_while_x11_is_accepted`（Linux only）。
+  这一条要精确，因为**宿主会照着答案行动**：
+  - `is_api_supported(Wayland, is_floating=false)` → **false**，`gui_create` 同样拒绝。
+    baseview 的 Linux 后端 X11 独占，声称支持而后交不出窗口是格式契约明令禁止的。
+  - `is_api_supported(X11, false)` → true，**这正是 Wayland 桌面经 XWayland 实际走的那条**。
+  - `is_api_supported(Wayland, is_floating=true)` → true，**有意如此**：CLAP 允许宿主为
+    浮动模式传 null API，因为窗口由插件自己拥有、自选工具包；在 Wayland 桌面上那扇窗口
+    是 XWayland 下的 X11 窗口。这一点连同其余差异一并写进 semantics.md。
+- Result: macOS 上 `sunmao_backend_clap` 38 + 1 + 1 测试通过；新测试由 Linux job 执行。
+- **Wayland 原生仍未做，且这次的判断是查过的**（吸取前两次"读函数名就下结论"的教训）：
+  `baseview/src/lib.rs` 只有 `mod x11`，全树零 Wayland 引用；不存在可以拆出来复用的结构
+  （不像 floating 那次——建窗代码本来就在，只是和事件循环缠在一起）。
+  真正交付 = 一个完整的 baseview Wayland 后端（`wl_surface`/`xdg_shell`/EGL/
+  `wl_seat`+xkbcommon/`wl_output` 缩放）＋ CI 装无头 compositor（Ubuntu job 现跑 Xvfb ＝ X11），
+  **且只有 CLAP 受益**（VST3 无 Wayland 平台类型）。这是独立立项的规模。
+- Unresolved: Phase 4 的 M0–M4 与 M5 除 Wayland 外全部完成并三平台验收；**只剩 Wayland 一项**。
