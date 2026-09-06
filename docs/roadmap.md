@@ -27,30 +27,23 @@ API 与 state 的兼容策略见 [`docs/phase3/compatibility.md`](phase3/compati
 验收状态与证据见 `docs/phase3/status.md`。"新插件样板 ≤50 行"已达标（effect 42 行、
 instrument 49 行，由 `sunmao/tests/template_size.rs` 机械强制）。
 
-## Phase 4：GUI 组件库与平台完善（M0–M3 完成；M4/M5 部分完成，两项受阻）
+## Phase 4：GUI 组件库与平台完善（M0–M4 完成；M5 除 Wayland 外完成）
 
 完善布局、主题、text rendering、accessibility、clipboard、IME/国际键盘、cursor/focus、scale negotiation、floating CLAP editor；明确 renderer 资源和线程归属，在 X11 生命周期稳定后加入 Wayland。
 
-进展：**M0–M3 各自在独立 commit 上取得三平台 hosted 绿**（run #73 / #75 / #77 / #84）——
-renderer 归属文档与两格式 scale/DPI 协商、`Column`/`Row` 声明式布局与六个控件与
-`ParamBinder` 双向绑定与主题 token、字体栅格化/度量与 clipboard 与 IME/国际键盘与
-焦点模型。**M4 的可视化与 accessibility 树**（无锁 `VizChannel` 三缓冲、
-`SpectrumAnalyzer`、renderer 无关的 accessibility 描述树）已由
-[run #86](https://github.com/aizcutei/sunmao/actions/runs/33980911401) 三平台绿验收；
-**M5 的 GUI 兼容策略**（`docs/phase3/compatibility.md` §2bis）与 proptest/文档收尾亦已落地。
+进展：**M0–M4 各自取得三平台 hosted 绿**（run #73 / #75 / #77 / #84 / #100），
+M5 的 GUI 兼容策略与文档收尾由 #88 / #102 验收。已落地：renderer 归属文档与两格式
+scale/DPI 协商、`Column`/`Row` 声明式布局与六控件与 `ParamBinder` 双向绑定与主题 token、
+字体栅格化/度量与 clipboard 与 IME/国际键盘与焦点模型、无锁 `VizChannel` 与
+`SpectrumAnalyzer`、**floating CLAP editor**（新增 `baseview::Window::open_floating`，
+三平台各一条实现）、**accessibility 三平台桥接**（经 AccessKit，Windows 侧有真实
+UI Automation 往返断言：`gain`→Slider、`mode`→ComboBox、`bypass`→CheckBox）、
+`docs/phase3/compatibility.md` §2bis GUI 兼容策略。
 
-**两项未交付，都不是工期问题，需单独立项：**
-
-1. **floating CLAP editor 与 Wayland 卡在同一块 baseview 工作上。** vendored baseview 只有
-   `open_parented` 与阻塞式 `open_blocking`，没有非阻塞顶层窗口模式；且 Linux 后端 X11 独占。
-   而 CLAP 上游明确说 Wayland **不支持嵌入、必须用浮动窗口**，VST3 则**根本没有 Wayland
-   平台类型**（只有 `X11EmbedWindowID`，故 VST3 在 Wayland 上一律走 XWayland）。
-   即：Wayland 原生 = baseview Wayland 后端 + 非阻塞顶层窗口，且只有 CLAP 能受益。
-2. **accessibility 的三份 OS 桥接未做。** 框架侧的描述树已完成并测试，但发布给
-   UIA / NSAccessibility / AT-SPI 是三份互不复用的原生实现；**runner 也无法验收**——
-   两个插件格式都没有 accessibility 通道，它走 OS API。
-
-依据与文件行号见 `docs/phase4/status.md` 的「M4 受阻项」与「M5 Wayland 受阻链」。
+**唯一未交付：Wayland 原生。** baseview 没有 Wayland 后端（`src/lib.rs` 只有 `mod x11`，
+全树零 Wayland 引用），交付 = 一个完整后端（`wl_surface`/`xdg_shell`/EGL/`wl_seat`+
+xkbcommon/`wl_output`）＋ CI 装无头 compositor，且**只有 CLAP 受益**（VST3 无 Wayland
+平台类型，一律走 XWayland）。现状不是"不能在 Wayland 上用"：X11 路径经 XWayland 照常工作。
 
 ## Phase 5：完整测试宿主与外部兼容
 
