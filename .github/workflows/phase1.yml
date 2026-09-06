@@ -434,6 +434,16 @@ jobs:
             echo "::warning title=Compositor not reached::the probe ran but found no compositor"
             grep "WAYLAND PROBE:" "$RUNNER_TEMP/wayland-probe.log" || true
           fi
+          # With a compositor present, a real top-level window must map. A skip
+          # here would be indistinguishable from a pass, so say which happened.
+          if grep -q "WAYLAND PROBE: connected" "$RUNNER_TEMP/wayland-probe.log"; then
+            if grep -q "WAYLAND TOPLEVEL VERIFIED" "$RUNNER_TEMP/wayland-probe.log"; then
+              echo "Wayland top-level window mapped on the compositor"
+            else
+              echo "::error title=Wayland window did not map::a compositor was present but no window reached it: $(grep -o 'WAYLAND TOPLEVEL[^\"]*' "$RUNNER_TEMP/wayland-probe.log" | head -1)"
+              exit 1
+            fi
+          fi
 
       - name: Test macOS system-capture linkage (non-blocking follow-up)
         if: runner.os == 'macOS'

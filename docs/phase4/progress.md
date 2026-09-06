@@ -835,3 +835,35 @@
 - Unresolved: 下一轮看 Ubuntu 日志——weston 能否在 runner 上起来、探针报告哪些 global。
   **若 `xdg_wm_base` 在场，后端就有地方验；若 weston 起不来，则先解决那个**，
   在此之前不写后端代码。
+
+### 2026-09-06 — 测试床确认可用（run #103），随即写真实的 Wayland 顶层窗口
+
+- Command/platform: Ubuntu hosted job 给出测试床的确凿读数：
+  ```
+  weston is up on wayland-ci
+  WAYLAND PROBE: connected, 19 globals, window=true input=false
+  ```
+  `wl_compositor` / `xdg_wm_base` / `wl_shm` / `wl_output` / `wp_viewporter` 均在场，
+  故 `can_open_a_window() == true`。**`wl_seat` 不在场**——无头 weston 没有输入设备，
+  于是 `input=false`。这是个具体且重要的事实：**这台 runner 能验窗口创建，验不了输入**。
+  正因如此才先建测试床——这类结论只能从真机得到，猜不出来。
+- Change: `baseview::wayland::toplevel` —— 真实的 `wl_surface` + `xdg_surface` +
+  `xdg_toplevel` 握手。
+  - **只有顶层这一条路径，且这不是偷工减料**：Wayland 没有 XEmbed 等价物，CLAP 上游
+    原文让用浮动窗口，VST3 连 Wayland 平台类型都没有。嵌入式编辑器继续走 X11 后端
+    （Wayland 桌面上经 XWayland），这里服务浮动那一路——而 `open_floating` 这个抽象
+    本 phase 已经有了。
+  - **必须应答 `xdg_wm_base::Ping`**，否则合成器会判定客户端无响应并可能杀掉它。
+  - 握手不是"一次调用就有窗口"：先 commit 求 configure，收到 `xdg_surface::configure`
+    后 **ack**，才能 attach。`ToplevelProgress` 逐段记录走到哪一步，**失败时能说出
+    卡在哪**，而不是只报"没有窗口"。
+  - 缓冲区走 `wl_shm` 而非 EGL：**无头合成器没有 GPU**，shm 让协议路径在这台 runner 上
+    可验；EGL/GL 接入是下一步。
+  - `is_mapped()` 要求三段全过——configure 了但没 attach 是一扇没有内容的窗口，
+    合成器什么都不显示，报"已映射"是撒谎。
+  - CI 断言 `WAYLAND TOPLEVEL VERIFIED`：**有合成器却没映射出窗口就 `exit 1`**。
+    跳过不能伪装成通过（UIA 那轮的教训）。
+- Result: 默认 `cargo test --locked` exit 0，**130 套件 / 662 测试**（Wayland 代码在
+  macOS 上不编译）；`cargo metadata --locked` exit 0；fmt / diff 全过。
+- Unresolved: 下一轮看 Ubuntu 日志里是 `WAYLAND TOPLEVEL VERIFIED` 还是卡在哪一段。
+  之后是 EGL/GL 接入与 `open_floating` 的分派（无 `wl_seat` 的 runner 上输入无法验收）。

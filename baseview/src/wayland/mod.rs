@@ -13,3 +13,5 @@
 
 #[cfg(feature = "wayland")]
 pub mod probe;
+#[cfg(feature = "wayland")]
+pub mod toplevel;
