@@ -324,7 +324,7 @@ mod tests {
                 println!("WAYLAND TOPLEVEL VERIFIED: window mapped on the compositor");
             }
             Err(error) => {
-                println!("WAYLAND TOPLEVEL SKIPPED: {error}");
+                panic!("WAYLAND TOPLEVEL FAILED: {error}");
             }
         }
     }
