@@ -763,3 +763,25 @@
   fmt / diff 全过。
 - Unresolved: 下一轮再看 `UIA VERIFIED`。若仍失败，下一个怀疑点是 UIA 对无名 pane 的
   过滤，或适配器需要 `update_if_active` 先跑过一帧。
+
+### 2026-09-06 — run #100：UIA 往返真通了，M4 accessibility 收口
+
+- Command/platform: push `c1fc054` → [run #100](https://github.com/aizcutei/sunmao/actions/runs/33999399095)，
+  三平台 success、每 job 27 步零非成功、artifacts 3 份可下载。
+- Evidence/artifact: **Windows 日志里的真实往返**（不是"编译通过"）：
+  ```
+  UIA VERIFIED: slider + combo box + check box among 11 elements
+  UIA element: type=50026 name="SunMao Widgets GL"   ← Group（我们的根）
+  UIA element: type=50015 name="gain"                ← Slider
+  UIA element: type=50003 name="mode"                ← ComboBox
+  UIA element: type=50002 name="bypass"              ← CheckBox
+  ```
+  对照修好之前：同一查询只返回宿主窗口自己的 TitleBar/MenuBar/Minimize/Maximize/Close，
+  以及一个名字取自窗口标题的默认 HWND pane。
+- Result: 三平台绿；默认 `cargo test --locked` 130 套件 / 662 测试；
+  feature-on 套件三平台各自通过。
+- **本轮最该记住的**：这条断言从写下到通过一共暴露了 **2 个真缺陷**，
+  而它们**在三平台编译全绿、全部单测与 proptest 全绿的前提下依然存在**。
+  可访问性这种"输出给别的进程看"的能力，只有拿消费方的真实 API 去问才算验过。
+- Unresolved: macOS/Linux 仍只有编译级证据（AXUIElement 受 TCC、AT-SPI 需要总线）；
+  三平台共同的降级是 action 未接（能读不能改）。Phase 4 只剩 **Wayland 原生** 一项。

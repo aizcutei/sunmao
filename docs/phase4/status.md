@@ -199,13 +199,33 @@ AccessKit 明确允许的（只要树在下一次刷新前送达，而那正是�
 **三平台的共同降级**：action 未接——屏幕阅读器能读、不能改。`ActionHandler` 如实
 什么都不做（trait 要求不支持的 action 必须无动作），这样只读支持不必等 action 管线。
 
-**验收现状**：[run #94](https://github.com/aizcutei/sunmao/actions/runs/33994329903)
-（commit `fd81437`）三平台 success、27 步零非成功。已下载三平台日志核实**每个原生适配器
-都在自己的平台上真的被编译**：macOS `accesskit_macos`、Linux `accesskit_unix` +
-`accesskit_atspi_common`、Windows `accesskit_windows`，三平台零 FAILED 套件。
+**验收：[run #100](https://github.com/aizcutei/sunmao/actions/runs/33999399095)
+（commit `c1fc054`）三平台 success、27 步零非成功、artifacts 3 份可下载。**
 
-**但"编译通过"不等于"屏幕阅读器真能读到"**。下一步是宿主侧运行时断言：
-Windows 优先（UIA 无权限门槛，而 macOS 的 AXUIElement 在 CI 上受 TCC 限制）。
+证据分两层：
+1. **每个原生适配器都在自己的平台上被编译**（run #94 起核实）：macOS `accesskit_macos`、
+   Linux `accesskit_unix` + `accesskit_atspi_common`、Windows `accesskit_windows`。
+2. **Windows 上有真实的往返断言**：测试自建宿主窗口、嵌入编辑器，然后用**屏幕阅读器
+   所用的同一套 API** 去问里面有什么。日志逐条为证：
+
+   ```
+   UIA VERIFIED: slider + combo box + check box among 11 elements
+   UIA element: type=50026 name="SunMao Widgets GL"   ← Group（我们的根）
+   UIA element: type=50015 name="gain"                ← Slider
+   UIA element: type=50003 name="mode"                ← ComboBox
+   UIA element: type=50002 name="bypass"              ← CheckBox
+   ```
+
+**这条断言抓出了两个真缺陷，两个都不是编译错误、也不是任何单测能看见的**
+（详见 progress.md）：
+- 适配器**懒创建**——`accesskit_windows::Adapter::new` 的文档明写不得在处理
+  `WM_GETOBJECT` 期间调用，后果正是"辅助技术认为该窗口不原生支持 UIA"。
+- Windows 上跑的是 **WGPU 回退**（GL 在该 runner 初始化失败），而我只在 `GlHandler` 上
+  实现了钩子，回退路径拿的是默认 `None`，整扇窗口静默失去可访问性。
+
+在这两处修好之前，三平台编译全绿、全部单测与 proptest 全绿，而真实 UIA 客户端看到的
+仍然是一个不透明矩形。**macOS/Linux 侧目前只有编译级证据**（AXUIElement 在 CI 上受 TCC
+限制，AT-SPI 需要 runner 未运行的总线），这一点如实标注。
 
 ## M5 Wayland：受阻链已缩短为一条
 
