@@ -7,6 +7,11 @@
 //! code.
 
 use std::fmt;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::time::Duration;
 
 use wayland_client::protocol::wl_registry;
 use wayland_client::{Connection, Dispatch, QueueHandle};
@@ -64,6 +69,21 @@ struct RegistryCollector {
     capabilities: WaylandCapabilities,
 }
 
+impl Dispatch<wayland_client::protocol::wl_callback::WlCallback, Arc<AtomicBool>>
+    for RegistryCollector
+{
+    fn event(
+        _: &mut Self,
+        _: &wayland_client::protocol::wl_callback::WlCallback,
+        _: wayland_client::protocol::wl_callback::Event,
+        done: &Arc<AtomicBool>,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        done.store(true, Ordering::Release);
+    }
+}
+
 impl Dispatch<wl_registry::WlRegistry, ()> for RegistryCollector {
     fn event(
         state: &mut Self,
@@ -96,9 +116,13 @@ pub fn probe() -> Result<WaylandCapabilities, WaylandProbeError> {
     let mut collector = RegistryCollector::default();
     // One round trip is enough: the compositor advertises every global it has
     // immediately after `get_registry`.
-    queue
-        .roundtrip(&mut collector)
-        .map_err(|error| WaylandProbeError::RegistryUnavailable(error.to_string()))?;
+    super::dispatch::roundtrip(
+        &connection,
+        &mut queue,
+        &mut collector,
+        Duration::from_secs(5),
+    )
+    .map_err(|error| WaylandProbeError::RegistryUnavailable(error.to_string()))?;
 
     collector.capabilities.globals.sort();
     collector.capabilities.globals.dedup();

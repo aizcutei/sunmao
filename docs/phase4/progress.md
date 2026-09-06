@@ -909,3 +909,17 @@
 - Change: GlContext 增加 EGL 后端分派，保留原生上下文路径；Wayland 像素验收测试改为通过统一接口执行。
 - Result: [run #109](https://github.com/aizcutei/sunmao/actions/runs/34031561111) 三平台 success，Ubuntu EGL 像素、resize、swap、teardown 步骤 success，三份 artifacts 已上传且未过期（尚未下载核验）。当前分派改动 metadata、fmt、diff 检查及完整 cargo test --locked 均通过，Windows target check 通过；日志 `/tmp/sunmao-phase4-gl-dispatch-tests.log`。
 - Unresolved: 统一 GL 分派待提交及 hosted 验证；浮动窗口分派、事件循环、输入和实际编辑器接线仍需完成。
+
+### 2026-09-06 — run #110：统一 GL 接口与产物核验
+
+- Command/platform: GitHub Actions run #110，commit `6977d6b`，三平台 hosted jobs。
+- Change: 下载 Linux job 日志与三平台 artifacts，核实渲染断言及产物完整性。
+- Result: 三平台 success；日志确认 `egl_renders_and_resizes_a_wayland_surface ... ok` 和 `WAYLAND EGL VERIFIED: pixels, resize, swap and teardown`。Windows 78,342,930 bytes / 364 ZIP 条目，Linux 971,565,587 bytes / 96 条目，macOS 53,086,608 bytes / 152 条目；全部 SHA-256 匹配 GitHub digest，ZIP CRC 校验通过。产物位于 `/tmp/sunmao-run110-{windows,linux,macos}.zip`。
+- Unresolved: 浮动窗口分派、事件循环与输入尚未实现；M5 保持未完成。
+
+### 2026-09-06 — Wayland 握手增加超时
+
+- Command/platform: macOS ARM64 完整本地 gates，Windows MSVC target check。
+- Change: 新增基于 poll 的事件分派和带期限的同步握手；probe、顶层窗口和 EGL 验收使用五秒握手期限；新增 Unix socket 无响应对端测试。
+- Result: metadata、fmt、diff、完整 cargo test --locked 和 Windows target check 均通过；日志 `/tmp/sunmao-dispatch-tests.log`。Linux 新路径仍待 hosted 验证。
+- Unresolved: 本次超时改动待 hosted 验证；原生浮动窗口分派、编辑器事件循环与输入接线仍未完成。

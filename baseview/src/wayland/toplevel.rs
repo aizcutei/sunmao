@@ -13,6 +13,11 @@
 
 use std::convert::TryFrom;
 use std::os::fd::AsFd;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::time::Duration;
 
 use wayland_client::protocol::{
     wl_buffer, wl_compositor, wl_registry, wl_shm, wl_shm_pool, wl_surface,
@@ -78,6 +83,19 @@ struct State {
     xdg_surface: Option<xdg_surface::XdgSurface>,
     surface: Option<wl_surface::WlSurface>,
     progress: ToplevelProgress,
+}
+
+impl Dispatch<wayland_client::protocol::wl_callback::WlCallback, Arc<AtomicBool>> for State {
+    fn event(
+        _: &mut Self,
+        _: &wayland_client::protocol::wl_callback::WlCallback,
+        _: wayland_client::protocol::wl_callback::Event,
+        done: &Arc<AtomicBool>,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        done.store(true, Ordering::Release);
+    }
 }
 
 impl Dispatch<wl_registry::WlRegistry, ()> for State {
