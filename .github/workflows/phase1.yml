@@ -133,6 +133,7 @@ jobs:
             mesa-vulkan-drivers \
             xvfb \
             xauth \
+            weston \
             pkg-config
 
       - name: Configure Linux GUI runtime
@@ -387,6 +388,51 @@ jobs:
               echo "::error title=UIA round trip did not verify::the assertion did not run; log says: $(grep -o 'UIA [A-Z]*.*' target/phase1-artifacts/phase4-accessibility.log | head -1)"
               exit 1
             fi
+          fi
+
+      - name: Probe a headless Wayland compositor
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -uo pipefail
+          # A Wayland backend is worth nothing without somewhere to run it, and
+          # a runner has no compositor unless one is started. Start weston
+          # headless, then ask from Rust which globals it offers — that tells a
+          # real Wayland session apart from code that merely compiled.
+          export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$RUNNER_TEMP/sunmao-xdg}"
+          mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+          weston --backend=headless-backend.so --socket=wayland-ci --idle-time=0 \
+            >"$RUNNER_TEMP/weston.log" 2>&1 &
+          weston_pid=$!
+          # Wait for the socket rather than sleeping a fixed amount: weston's
+          # start-up time on a cold runner is not predictable.
+          for _ in $(seq 1 40); do
+            [ -S "$XDG_RUNTIME_DIR/wayland-ci" ] && break
+            sleep 0.25
+          done
+          if [ ! -S "$XDG_RUNTIME_DIR/wayland-ci" ]; then
+            echo "::warning title=No headless compositor::weston did not create a socket; Wayland stays unverified this run"
+            sed -n '1,40p' "$RUNNER_TEMP/weston.log" || true
+            kill "$weston_pid" 2>/dev/null || true
+            exit 0
+          fi
+          echo "weston is up on wayland-ci"
+          WAYLAND_DISPLAY=wayland-ci cargo test --locked -p baseview --features wayland -- --nocapture \
+            2>&1 | tee "$RUNNER_TEMP/wayland-probe.log"
+          status=${PIPESTATUS[0]}
+          kill "$weston_pid" 2>/dev/null || true
+          if [ "$status" -ne 0 ]; then
+            echo "::error title=Wayland probe failed::cargo test exited with $status"
+            exit "$status"
+          fi
+          # Non-blocking for now: this step exists to establish the testbed. It
+          # becomes blocking once a backend depends on it.
+          if grep -q "WAYLAND PROBE: connected" "$RUNNER_TEMP/wayland-probe.log"; then
+            echo "Wayland testbed confirmed:"
+            grep "WAYLAND GLOBAL:" "$RUNNER_TEMP/wayland-probe.log" | head -30
+          else
+            echo "::warning title=Compositor not reached::the probe ran but found no compositor"
+            grep "WAYLAND PROBE:" "$RUNNER_TEMP/wayland-probe.log" || true
           fi
 
       - name: Test macOS system-capture linkage (non-blocking follow-up)

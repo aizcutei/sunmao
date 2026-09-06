@@ -5,6 +5,9 @@ mod win;
 #[cfg(target_os = "linux")]
 mod x11;
 
+#[cfg(all(target_os = "linux", feature = "wayland"))]
+pub mod wayland;
+
 mod clipboard;
 mod event;
 mod keyboard;

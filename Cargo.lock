@@ -616,6 +616,8 @@ dependencies = [
  "rtrb",
  "softbuffer",
  "uuid 0.8.2",
+ "wayland-client",
+ "wayland-protocols",
  "winapi",
  "wry",
  "x11",

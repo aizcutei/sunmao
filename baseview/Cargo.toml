@@ -23,6 +23,10 @@ webview = ["dep:wry", "dep:gtk", "dep:gdk"]
 # default: the Linux adapter alone pulls a D-Bus stack, and a window that does
 # not describe itself should not pay for one.
 accessibility = ["dep:accesskit", "dep:accesskit_windows", "dep:accesskit_macos", "dep:accesskit_unix"]
+# Native Wayland. Off by default and Linux-only: the X11 backend already works
+# on Wayland desktops through XWayland, so this is an improvement (no X server,
+# proper per-output scaling) rather than a prerequisite.
+wayland = ["dep:wayland-client", "dep:wayland-protocols"]
 
 [dependencies]
 keyboard-types = { version = "0.6.1", default-features = false }
@@ -37,6 +41,8 @@ nix = "0.22.0"
 gtk = { version = "0.18", features = ["unsafe-assume-initialized"], optional = true }
 gdk = { version = "0.18", features = ["unsafe-assume-initialized"], optional = true }
 accesskit_unix = { version = "0.23", optional = true }
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols = { version = "0.32", features = ["client", "staging"], optional = true }
 
 [target.'cfg(target_os="windows")'.dependencies]
 winapi = { version = "0.3.8", features = ["libloaderapi", "winuser", "windef", "minwindef", "guiddef", "combaseapi", "wingdi", "errhandlingapi", "ole2", "oleidl", "shellapi", "winerror"] }

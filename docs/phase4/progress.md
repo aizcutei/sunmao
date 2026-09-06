@@ -805,3 +805,33 @@
   `wl_seat`+xkbcommon/`wl_output` 缩放）＋ CI 装无头 compositor（Ubuntu job 现跑 Xvfb ＝ X11），
   **且只有 CLAP 受益**（VST3 无 Wayland 平台类型）。这是独立立项的规模。
 - Unresolved: Phase 4 的 M0–M4 与 M5 除 Wayland 外全部完成并三平台验收；**只剩 Wayland 一项**。
+
+### 2026-09-06 — Wayland 第一步：先建可验证的测试床，而不是先写盲代码
+
+- Command/platform: macOS ARM64。**Wayland 代码在本地一行都编译不了**（Linux-only，
+  且交叉编译缺 X11 sysroot），所以这一轮刻意先解决"在哪儿验"这个真瓶颈。
+- **为什么先做测试床**：前两轮的教训是反过来的两个方向——floating/accessibility 是
+  "不看代码就说做不了"，而 UIA 那轮是"写完才发现没法证明它真的работа"。Wayland 如果
+  先写 1000+ 行盲代码再想验收，等于把 UIA 那个坑放大一遍：CI **根本没有 compositor**，
+  绿了也什么都不能说明。
+- Change:
+  - `baseview` 新增 off-by-default 的 `wayland` feature（Linux-only）与
+    `baseview::wayland::probe`：连接 `WAYLAND_DISPLAY`、枚举 registry、报告有哪些 global。
+    `can_open_a_window()` 要求 `wl_compositor` **且** `xdg_wm_base`——只有前者是开不出
+    带标题栏的窗口的，报告"能"会把调用方晾在半路。无 compositor 时回
+    `Err(NoCompositor)` 而不是 panic：那是 X11 会话下的**正常**答案，意思是"走 X11 后端"。
+  - CI 的 Ubuntu job 装 `weston`，以 `--backend=headless-backend.so` 起一个无头
+    compositor，**轮询 socket 出现而不是固定 sleep**（冷 runner 的启动时间不可预测），
+    然后带 `WAYLAND_DISPLAY` 跑探针并把 global 列表打进日志。
+  - 该步骤目前**非 blocking**：它的作用是确认测试床存在。等真有后端依赖它时再转 blocking。
+  - 模块文档写清了为什么 Wayland 必须是**独立后端**而非 X11 的变体：两者在 baseview 的
+    立身之本——嵌入——上不一致。X11 有 XEmbed，Wayland 没有等价物（CLAP 上游原文
+    *"embed is currently not supported, use floating windows"*），VST3 更是连 Wayland
+    平台类型都没有。**因此 Wayland 后端只需实现顶层窗口那条路径，而 `open_floating`
+    这个抽象本 phase 已经有了。**
+- Result: 默认 `cargo test --locked` exit 0，**130 套件 / 662 测试**（Wayland 代码在
+  macOS 上不参与编译）；`cargo metadata --locked` exit 0（lockfile 仅 +2 行，wayland
+  相关 crate 早已因 wry/gtk 间接在册）；fmt / diff 全过。
+- Unresolved: 下一轮看 Ubuntu 日志——weston 能否在 runner 上起来、探针报告哪些 global。
+  **若 `xdg_wm_base` 在场，后端就有地方验；若 weston 起不来，则先解决那个**，
+  在此之前不写后端代码。
