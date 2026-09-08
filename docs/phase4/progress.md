@@ -1245,3 +1245,17 @@
 - Change: 在 Sway 3x 输出变更后聚焦并定位浮动测试窗口，确保实际与剩余输出相交后再验证 surface preference。
 - Result: 完整常规测试与 doc-tests 全部通过；Linux tests 类型检查、metadata、fmt、diff 已通过。仅修改 Linux 验收测试和进展文档，无平台实现或示例/打包改动。
 - Unresolved: 修正待新提交三平台 hosted jobs、真实缩放/Weston/2x 光标日志与同提交产物下载校验；M5 保持未完成。
+
+### 2026-09-08 — 3x 验收位置修正已推送
+
+- Command/platform: HTTPS push b0f435a7934ca32b0c43558fdc94e5c6602fea6f 至 phase4/gui-component-library；Actions API 查询。
+- Change: 提交浮动验收窗口定位操作，保留原比例、EGL 尺寸、边缘像素与后续 Weston/光标全部断言。
+- Result: push exit 0；run 34241125174 精确匹配 b0f435a，状态 queued：https://github.com/aizcutei/sunmao/actions/runs/34241125174 。完整本地 gate 已通过。
+- Unresolved: 两次间隔 API 查询确认 run 34241125174 / b0f435a 三平台持续 in_progress：macOS job 102111266719、Linux job 102111267122、Windows job 102111267633 均已进入格式适配器与宿主测试，暂无失败，Linux 缩放专项仍 pending。本轮为已验证 CI 等待。后续一轮间隔查询确认三平台格式适配器与宿主测试均通过，macOS/Linux 已进入 standalone runtime/facade/reference examples，Windows 进入 facade renderer contracts；暂无失败，Linux 缩放专项仍 pending。需新提交三平台 hosted 完整 jobs、Linux 实际缩放/光标日志与同提交产物下载校验；旧 run 34239337659 已 cancelled，不能替代新提交验收。M5 保持未完成。
+
+### 2026-09-08 — 修正光标主题环境变量覆盖输出密度
+
+- Command/platform: run 34241125174 / b0f435a，Linux job 102111267122 failure；完整日志 /tmp/sunmao-run34241125174-linux.log；核对 wayland-cursor 的 load/load_or/load_from_name 实现。
+- Change: 将 XCURSOR_SIZE 解释为逻辑尺寸（默认 24），乘以输出整数比例后通过 load_from_name 加载；保留 XCURSOR_THEME，不修改宿主环境。补充默认值、用户尺寸、非法值与溢出测试，保留 hosted 48px buffer / 24-unit viewport 与真实光标像素断言。
+- Result: 旧 hosted 的动态/分数/跨屏/移除/3x/resize/显式覆盖 EGL 尺寸和像素、Weston core 2x 全部通过。光标形状/隐藏/重入像素通过，但协议日志显示 viewport(12,12)：load_or 将请求的 48px 覆盖为环境变量 24px，导致尺寸错误。Windows all-features target check、metadata/fmt/diff 通过；Linux tests 类型检查 exit 0（使用 PKG_CONFIG_ALLOW_CROSS=1 与 /opt/X11/lib/pkgconfig，仅类型检查，不作 Linux 原生运行证据）；完整本地回归 session 47691 exit 0，含全部文档测试，日志 /tmp/sunmao-cursor-density-tests.log。
+- Unresolved: 修正待完整本地 gate、新提交三平台 hosted 和产物校验；M5 保持未完成。

@@ -141,12 +141,16 @@ impl OpenState {
                 .clone()
                 .ok_or("wl_shm is unavailable for cursor images")?;
             self.cursor_theme = Some(
-                wayland_cursor::CursorTheme::load(
+                // `load` lets XCURSOR_SIZE override the physical size, losing
+                // output scaling. Interpret that setting in logical units once.
+                wayland_cursor::CursorTheme::load_from_name(
                     connection,
                     shm,
-                    24_u32
-                        .checked_mul(scale as u32)
-                        .ok_or("cursor scale overflow")?,
+                    &std::env::var("XCURSOR_THEME").unwrap_or_else(|_| "default".into()),
+                    super::cursor::theme_size(
+                        std::env::var("XCURSOR_SIZE").ok().as_deref(),
+                        scale,
+                    )?,
                 )
                 .map_err(|error| error.to_string())?,
             );

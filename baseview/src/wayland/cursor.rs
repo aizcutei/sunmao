@@ -1,4 +1,5 @@
 //! Per-pointer cursor surfaces, using the core protocol on every compositor.
+use std::convert::TryFrom;
 use std::time::{Duration, Instant};
 use wayland_client::protocol::{wl_compositor, wl_pointer, wl_surface};
 use wayland_client::{Proxy, QueueHandle};
@@ -7,6 +8,20 @@ use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
 
 use super::window::OpenState;
 use crate::MouseCursor;
+
+pub(super) fn theme_size(setting: Option<&str>, scale: i32) -> Result<u32, String> {
+    let logical = setting
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|size| *size > 0)
+        .unwrap_or(24);
+    let scale = u32::try_from(scale)
+        .ok()
+        .filter(|scale| *scale > 0)
+        .ok_or("invalid cursor scale")?;
+    logical
+        .checked_mul(scale)
+        .ok_or_else(|| "cursor scale overflow".into())
+}
 
 #[derive(Default)]
 pub(super) struct PointerCursor {
@@ -190,6 +205,18 @@ fn cursor_names(cursor: MouseCursor) -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cursor_size_setting_is_logical_and_validated() {
+        assert_eq!(theme_size(Some("24"), 2).unwrap(), 48);
+        assert_eq!(theme_size(Some("32"), 3).unwrap(), 96);
+        for setting in [None, Some("0"), Some("-1"), Some("invalid")] {
+            assert_eq!(theme_size(setting, 2).unwrap(), 48);
+        }
+        assert!(theme_size(Some("4294967295"), 2).is_err());
+        assert!(theme_size(None, 0).is_err());
+        assert!(theme_size(None, -1).is_err());
+    }
+
     proptest::proptest! {
         #[test]
         fn every_entry_invalidates_the_old_cursor_serial(
