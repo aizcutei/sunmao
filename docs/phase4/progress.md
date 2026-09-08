@@ -1147,3 +1147,59 @@
 - Change: 准备提交 xdg_activation_v1 主动焦点请求、输入序号生命周期与 Sway 真实键盘焦点策略验收；保留已完成的光标证据更新。
 - Result: 全部常规测试与 doc-tests 完成，原进程 exit 0。Linux tests 类型检查、Windows all-features check、locked metadata、fmt、diff 与脚本语法检查均已通过。没有修改示例或打包逻辑。
 - Unresolved: 主动焦点实现仍需新提交的三平台 hosted jobs 与 Sway 实测日志，以及同提交 artifacts 下载校验；M5 缩放、facade feature 传递和最终审计仍待完成。
+
+### 2026-09-08 — 主动焦点提交已推送，GitHub CI 已排队
+
+- Command/platform: HTTPS 推送 7ed7be099b0b7ab41584eb7d2b7116981ff12a16 至 phase4/gui-component-library；GitHub Actions API 查询。
+- Change: 提交原生 Wayland 激活请求及 Sway 双窗口焦点/按键路由验收，原 Weston 步骤保持 blocking。
+- Result: push exit 0；API 确认新 run 34231341466 的 head_sha 精确匹配 7ed7be099b0b7ab41584eb7d2b7116981ff12a16，当前 queued：https://github.com/aizcutei/sunmao/actions/runs/34231341466 。完整本地 gate 已通过。
+- Unresolved: 两次间隔查询确认 run 34231341466 / 7ed7be0 的三 job 持续 in_progress：macOS 102077973525 已通过格式适配器与宿主测试，进入 standalone runtime/facade/reference examples；Linux 102077973855、Windows 102077973891 正在格式适配器与宿主测试，均无失败。Sway 主动焦点步骤仍 pending，本轮为已验证的 CI 等待。后续一轮两次间隔查询确认三平台格式适配器与宿主测试均通过；macOS 已通过 accessibility 并进入非 blocking 的 system-capture 后续检查，Linux/Windows 已通过 facade renderer contracts 并执行 standalone runtime/facade/reference examples；Linux 的 Sway 步骤仍 pending，无失败。需同提交三平台 hosted 完整 jobs、实际 WAYLAND FOCUS VERIFIED 与 xdg_activation 协议日志、三份 artifacts 下载校验。CI 运行期间只监控记录，失败按日志修正；M5 保持未完成。
+
+### 2026-09-08 — Sway 主动焦点 hosted 步骤通过
+
+- Command/platform: run 34231341466 / 7ed7be0；两次间隔 GitHub jobs API 查询。
+- Change: 持续核对同一提交的真实 Wayland 验收步骤，未修改实现。
+- Result: Linux job 102077973855 的 Probe a headless Wayland compositor、Verify native Wayland pointer, keyboard and cursor、Verify native Wayland activation and focus policy 均 completed/success，已进入 baseview feature combinations。macOS 正在原生 GUI 打包验收，Windows 正在 accessibility，尚无失败。
+- Unresolved: 步骤通过尚不是完整验收；后续两次间隔查询确认三平台均已推进到 Package and exercise native GUI backends，暂无失败，Linux job 尚未结束、完整日志暂不可下载。后续一轮三次间隔查询确认 macOS 完整 job success；Linux 已通过原生 GUI 打包验收，正在 Upload packaged Phase 1 artifacts；Windows 已推进到 Exercise repository packaging helper。evidence 查询确认 Linux 仍非终态，本轮未取得完整日志，不将步骤成功替代日志证据。需 Linux 完整日志中的 WAYLAND FOCUS VERIFIED、真实 token/serial/activate 与 keyboard Enter/Leave/按键路由断言，并核对三平台最终 jobs 和同提交 artifacts 下载校验。M5 保持未完成，本轮为已验证的 CI 等待。
+
+### 2026-09-08 — 主动焦点三平台全绿，真实协议日志核实
+
+- Command/platform: run 34231341466 / 7ed7be099b0b7ab41584eb7d2b7116981ff12a16；macOS 102077973525、Linux 102077973855、Windows 102077973891 全部 completed/success。
+- Change: 下载并核对 Linux 完整日志 /tmp/sunmao-run34231341466-linux.log；启动同提交三份 artifacts 下载校验（session 69649）。
+- Result: 13:27:39Z 确认前台与后台两次 get_activation_token/set_serial(9)/set_surface/commit → Done → activate → destroy。13:27:40Z 确认后台请求后按键仍送给 peer；关闭 peer 后原窗口获得真实 keyboard.enter(33)。测试 native_wayland_focus_request_obeys_compositor_policy ... ok 与 WAYLAND FOCUS VERIFIED，序号移除 proptest 通过。普通包测试早先的无 compositor skip 不作为运行证据。验收证明 advisory 请求和 compositor 拒绝策略下的焦点/按键路由，不承诺绕过策略强抢焦点。
+- Unresolved: 三份产物下载与 SHA-256/ZIP CRC 校验仍运行，保持 session 69649。两次间隔轮询确认该进程仍存活；Windows 78,350,801 bytes / 364 条目已通过 SHA-256 与 ZIP CRC，其余仍下载中。后续两次间隔轮询确认 session 69649 持续存活；Linux ZIP 实际写入量由 441,483,264 增至 714,457,088 bytes，下载有进展，尚未完成校验；未重复启动。M5 output scaling、facade feature 传递和最终兼容性/文档审计仍未完成，不能标记 Phase 4 完成。
+
+### 2026-09-08 — 主动焦点同提交三份产物校验完成
+
+- Command/platform: 原下载 session 69649 exit 0；run 34231341466 / 7ed7be099b0b7ab41584eb7d2b7116981ff12a16 三平台 completed/success。
+- Change: 更新 M5 状态矩阵与跨格式语义中的主动焦点验收证据，保留 compositor 可拒绝请求的明确语义。
+- Result: 三份产物全部下载且 API SHA-256 与 ZIP CRC 校验通过：Windows 78,350,801 bytes / 364 条目；Linux 972,286,508 bytes / 96 条目；macOS 53,085,652 bytes / 152 条目。文件 /tmp/sunmao-run34231341466-phase1-*.zip。Linux Sway 真实协议与焦点/按键路由日志已核实，主动焦点瓶颈收口。
+- Unresolved: 下一瓶颈为 Wayland output scaling，其后 facade feature 传递与最终兼容性/文档审计；M5 和 Phase 4 保持未完成。compose 仍不等于 text-input-v3 IME。
+
+### 2026-09-08 — Wayland 输出缩放接入与真实密度验收
+
+- Command/platform: 阅读 wl_output scale/done、wl_surface enter/leave/preferred_buffer_scale/set_buffer_scale、xdg-shell configure/min/max、fractional-scale-v1 与 viewporter 上游协议。
+- Change: 区分 surface-local 逻辑尺寸与 buffer 物理像素；接入整数输出集合与移除、preferred buffer scale、fractional preferred scale/viewport，configure 按 xdg_surface 提交批次应用且独立保留零维度；resize 限定逻辑大小，密度与新缓冲区原子提交。光标按输出比例加载更高分辨率主题，修正热点/损伤坐标与 viewport 生命周期。加入比例/输出移除 proptest、Sway 动态整数/分数/跨屏/移除/显式覆盖与 EGL 真实尺寸/边缘像素测试、Weston 整数 fallback、2x 光标真实 compositor 像素验收。
+- Result: Linux baseview tests 类型检查 exit 0（/tmp/sunmao-scale-linux.log），locked metadata/fmt/diff/bash 语法检查通过。首次 Linux 检查抓到 Rust 2018 闭包捕获 options 的部分移动，已修正且后续检查通过。Windows all-features 检查 session 27833 仍在执行（/tmp/sunmao-scale-windows.log）；完整本地回归 session 4841 已启动，当前等待同一 Cargo build 锁（/tmp/sunmao-scale-tests.log），不得因等待重启。
+- Unresolved: 后续间隔轮询确认 Windows check session 27833 已 exit 0（1m39s）；完整回归 session 4841 已获得构建锁并持续编译，尚无失败。后续两次间隔轮询确认同一进程已完成编译（3m45s），正在执行 baseview 测试，尚无失败；本轮为已验证的本地 gate 等待。改动未提交；Sway/Weston 新缩放与光标实测尚无 hosted 证据。M5 output scaling 待验收，facade feature 传递及最终审计仍未完成。
+
+### 2026-09-08 — 用户手动 push 后核对 CI 与缩放回归
+
+- Command/platform: GitHub Actions API 查询最新 phase4/gui-component-library runs；git status/log；继续轮询原完整回归 session 4841。
+- Change: 核对已推送提交与待验收缩放改动的边界，未重启测试或旧 CI。
+- Result: GitHub 最新 run 仍为 34231341466 / 7ed7be0，三平台 completed/success；本地 HEAD 同为 7ed7be0，缩放实现和新 CI 步骤仍未提交，所以现有绿色结果不覆盖缩放。原 session 4841 持续存活，已通过 baseview 并推进到 clap_sys 示例，当前尚无失败。
+- Unresolved: 完整本地 gate 尚未结束；按既定流程等待原进程退出成功后提交和 HTTPS 推送缩放改动，再核对新提交三平台 hosted 结果、实际 Sway/Weston 缩放日志与产物。M5 保持未完成，本轮为已验证的等待。
+
+### 2026-09-08 — 缩放完整回归持续推进
+
+- Command/platform: 重新读取任务与阶段约束；两次间隔轮询原完整回归 session 4841（/tmp/sunmao-scale-tests.log）。
+- Change: 未改动实现，未重启原进程；上一轮及本轮均为已验证的本地 gate 等待。
+- Result: 原 session 4841 持续存活，已推进过 clap_sys 示例、facade 与模板预算测试，当前执行 CLAP backend；已输出 state 迁移、零分配处理、事件路由等测试通过，尚无失败。 后续一轮两次间隔轮询确认 VST3 backend 两项超过 60 秒的视图回调测试已正常通过；原进程继续推进过 core 与 DSP，DSP 14 项属性测试全部通过，当前进入示例测试，尚无失败。该轮仍为已验证等待。 再一轮两次间隔轮询确认原 session 4841 继续执行示例：meter 10 项、widgets GUI fixture 9 项全部通过（含音频侧零分配发布与 accessibility 描述树），尚无失败，完整进程仍存活。 后续两次间隔轮询确认同一进程已推进过 GUI 与合成器/模板示例，poly synth 6 项通过，当前进入 sunmao_unittest_runner；尚无失败，本轮为已验证等待。 后续一轮两次间隔轮询确认常规测试全部结束，原 session 4841 已进入文档测试并推进到 sunmao_core；尚无失败，仍待整个命令退出码，该轮为已验证等待。
+- Unresolved: 完整回归尚未结束，缩放实现尚未提交；退出成功后提交推送，等待同提交三平台 hosted 缩放运行日志和产物验收。M5 保持未完成。
+
+### 2026-09-08 — 缩放完整本地 gate 通过
+
+- Command/platform: 原 session 4841 的 macOS ARM64 RUSTFLAGS=-Awarnings cargo test --locked 完整结束，日志 /tmp/sunmao-scale-tests.log。
+- Change: 准备提交 Wayland 输出整数/分数缩放、逻辑几何与缓冲区密度分离、光标密度更新，以及 Sway/Weston 实际 EGL 尺寸/像素验收。
+- Result: 原完整回归 exit 0，包含全部常规测试与 doc-tests。Linux tests 类型检查、Windows all-features 检查、locked metadata、fmt、diff 与脚本语法检查已通过。未改动示例或打包逻辑。
+- Unresolved: 缩放实现仍需同提交三平台 hosted 完整 jobs、实际动态密度/跨输出/移除/显式覆盖/2x 光标验收日志和三份产物下载校验。facade feature 传递与最终审计仍待完成；M5 保持未完成。

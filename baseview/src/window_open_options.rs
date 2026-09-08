@@ -5,7 +5,10 @@ use crate::Size;
 pub enum WindowScalePolicy {
     /// Use the system's dpi scale factor
     SystemScaleFactor,
-    /// Use the given dpi scale factor (e.g. `1.0` = 96 dpi)
+    /// Use the given dpi scale factor (e.g. `1.0` = 96 dpi).
+    /// On native Wayland this overrides rendering density; window sizes and
+    /// pointer positions remain in surface-local logical units. Non-integer
+    /// overrides require the compositor to provide `wp_viewporter`.
     ScaleFactor(f64),
 }
 

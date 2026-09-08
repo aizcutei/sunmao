@@ -474,6 +474,12 @@ jobs:
         if: runner.os == 'Linux'
         run: bash tools/verify_wayland_focus.sh
 
+      - name: Verify native Wayland output scaling
+        if: runner.os == 'Linux'
+        run: |
+          bash tools/verify_wayland_scale.sh
+          xvfb-run -a -s "-screen 0 1600x1200x24 -noreset" bash tools/verify_wayland_cursor_scale.sh
+
       - name: Test macOS system-capture linkage (non-blocking follow-up)
         if: runner.os == 'macOS'
         continue-on-error: true

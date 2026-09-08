@@ -1,14 +1,17 @@
 //! Per-pointer cursor surfaces, using the core protocol on every compositor.
 use std::time::{Duration, Instant};
 use wayland_client::protocol::{wl_compositor, wl_pointer, wl_surface};
-use wayland_client::QueueHandle;
+use wayland_client::{Proxy, QueueHandle};
 use wayland_cursor::{Cursor, CursorTheme};
+use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
 
 use super::window::OpenState;
 use crate::MouseCursor;
 
 #[derive(Default)]
 pub(super) struct PointerCursor {
+    scale: i32,
+    viewport: Option<wp_viewport::WpViewport>,
     serial: Option<u32>,
     surface: Option<wl_surface::WlSurface>,
     selected: Option<MouseCursor>,
@@ -38,6 +41,8 @@ impl PointerCursor {
         &mut self,
         pointer: &wl_pointer::WlPointer,
         requested: MouseCursor,
+        scale: i32,
+        viewporter: Option<&wp_viewporter::WpViewporter>,
         theme: Option<&mut CursorTheme>,
         compositor: &wl_compositor::WlCompositor,
         handle: &QueueHandle<OpenState>,
@@ -46,6 +51,10 @@ impl PointerCursor {
         let Some(serial) = self.serial else {
             return Ok(());
         };
+        if self.scale != scale {
+            self.scale = scale;
+            self.selected = None;
+        }
         if self.selected == Some(requested) && self.next_frame.is_none_or(|deadline| now < deadline)
         {
             return Ok(());
@@ -90,9 +99,37 @@ impl PointerCursor {
             .get_or_insert_with(|| compositor.create_surface(handle, ()));
         let (width, height) = buffer.dimensions();
         let (x, y) = buffer.hotspot();
-        pointer.set_cursor(serial, Some(surface), x as i32, y as i32);
+        if self.viewport.is_none() {
+            self.viewport = viewporter.map(|manager| manager.get_viewport(surface, handle, ()));
+        }
+        let mut applied_scale = scale;
+        if let Some(viewport) = &self.viewport {
+            if surface.version() >= 3 {
+                surface.set_buffer_scale(1);
+            }
+            viewport.set_destination(
+                (width as f64 / f64::from(scale)).ceil() as i32,
+                (height as f64 / f64::from(scale)).ceil() as i32,
+            );
+        } else {
+            // Themes may return their closest available size. Core protocol
+            // buffers must be divisible by the integer scale on both axes.
+            if width % scale as u32 != 0 || height % scale as u32 != 0 {
+                eprintln!("baseview: cursor theme dimensions cannot use scale {scale}; using unscaled image");
+                applied_scale = 1;
+            }
+            if surface.version() >= 3 {
+                surface.set_buffer_scale(applied_scale);
+            }
+        }
+        pointer.set_cursor(
+            serial,
+            Some(surface),
+            x as i32 / applied_scale,
+            y as i32 / applied_scale,
+        );
         surface.attach(Some(buffer), 0, 0);
-        surface.damage(0, 0, width as i32, height as i32);
+        surface.damage(0, 0, i32::MAX, i32::MAX);
         surface.commit();
         self.next_frame = (image.image_count() > 1)
             .then(|| now + Duration::from_millis(u64::from(buffer.delay().max(1))));
@@ -102,6 +139,9 @@ impl PointerCursor {
 
 impl Drop for PointerCursor {
     fn drop(&mut self) {
+        if let Some(viewport) = self.viewport.take() {
+            viewport.destroy();
+        }
         if let Some(surface) = self.surface.take() {
             surface.destroy();
         }

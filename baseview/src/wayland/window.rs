@@ -13,10 +13,7 @@ use wayland_client::protocol::{wl_callback, wl_compositor, wl_registry, wl_shm, 
 use wayland_client::{delegate_noop, Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
-use crate::{
-    Event, MouseCursor, Size, WindowEvent, WindowHandler, WindowInfo, WindowOpenOptions,
-    WindowScalePolicy,
-};
+use crate::{Event, MouseCursor, Size, WindowEvent, WindowHandler, WindowInfo, WindowOpenOptions};
 
 pub struct WindowHandle {
     raw_window_handle: Option<RawWindowHandle>,
@@ -75,6 +72,7 @@ impl HasWindowHandle for WindowHandle {
 }
 
 pub(super) struct OpenState {
+    pub(super) scaling: super::scaling::Scaling,
     pub(super) activation: super::activation::Activation,
     pub(super) seats: std::collections::HashMap<u32, super::pointer::Seat>,
     pub(super) events: Vec<Event>,
@@ -82,14 +80,17 @@ pub(super) struct OpenState {
     wm_base: Option<xdg_wm_base::XdgWmBase>,
     shm: Option<wl_shm::WlShm>,
     cursor_theme: Option<wayland_cursor::CursorTheme>,
+    cursor_theme_scale: i32,
     configured: bool,
     pub(super) close_requested: bool,
-    configured_size: Option<(u32, u32)>,
+    pending_size: Option<(i32, i32)>,
+    configured_size: Option<(i32, i32)>,
 }
 
 impl Default for OpenState {
     fn default() -> Self {
         Self {
+            scaling: Default::default(),
             activation: Default::default(),
             seats: Default::default(),
             events: Vec::new(),
@@ -97,8 +98,10 @@ impl Default for OpenState {
             wm_base: None,
             shm: None,
             cursor_theme: None,
+            cursor_theme_scale: 1,
             configured: false,
             close_requested: false,
+            pending_size: None,
             configured_size: None,
         }
     }
@@ -118,14 +121,34 @@ impl OpenState {
             .compositor
             .as_ref()
             .ok_or("missing cursor compositor")?;
+        let scale = if compositor.version() >= 3 {
+            self.scaling
+                .model
+                .system_scale(
+                    self.scaling.viewporter.is_some() && self.scaling.fractional.is_some(),
+                )
+                .ceil() as i32
+        } else {
+            1
+        };
+        if self.cursor_theme_scale != scale {
+            self.cursor_theme = None;
+            self.cursor_theme_scale = scale;
+        }
         if requested != MouseCursor::Hidden && self.cursor_theme.is_none() {
             let shm = self
                 .shm
                 .clone()
                 .ok_or("wl_shm is unavailable for cursor images")?;
             self.cursor_theme = Some(
-                wayland_cursor::CursorTheme::load(connection, shm, 24)
-                    .map_err(|error| error.to_string())?,
+                wayland_cursor::CursorTheme::load(
+                    connection,
+                    shm,
+                    24_u32
+                        .checked_mul(scale as u32)
+                        .ok_or("cursor scale overflow")?,
+                )
+                .map_err(|error| error.to_string())?,
             );
         }
         for seat in self.seats.values_mut() {
@@ -133,6 +156,8 @@ impl OpenState {
                 seat.cursor.update(
                     pointer,
                     requested,
+                    scale,
+                    self.scaling.viewporter.as_ref().map(|(_, p)| p),
                     self.cursor_theme.as_mut(),
                     compositor,
                     handle,
@@ -168,6 +193,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for OpenState {
     ) {
         if let wl_registry::Event::GlobalRemove { name } = event {
             state.activation.remove_global(name);
+            state.scaling.remove(name);
             if let Some(mut seat) = state.seats.remove(&name) {
                 seat.remove_pointer(&mut state.events);
                 let focused = seat.keyboard.as_ref().is_some_and(|k| k.focused);
@@ -190,6 +216,21 @@ impl Dispatch<wl_registry::WlRegistry, ()> for OpenState {
         } = event
         {
             match interface.as_str() {
+                "wl_output" => {
+                    state.scaling.outputs.insert(
+                        name,
+                        super::scaling::Output {
+                            proxy: registry.bind(name, version.min(4), handle, name),
+                            pending: 1,
+                        },
+                    );
+                }
+                "wp_viewporter" => {
+                    state.scaling.viewporter = Some((name, registry.bind(name, 1, handle, ())));
+                }
+                "wp_fractional_scale_manager_v1" => {
+                    state.scaling.fractional = Some((name, registry.bind(name, 1, handle, ())));
+                }
                 "xdg_activation_v1" => {
                     state.activation.manager = Some((name, registry.bind(name, 1, handle, ())));
                 }
@@ -208,7 +249,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for OpenState {
                     state.shm = Some(registry.bind(name, 1, handle, ()));
                 }
                 "wl_compositor" => {
-                    state.compositor = Some(registry.bind(name, version.min(4), handle, ()))
+                    state.compositor = Some(registry.bind(name, version.min(6), handle, ()))
                 }
                 "xdg_wm_base" => {
                     state.wm_base = Some(registry.bind(name, version.min(3), handle, ()))
@@ -246,6 +287,9 @@ impl Dispatch<xdg_surface::XdgSurface, ()> for OpenState {
         if let xdg_surface::Event::Configure { serial } = event {
             surface.ack_configure(serial);
             state.configured = true;
+            if let Some(size) = state.pending_size.take() {
+                state.configured_size = Some(size);
+            }
         }
     }
 }
@@ -260,8 +304,8 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for OpenState {
         _: &QueueHandle<Self>,
     ) {
         match event {
-            xdg_toplevel::Event::Configure { width, height, .. } if width > 0 && height > 0 => {
-                state.configured_size = Some((width as u32, height as u32));
+            xdg_toplevel::Event::Configure { width, height, .. } => {
+                state.pending_size = Some((width, height));
             }
             xdg_toplevel::Event::Close => state.close_requested = true,
             _ => {}
@@ -271,13 +315,13 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for OpenState {
 
 delegate_noop!(OpenState: ignore wl_compositor::WlCompositor);
 delegate_noop!(OpenState: ignore wl_shm::WlShm);
-delegate_noop!(OpenState: ignore wl_surface::WlSurface);
 
 pub(crate) struct WindowInner {
     // EGL must be destroyed before the protocol objects and connection.
     #[cfg(feature = "opengl")]
     gl_context: Option<crate::gl::GlContext>,
     connection: Connection,
+    surface_scaling: super::scaling::SurfaceScaling,
     surface: wl_surface::WlSurface,
     shell_surface: xdg_surface::XdgSurface,
     toplevel: xdg_toplevel::XdgToplevel,
@@ -288,10 +332,24 @@ pub(crate) struct WindowInner {
     cursor: Cell<MouseCursor>,
 }
 
+impl WindowInner {
+    fn apply_geometry(&self, info: WindowInfo) -> Result<(), String> {
+        self.surface_scaling.apply(&self.surface, info)?;
+        self.window_info.set(info);
+        #[cfg(feature = "opengl")]
+        if let Some(context) = self.gl_context.as_ref() {
+            let size = info.physical_size();
+            context.resize_wayland(size.width as i32, size.height as i32);
+        }
+        Ok(())
+    }
+}
+
 impl Drop for WindowInner {
     fn drop(&mut self) {
         #[cfg(feature = "opengl")]
         drop(self.gl_context.take());
+        drop(std::mem::take(&mut self.surface_scaling));
         self.toplevel.destroy();
         self.shell_surface.destroy();
         self.surface.destroy();
@@ -383,16 +441,13 @@ impl<'a> Window<'a> {
             .ok_or("wl_compositor is unavailable")?;
         let wm_base = state.wm_base.clone().ok_or("xdg_wm_base is unavailable")?;
 
-        let scale = match options.scale {
-            WindowScalePolicy::SystemScaleFactor => 1.0,
-            WindowScalePolicy::ScaleFactor(scale) if scale.is_finite() && scale > 0.0 => scale,
-            WindowScalePolicy::ScaleFactor(_) => return Err("invalid window scale".into()),
-        };
-        let mut info = WindowInfo::from_logical_size(options.size, scale);
         let surface = compositor.create_surface(&handle, ());
+        state.scaling.surface = Some(surface.clone());
+        let surface_scaling =
+            super::scaling::SurfaceScaling::new(&state.scaling, &surface, &handle);
         let shell_surface = wm_base.get_xdg_surface(&surface, &handle, ());
         let toplevel = shell_surface.get_toplevel(&handle, ());
-        toplevel.set_title(options.title);
+        toplevel.set_title(options.title.clone());
         toplevel.set_app_id("sunmao".into());
         surface.commit();
         super::dispatch::roundtrip(&connection, &mut queue, &mut state, Duration::from_secs(5))?;
@@ -404,6 +459,13 @@ impl<'a> Window<'a> {
         if !state.configured {
             return Err("compositor did not configure the Wayland surface".into());
         }
+
+        let scale = surface_scaling.scale(&state.scaling.model, options.scale, &surface);
+        let logical = state.configured_size.take().map_or(options.size, |(w, h)| {
+            super::scaling::configured_size(options.size, w, h)
+        });
+        let info = super::scaling::geometry(logical, scale)?;
+        surface_scaling.apply(&surface, info)?;
 
         #[cfg(feature = "opengl")]
         let gl_context = options
@@ -426,6 +488,7 @@ impl<'a> Window<'a> {
             #[cfg(feature = "opengl")]
             gl_context,
             connection,
+            surface_scaling,
             surface,
             shell_surface,
             toplevel,
@@ -451,6 +514,25 @@ impl<'a> Window<'a> {
             && !inner.close_requested.get()
             && !state.close_requested
         {
+            // Apply compositor geometry/scale before callbacks can draw a new
+            // buffer. Pointer coordinates already use these surface units.
+            let old = inner.window_info.get();
+            let logical = state
+                .configured_size
+                .take()
+                .map_or(old.logical_size(), |(w, h)| {
+                    super::scaling::configured_size(old.logical_size(), w, h)
+                });
+            let scale =
+                inner
+                    .surface_scaling
+                    .scale(&state.scaling.model, options.scale, &inner.surface);
+            let configured = super::scaling::geometry(logical, scale)?;
+            if configured.logical_size() != old.logical_size() || configured.scale() != old.scale()
+            {
+                inner.apply_geometry(configured)?;
+                handler.on_event(&mut window, Event::Window(WindowEvent::Resized(configured)));
+            }
             for seat in state.seats.values_mut() {
                 if let Some(keyboard) = seat.keyboard.as_mut() {
                     keyboard.tick(Instant::now(), &mut state.events);
@@ -466,20 +548,10 @@ impl<'a> Window<'a> {
             }
             if let Some(size) = resize_receiver.try_iter().last() {
                 window.resize(size);
-                info = inner.window_info.get();
-                handler.on_event(&mut window, Event::Window(WindowEvent::Resized(info)));
-            }
-            if let Some((width, height)) = state.configured_size.take() {
-                let configured =
-                    WindowInfo::from_physical_size(crate::PhySize::new(width, height), scale);
-                if configured.physical_size() != inner.window_info.get().physical_size() {
-                    inner.window_info.set(configured);
-                    #[cfg(feature = "opengl")]
-                    if let Some(context) = inner.gl_context.as_ref() {
-                        context.resize_wayland(width as i32, height as i32);
-                    }
-                    handler.on_event(&mut window, Event::Window(WindowEvent::Resized(configured)));
-                }
+                handler.on_event(
+                    &mut window,
+                    Event::Window(WindowEvent::Resized(inner.window_info.get())),
+                );
             }
             if last_frame.elapsed() >= frame_interval {
                 handler.on_frame(&mut window);
@@ -509,21 +581,19 @@ impl<'a> Window<'a> {
     }
 
     pub fn resize(&mut self, size: Size) {
-        let scale = self.inner.window_info.get().scale();
-        let info = WindowInfo::from_logical_size(size, scale);
-        let physical = info.physical_size();
-        self.inner.window_info.set(info);
-        self.inner
-            .toplevel
-            .set_min_size(physical.width as i32, physical.height as i32);
-        self.inner
-            .toplevel
-            .set_max_size(physical.width as i32, physical.height as i32);
-        #[cfg(feature = "opengl")]
-        if let Some(context) = self.inner.gl_context.as_ref() {
-            context.resize_wayland(physical.width as i32, physical.height as i32);
+        let result = super::scaling::geometry(size, self.inner.window_info.get().scale())
+            .and_then(|info| self.inner.apply_geometry(info));
+        if let Err(error) = result {
+            eprintln!("baseview: Wayland resize rejected: {error}");
+            return;
         }
-        self.inner.surface.commit();
+        let logical = self.inner.window_info.get().logical_size();
+        self.inner
+            .toplevel
+            .set_min_size(logical.width as i32, logical.height as i32);
+        self.inner
+            .toplevel
+            .set_max_size(logical.width as i32, logical.height as i32);
     }
 
     pub fn set_mouse_cursor(&mut self, cursor: MouseCursor) {

@@ -17,6 +17,7 @@ mod keyboard;
 mod pointer;
 #[cfg(feature = "wayland")]
 pub mod probe;
+mod scaling;
 #[cfg(feature = "wayland")]
 pub mod toplevel;
 #[cfg(feature = "wayland")]
