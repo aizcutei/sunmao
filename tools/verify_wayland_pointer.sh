@@ -18,7 +18,9 @@ trap cleanup EXIT
 for _ in $(seq 1 100); do
   kill -0 "$weston_pid"
   if [ -S "$XDG_RUNTIME_DIR/wayland-pointer-ci" ]; then
-    SUNMAO_INPUT_WINDOW=$(xdotool search --onlyvisible --name 'Weston Compositor' | head -1) || true
+    # Weston sets _NET_WM_NAME only; xdotool --name reads legacy WM_NAME.
+    # Its WM_CLASS is explicit even without a window manager in Xvfb.
+    SUNMAO_INPUT_WINDOW=$(xdotool search --onlyvisible --limit 1 --class '^Weston Compositor$') || true
     [ -n "${SUNMAO_INPUT_WINDOW:-}" ] && break
   fi
   sleep 0.1

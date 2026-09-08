@@ -979,3 +979,17 @@
 - Change: 新增 seat/pointer 接线与移除时释放按键的 proptest。CI 在 Xvfb 内启动带 seat 的 Weston kiosk，由 xdotool 注入真实移动/点击；编辑器进程移除 DISPLAY，只连接 Wayland。`native_wayland_pointer_changes_rendered_pixels` 断言有坐标的左键按下、释放按顺序到达 ViewState，且 shader 像素由红变蓝；脚本强制成功标记并在失败时输出 compositor 日志。
 - Result: 完整本地测试 exit 0（/tmp/sunmao-pointer-final-tests.log）；Linux 类型检查与 Windows all-features check exit 0；locked metadata、fmt、diff 和 bash 语法检查通过。本地 macOS 不能提供 Wayland 输入运行证据。
 - Unresolved: 新增真实鼠标验收待 hosted CI；键盘/xkbcommon、修饰键、focus/cursor、output scaling、facade feature 传递仍未完成，M5 不标记完成。
+
+### 2026-09-08 — 鼠标验收提交已推送；等待 hosted CI
+
+- Command/platform: `00a5eac` 已通过 HTTPS 推送到 phase4/gui-component-library；GitHub Actions API 确认新 run 34213118156 运行中。
+- Change: 等待新鼠标验收的三平台 hosted 结果；同时补核 run #116 的历史产物。
+- Result: run #116 三份 ZIP 均已下载并通过 API digest SHA-256 与 ZIP CRC 校验：Windows 78,339,259 bytes / 364 条目，Linux 971,756,391 bytes / 96 条目，macOS 53,086,610 bytes / 152 条目。文件位于 /tmp/sunmao-run116-phase1-{Windows-X64,Linux-X64,macOS-ARM64}.zip。
+- Unresolved: [鼠标 CI](https://github.com/aizcutei/sunmao/actions/runs/34213118156) 经再次 API 查询仍运行中：Linux job 102018511076、macOS job 102018511236、Windows job 102018511498 均处于 Test format adapters and host，Wayland pointer 步骤尚未开始。首次查询遇到 TLS 中断，重查成功；未重启 job。下一步核对 Linux WAYLAND POINTER VERIFIED 标记和三 job 结论。
+
+### 2026-09-08 — 修复鼠标 CI 的 Weston 窗口查找
+
+- Command/platform: run 34213118156 / `00a5eac`，Linux job 102018511076 日志与 check-run annotations；源码核对 Weston 13 的 backend-x11/x11.c 与 xdotool 的 xdo_search.c。
+- Change: Weston 已创建 640×480 X11 输出（日志 window id 2097157），但只设置 _NET_WM_NAME；xdotool --name 使用 XGetWMName 查询 WM_NAME，因此测试床查找超时。改为按明确设置的 WM_CLASS 精确查找 Weston Compositor，并用 --limit 1 避免管道。
+- Result: 原 Linux job 的 headless EGL/editor 验收及 pointer 单测/proptest 均通过；真实鼠标测试尚未启动，不能宣称输入失败或成功。当前 bash 语法、metadata、fmt、diff 检查通过；完整本地 RUSTFLAGS=-Awarnings cargo test --locked 已 exit 0（/tmp/sunmao-pointer-class-tests.log）。
+- Unresolved: 修正已通过完整本地 gate，待提交推送与 hosted 实测；本轮继续聚焦真实 pointer 验收，M5 其余未完成项保持不变。
