@@ -7,7 +7,7 @@ use super::window::OpenState;
 use crate::{Event, MouseButton, MouseEvent, Point, ScrollDelta};
 
 pub(super) struct Seat {
-    seat: wl_seat::WlSeat,
+    pub(super) seat: wl_seat::WlSeat,
     pub(super) pointer: Option<wl_pointer::WlPointer>,
     pub(super) cursor: super::cursor::PointerCursor,
     pub(super) keyboard: Option<super::keyboard::Keyboard>,
@@ -160,6 +160,7 @@ impl Dispatch<wl_seat::WlSeat, u32> for OpenState {
             } else {
                 input.flush_pointer(&mut state.events);
                 input.remove_keyboard(&mut state.events);
+                state.activation.input.remove(*name);
             }
             if capabilities.contains(wl_seat::Capability::Pointer) {
                 if input.pointer.is_none() {
@@ -167,6 +168,7 @@ impl Dispatch<wl_seat::WlSeat, u32> for OpenState {
                 }
             } else {
                 input.remove_pointer(&mut state.events);
+                state.activation.input.remove(*name);
             }
             let focused = state
                 .seats
@@ -207,6 +209,7 @@ impl Dispatch<wl_pointer::WlPointer, u32> for OpenState {
                 surface_y,
                 ..
             } => {
+                state.activation.input.record(*name, serial);
                 input.cursor.enter(serial);
                 input.frame.enter(surface_x, surface_y);
             }
@@ -221,10 +224,12 @@ impl Dispatch<wl_pointer::WlPointer, u32> for OpenState {
                 ..
             } => input.frame.motion(surface_x, surface_y),
             wl_pointer::Event::Button {
+                serial,
                 button,
                 state: WEnum::Value(value),
                 ..
             } => {
+                state.activation.input.record(*name, serial);
                 input
                     .frame
                     .button(button, value == wl_pointer::ButtonState::Pressed);

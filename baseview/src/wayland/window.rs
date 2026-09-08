@@ -75,6 +75,7 @@ impl HasWindowHandle for WindowHandle {
 }
 
 pub(super) struct OpenState {
+    pub(super) activation: super::activation::Activation,
     pub(super) seats: std::collections::HashMap<u32, super::pointer::Seat>,
     pub(super) events: Vec<Event>,
     compositor: Option<wl_compositor::WlCompositor>,
@@ -89,6 +90,7 @@ pub(super) struct OpenState {
 impl Default for OpenState {
     fn default() -> Self {
         Self {
+            activation: Default::default(),
             seats: Default::default(),
             events: Vec::new(),
             compositor: None,
@@ -165,6 +167,7 @@ impl Dispatch<wl_registry::WlRegistry, ()> for OpenState {
         handle: &QueueHandle<Self>,
     ) {
         if let wl_registry::Event::GlobalRemove { name } = event {
+            state.activation.remove_global(name);
             if let Some(mut seat) = state.seats.remove(&name) {
                 seat.remove_pointer(&mut state.events);
                 let focused = seat.keyboard.as_ref().is_some_and(|k| k.focused);
@@ -187,6 +190,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for OpenState {
         } = event
         {
             match interface.as_str() {
+                "xdg_activation_v1" => {
+                    state.activation.manager = Some((name, registry.bind(name, 1, handle, ())));
+                }
                 "wl_seat" => {
                     state.seats.insert(
                         name,
@@ -278,6 +284,7 @@ pub(crate) struct WindowInner {
     window_info: Cell<WindowInfo>,
     close_requested: Cell<bool>,
     focused: Cell<bool>,
+    focus_requested: Cell<bool>,
     cursor: Cell<MouseCursor>,
 }
 
@@ -425,6 +432,7 @@ impl<'a> Window<'a> {
             window_info: Cell::new(info),
             close_requested: Cell::new(false),
             focused: Cell::new(false),
+            focus_requested: Cell::new(false),
             cursor: Cell::new(MouseCursor::Default),
         };
         let mut window = crate::Window::new(Window { inner: &inner });
@@ -477,6 +485,11 @@ impl<'a> Window<'a> {
                 handler.on_frame(&mut window);
                 last_frame = Instant::now();
             }
+            state.update_activation(
+                inner.focus_requested.replace(false),
+                &inner.surface,
+                &handle,
+            );
             state.update_cursors(inner.cursor.get(), &inner.connection, &handle)?;
             super::dispatch::dispatch_for(
                 &mut queue,
@@ -521,7 +534,9 @@ impl<'a> Window<'a> {
         self.inner.focused.get()
     }
 
-    pub fn focus(&mut self) {}
+    pub fn focus(&mut self) {
+        self.inner.focus_requested.set(true);
+    }
 
     #[cfg(feature = "opengl")]
     pub fn gl_context(&self) -> Option<&crate::gl::GlContext> {

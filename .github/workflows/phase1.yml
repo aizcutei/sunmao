@@ -137,6 +137,8 @@ jobs:
             x11-xkb-utils \
             adwaita-icon-theme \
             weston \
+            sway \
+            wtype \
             pkg-config
 
       - name: Configure Linux GUI runtime
@@ -467,6 +469,10 @@ jobs:
       - name: Verify native Wayland pointer, keyboard and cursor
         if: runner.os == 'Linux'
         run: xvfb-run -a -s "-screen 0 1280x1024x24 -noreset" bash tools/verify_wayland_pointer.sh
+
+      - name: Verify native Wayland activation and focus policy
+        if: runner.os == 'Linux'
+        run: bash tools/verify_wayland_focus.sh
 
       - name: Test macOS system-capture linkage (non-blocking follow-up)
         if: runner.os == 'macOS'

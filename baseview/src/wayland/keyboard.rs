@@ -418,13 +418,18 @@ impl Dispatch<wl_keyboard::WlKeyboard, u32> for OpenState {
                     }
                 }
             }
-            wl_keyboard::Event::Enter { .. } => input.focused = true,
+            wl_keyboard::Event::Enter { serial, .. } => {
+                state.activation.input.record(*name, serial);
+                input.focused = true;
+            }
             wl_keyboard::Event::Leave { .. } => input.cancel(&mut state.events),
             wl_keyboard::Event::Key {
+                serial,
                 key,
                 state: WEnum::Value(value),
                 ..
             } => {
+                state.activation.input.record(*name, serial);
                 input.key(
                     key,
                     value == wl_keyboard::KeyState::Pressed,
