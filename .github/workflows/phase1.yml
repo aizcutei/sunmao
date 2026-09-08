@@ -420,6 +420,17 @@ jobs:
           WAYLAND_DISPLAY=wayland-ci LIBGL_ALWAYS_SOFTWARE=1 timeout 180s cargo test --locked -p baseview --features wayland,opengl -- --nocapture \
             2>&1 | tee "$RUNNER_TEMP/wayland-probe.log"
           status=${PIPESTATUS[0]}
+          if [ "$status" -eq 0 ]; then
+            env -u DISPLAY WAYLAND_DISPLAY=wayland-ci LIBGL_ALWAYS_SOFTWARE=1 SUNMAO_GUI_PIXEL_PROBE=1 \
+              timeout 180s cargo test --locked -p sunmao_view_baseview --features wayland \
+              native_wayland_editor_renders_resizes_and_reopens -- --nocapture \
+              2>&1 | tee "$RUNNER_TEMP/wayland-editor.log"
+            status=${PIPESTATUS[0]}
+            if [ "$status" -eq 0 ] && ! grep -q "WAYLAND EDITOR VERIFIED" "$RUNNER_TEMP/wayland-editor.log"; then
+              echo "::error::Native Wayland editor acceptance did not run"
+              status=1
+            fi
+          fi
           kill "$weston_pid" 2>/dev/null || true
           if [ "$status" -ne 0 ]; then
             echo "::error title=Wayland probe failed::cargo test exited with $status"

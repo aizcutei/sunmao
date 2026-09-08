@@ -33,6 +33,9 @@ use sunmao_gui::{
 
 mod pixel_probe;
 
+#[cfg(all(test, target_os = "linux", feature = "wayland"))]
+mod wayland_acceptance;
+
 #[used]
 static _SUNMAO_DEBUG_READ_FRAME: unsafe extern "C" fn(*mut u32, *mut u32, *mut u32, usize) -> i32 =
     pixel_probe::sunmao_debug_read_frame;

@@ -951,3 +951,10 @@
 - Change: Linux 新增 X11/Wayland 分派层；`open_floating` 在 Wayland 会话创建持久化 `xdg_toplevel` worker，绑定 EGL，返回 Wayland raw handle，发送初始/变化 `Resized`，执行 `WindowHandler::on_frame`，处理 compositor close 与有序 EGL/协议销毁；embedded 仍走 X11。
 - Result: [run #114](https://github.com/aizcutei/sunmao/actions/runs/34202574798) 三平台 jobs success，Ubuntu Wayland 步骤 success；三份 artifacts 已上传且未过期（macOS 53,086,626 bytes；Windows 78,340,787 bytes；Linux 971,756,295 bytes）。
 - Unresolved: `wl_seat`/xkbcommon 输入、output scaling 和面向真实 editor 的 hosted acceptance 尚未完成；M5 继续进行。
+
+### 2026-09-08 — 新增真实 Wayland 编辑器验收，纠正 probe 证据范围
+
+- Command/platform: Linux target cargo check（x11/dox 仅跳过系统库链接探测，不作为运行证据），Windows target check，macOS 完整本地测试。
+- Change: 新增 native_wayland_editor_renders_resizes_and_reopens，禁用 DISPLAY 后通过 BaseviewView::open_floating 启动真实 SunMao GL renderer，校验红绿 shader 像素、resize 新帧、两次开关及 state 析构。Ubuntu CI 强制成功标记，不允许跳过。
+- Result: Linux 新测试 Rust 类型检查通过，Windows target check 通过；完整本地 RUSTFLAGS=-Awarnings cargo test --locked 已 exit 0（/tmp/sunmao-editor-tests.log）；metadata、fmt、diff 检查均通过。run #114 只有旧 probe，因此不证明该窗口路径实际运行。上一轮附件不可读的判断也更正：命令路径把 abd8 拼错成 ab8d，正确附件一直存在。
+- Unresolved: 新增运行验收待 hosted 执行；输入、cursor/focus、output scaling、facade feature 传递仍需完成，M5 保持未完成。
