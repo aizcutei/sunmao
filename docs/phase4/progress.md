@@ -930,3 +930,10 @@
 - Change: 源码复核发现上一条记录不准确：probe 已使用有期限握手，但 toplevel 与 EGL 测试仍保留 7 处 queue.roundtrip。现全部改为五秒期限的 dispatch::roundtrip。
 - Result: run #111 三平台 jobs success，三个 artifacts 已上传且未过期（本轮仅核实 API，未下载）；当前修正 metadata、fmt、diff、完整 RUSTFLAGS=-Awarnings cargo test --locked、Windows target check 均 exit 0。测试日志 /tmp/sunmao-wayland-timeout-tests.log。
 - Unresolved: 当前修正待提交及 hosted 验证；原生浮动编辑器窗口分派、事件循环与输入仍未接入，M5 未完成。
+
+### 2026-09-08 — 定位并修复 run #112 的 Linux 编译错误
+
+- Command/platform: 下载 run #112 Linux job 101500655736 日志，核对 check-run annotations。
+- Change: 上次替换把嵌套 tests 模块内四处调用写成 super::dispatch，错误地指向 toplevel::dispatch，触发 E0433。统一使用 crate::wayland::dispatch，避免模块深度影响路径解析。
+- Result: 日志确认原失败发生在编译阶段，未运行 Wayland 测试。当前 metadata、fmt、diff、Windows MSVC target check 均通过；完整本地测试仍在运行（/tmp/sunmao-fix112-tests.log）。
+- Unresolved: 修正待完整本地 gate、提交推送及 hosted 验证。M5 原生浮动编辑器接入仍未完成。

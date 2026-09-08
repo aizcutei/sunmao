@@ -202,8 +202,13 @@ pub fn open_toplevel(
     connection.display().get_registry(&handle, ());
 
     let mut state = State::default();
-    super::dispatch::roundtrip(&connection, &mut queue, &mut state, Duration::from_secs(5))
-        .map_err(|error| ToplevelError::Protocol(error.to_string()))?;
+    crate::wayland::dispatch::roundtrip(
+        &connection,
+        &mut queue,
+        &mut state,
+        Duration::from_secs(5),
+    )
+    .map_err(|error| ToplevelError::Protocol(error.to_string()))?;
 
     let compositor = state
         .compositor
@@ -229,8 +234,13 @@ pub fn open_toplevel(
     state.surface = Some(surface.clone());
     state.xdg_surface = Some(xdg_surface.clone());
 
-    super::dispatch::roundtrip(&connection, &mut queue, &mut state, Duration::from_secs(5))
-        .map_err(|error| ToplevelError::Protocol(error.to_string()))?;
+    crate::wayland::dispatch::roundtrip(
+        &connection,
+        &mut queue,
+        &mut state,
+        Duration::from_secs(5),
+    )
+    .map_err(|error| ToplevelError::Protocol(error.to_string()))?;
 
     if state.progress.configured {
         let buffer = solid_buffer(&shm, &handle, width, height)?;
@@ -238,8 +248,13 @@ pub fn open_toplevel(
         surface.damage(0, 0, width as i32, height as i32);
         surface.commit();
         state.progress.buffer_attached = true;
-        super::dispatch::roundtrip(&connection, &mut queue, &mut state, Duration::from_secs(5))
-            .map_err(|error| ToplevelError::Protocol(error.to_string()))?;
+        crate::wayland::dispatch::roundtrip(
+            &connection,
+            &mut queue,
+            &mut state,
+            Duration::from_secs(5),
+        )
+        .map_err(|error| ToplevelError::Protocol(error.to_string()))?;
     }
 
     let progress = state.progress;
@@ -351,8 +366,13 @@ mod tests {
         let handle = queue.handle();
         connection.display().get_registry(&handle, ());
         let mut state = State::default();
-        super::dispatch::roundtrip(&connection, &mut queue, &mut state, Duration::from_secs(5))
-            .unwrap();
+        crate::wayland::dispatch::roundtrip(
+            &connection,
+            &mut queue,
+            &mut state,
+            Duration::from_secs(5),
+        )
+        .unwrap();
         let surface = state
             .compositor
             .as_ref()
@@ -366,8 +386,13 @@ mod tests {
         let toplevel = shell_surface.get_toplevel(&handle, ());
         toplevel.set_title("SunMao EGL acceptance".into());
         surface.commit();
-        super::dispatch::roundtrip(&connection, &mut queue, &mut state, Duration::from_secs(5))
-            .unwrap();
+        crate::wayland::dispatch::roundtrip(
+            &connection,
+            &mut queue,
+            &mut state,
+            Duration::from_secs(5),
+        )
+        .unwrap();
         assert!(state.progress.configured);
         let config = crate::gl::GlConfig {
             srgb: false,
@@ -409,8 +434,13 @@ mod tests {
                 assert_eq!(pixel, expected, "rendered pixel after resize");
             }
             context.swap_buffers().unwrap();
-            super::dispatch::roundtrip(&connection, &mut queue, &mut state, Duration::from_secs(5))
-                .unwrap();
+            crate::wayland::dispatch::roundtrip(
+                &connection,
+                &mut queue,
+                &mut state,
+                Duration::from_secs(5),
+            )
+            .unwrap();
         }
         unsafe {
             context.make_not_current().unwrap();
@@ -420,8 +450,13 @@ mod tests {
         toplevel.destroy();
         shell_surface.destroy();
         surface.destroy();
-        super::dispatch::roundtrip(&connection, &mut queue, &mut state, Duration::from_secs(5))
-            .unwrap();
+        crate::wayland::dispatch::roundtrip(
+            &connection,
+            &mut queue,
+            &mut state,
+            Duration::from_secs(5),
+        )
+        .unwrap();
         println!("WAYLAND EGL VERIFIED: pixels, resize, swap and teardown");
     }
 
