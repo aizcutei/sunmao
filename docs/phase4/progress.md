@@ -1224,3 +1224,24 @@
 - Change: 提交 Sway 输出移除后的 surface preference 保留与后续 3x 通知验收，以及协议日志检查和语义说明。
 - Result: 完整回归 exit 0，包含全部 doc-tests；Linux tests 类型检查、metadata/fmt/diff/bash 语法检查已通过。只修改 Linux 专属测试、验收脚本与文档，无平台实现或示例/打包改动。
 - Unresolved: 修正待新提交三平台 hosted 验收，旧 run 的 macOS 已 success、Linux 为已定位的测试假设失败；还需新日志与三份同提交 artifacts。M5 保持未完成。
+
+### 2026-09-08 — 输出移除验收修正已推送
+
+- Command/platform: HTTPS push 0b9e8431407b65ebb3dcf312a553713a3929b114 至 phase4/gui-component-library；GitHub Actions API 查询。
+- Change: 保留真实输出移除、后续比例变化、EGL 尺寸/边缘像素、Weston fallback 与 2x 光标验收，按 surface preference 协议纠正 Sway 1.9 的预期。
+- Result: push exit 0；新 run 34239337659 精确匹配修正提交，当前 pending：https://github.com/aizcutei/sunmao/actions/runs/34239337659 。完整本地 gate 已通过。
+- Unresolved: 间隔 API 查询确认新 run 34239337659 / 0b9e843 持续 in_progress：Windows job 102105277820、macOS job 102105277823 已进入格式适配器与宿主测试，Linux job 102105277998 完成 Rust 安装并推进 GUI 依赖安装；尚无失败，新缩放步骤仍 pending。旧 run 34237571022 已 completed/cancelled（Linux 先前 failure、macOS 先前 success），不能作为三平台验收。本轮为已验证 CI 等待。后续一轮两次间隔查询确认三平台格式适配器与宿主测试均通过：Windows 进入 facade renderer contracts，Linux 进入 standalone runtime/facade/reference examples，macOS 进入 accessibility；尚无失败，Linux 缩放专项仍 pending。需新提交三平台 hosted 完整 jobs、Linux 实际缩放日志和同提交三份产物下载校验；M5 保持未完成。
+
+### 2026-09-08 — 保持 3x 缩放验收窗口位于输出内
+
+- Command/platform: run 34239337659 / 0b9e843，Linux job 102105277998 failure；下载 /tmp/sunmao-run34239337659-linux.log，核对 check-runs/annotations；阅读 Sway 1.9 desktop/output.c 的比例通知与相交表面遍历。
+- Change: 在剩余输出改成 3x 后，以 Sway 命令聚焦验收窗口并移到逻辑坐标 (10,10)，保证缩小后的 426x320 输出仍包含窗口，再等待 3x surface preference。保留全部原密度、移除、resize、显式覆盖、Weston 与光标断言；平台实现未改动。
+- Result: 本次 hosted 已通过输出移除后的 2x EGL 尺寸与边缘像素检查；随后日志只收到 output.scale(3)、surface.leave(output10)，没有 preferred_scale(360)，测试等待 3x 超时。Sway 仅对活跃工作区与输出相交的 surface 发更新，旧浮动位置在逻辑输出缩小后落到范围外。修正 Linux tests 类型检查 exit 0（/tmp/sunmao-scale-position-check.log），metadata/fmt/diff 通过。
+- Unresolved: 完整本地回归 session 52399 已启动（/tmp/sunmao-scale-position-tests.log）；本轮两次间隔轮询确认原进程持续推进，常规测试已全部通过，当前执行 core 15 项文档测试，暂无失败。旧 run 的 macOS job 102105277823 已 completed/success，Windows job 102105277820 进入原生 GUI 打包验收。上一轮为修正进展，本轮为已验证等待。完整回归尚未完成；修正未提交，仍需新提交三平台 hosted 完整结果、Weston fallback 与 2x 光标实际日志以及产物。旧 Windows/macOS 仍运行；M5 保持未完成。
+
+### 2026-09-08 — 3x 验收窗口位置修正完整 gate 通过
+
+- Command/platform: 原完整回归 session 52399 exit 0，macOS ARM64；日志 /tmp/sunmao-scale-position-tests.log。
+- Change: 在 Sway 3x 输出变更后聚焦并定位浮动测试窗口，确保实际与剩余输出相交后再验证 surface preference。
+- Result: 完整常规测试与 doc-tests 全部通过；Linux tests 类型检查、metadata、fmt、diff 已通过。仅修改 Linux 验收测试和进展文档，无平台实现或示例/打包改动。
+- Unresolved: 修正待新提交三平台 hosted jobs、真实缩放/Weston/2x 光标日志与同提交产物下载校验；M5 保持未完成。

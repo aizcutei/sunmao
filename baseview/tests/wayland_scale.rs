@@ -174,6 +174,11 @@ fn native_wayland_scaling_tracks_density_outputs_and_buffer_pixels() {
     // disabled output remains in its surface output list, so use a larger
     // scale than that output's retained 2x to exercise a fresh notification.
     sway("output HEADLESS-1 scale 3");
+    // The output now has only 426x320 logical units. Sway preserves floating
+    // positions during output removal/scale changes, so the old position can
+    // lie outside it (wl_surface.leave). Keep the test window visible before
+    // expecting a surface preference for this output.
+    sway("[title=\"SunMao scale acceptance\"] focus, move position 10 10");
     wait_frame(&rx, size, 3.0);
     window.resize(Size::new(180.0, 130.0));
     wait_frame(&rx, Size::new(180.0, 130.0), 3.0);
