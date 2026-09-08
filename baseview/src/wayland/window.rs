@@ -74,7 +74,9 @@ impl HasWindowHandle for WindowHandle {
     }
 }
 
-struct OpenState {
+pub(super) struct OpenState {
+    pub(super) seats: std::collections::HashMap<u32, super::pointer::Seat>,
+    pub(super) events: Vec<Event>,
     compositor: Option<wl_compositor::WlCompositor>,
     wm_base: Option<xdg_wm_base::XdgWmBase>,
     configured: bool,
@@ -85,6 +87,8 @@ struct OpenState {
 impl Default for OpenState {
     fn default() -> Self {
         Self {
+            seats: Default::default(),
+            events: Vec::new(),
             compositor: None,
             wm_base: None,
             configured: false,
@@ -116,6 +120,12 @@ impl Dispatch<wl_registry::WlRegistry, ()> for OpenState {
         _: &Connection,
         handle: &QueueHandle<Self>,
     ) {
+        if let wl_registry::Event::GlobalRemove { name } = event {
+            if let Some(mut seat) = state.seats.remove(&name) {
+                seat.remove_pointer(&mut state.events);
+            }
+            return;
+        }
         if let wl_registry::Event::Global {
             name,
             interface,
@@ -123,6 +133,17 @@ impl Dispatch<wl_registry::WlRegistry, ()> for OpenState {
         } = event
         {
             match interface.as_str() {
+                "wl_seat" => {
+                    state.seats.insert(
+                        name,
+                        super::pointer::Seat::new(registry.bind(
+                            name,
+                            version.min(5),
+                            handle,
+                            name,
+                        )),
+                    );
+                }
                 "wl_compositor" => {
                     state.compositor = Some(registry.bind(name, version.min(4), handle, ()))
                 }
@@ -355,6 +376,9 @@ impl<'a> Window<'a> {
             && !inner.close_requested.get()
             && !state.close_requested
         {
+            for event in state.events.drain(..) {
+                handler.on_event(&mut window, event);
+            }
             if let Some(size) = resize_receiver.try_iter().last() {
                 window.resize(size);
                 info = inner.window_info.get();

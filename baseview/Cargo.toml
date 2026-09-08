@@ -59,6 +59,9 @@ objc = "0.2.7"
 uuid = { version = "0.8", features = ["v4"] }
 accesskit_macos = { version = "0.27", optional = true }
 
+[target.'cfg(target_os="linux")'.dev-dependencies]
+proptest = "1.11.0"
+
 [dev-dependencies]
 glow = "0.16"
 rtrb = "0.2"

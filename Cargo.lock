@@ -614,6 +614,7 @@ dependencies = [
  "khronos-egl",
  "nix 0.22.3",
  "objc",
+ "proptest",
  "raw-window-handle",
  "rtrb",
  "softbuffer",

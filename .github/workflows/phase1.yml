@@ -133,6 +133,7 @@ jobs:
             mesa-vulkan-drivers \
             xvfb \
             xauth \
+            xdotool \
             weston \
             pkg-config
 
@@ -460,6 +461,10 @@ jobs:
               exit 1
             fi
           fi
+
+      - name: Verify native Wayland pointer input
+        if: runner.os == 'Linux'
+        run: xvfb-run -a bash tools/verify_wayland_pointer.sh
 
       - name: Test macOS system-capture linkage (non-blocking follow-up)
         if: runner.os == 'macOS'

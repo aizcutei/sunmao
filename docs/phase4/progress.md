@@ -958,3 +958,24 @@
 - Change: 新增 native_wayland_editor_renders_resizes_and_reopens，禁用 DISPLAY 后通过 BaseviewView::open_floating 启动真实 SunMao GL renderer，校验红绿 shader 像素、resize 新帧、两次开关及 state 析构。Ubuntu CI 强制成功标记，不允许跳过。
 - Result: Linux 新测试 Rust 类型检查通过，Windows target check 通过；完整本地 RUSTFLAGS=-Awarnings cargo test --locked 已 exit 0（/tmp/sunmao-editor-tests.log）；metadata、fmt、diff 检查均通过。run #114 只有旧 probe，因此不证明该窗口路径实际运行。上一轮附件不可读的判断也更正：命令路径把 abd8 拼错成 ab8d，正确附件一直存在。
 - Unresolved: 新增运行验收待 hosted 执行；输入、cursor/focus、output scaling、facade feature 传递仍需完成，M5 保持未完成。
+
+### 2026-09-08 — run #116：真实 Wayland GL 编辑器运行验收通过
+
+- Command/platform: GitHub Actions run 34210132607 / `fee7aa1`；Linux job 102008893143 日志下载到 /tmp/sunmao-run116-linux.log。
+- Change: 核对新增编辑器验收实际执行，更新状态矩阵的证据范围。
+- Result: 同一提交三平台 jobs success。Linux 日志 09:34:23Z 明确输出 WAYLAND EDITOR VERIFIED: shader rendering, resize, close and reopen without X11，测试通过。较早的普通包测试仅跳过 Wayland 环境，不能当作运行证据。
+- Unresolved: M5 输入、cursor/focus、output scaling 和 facade feature 传递仍需完成；此验收没有证明原生输入，也未完成 artifacts 下载核验。
+
+### 2026-09-08 — Wayland seat/pointer 接入
+
+- Command/platform: 按 wayland.xml 核对 seat capabilities、pointer frame 和 button/axis；Linux target 类型检查通过（x11/dox 仅跳过系统库探测）。
+- Change: 按 seat 绑定 pointer，热插拔与 capability 移除释放对象；保留 enter 坐标与 frame 内顺序，将 mouse events 转发给真实 WindowHandler。移除 pointer 时补发 release 防止拖拽卡住；新增顺序与移除测试。
+- Result: Linux 类型检查通过，fmt/diff/metadata 通过；此前完整本地测试 exit 0（/tmp/sunmao-pointer-tests.log）；新增真实输入验收后的最终回归运行中（/tmp/sunmao-pointer-final-tests.log）。
+- Unresolved: 代码尚未提交；Windows all-features target check 与 Linux 测试类型检查已通过，仍需最终完整本地 gate 与 hosted 运行。headless Weston 无 seat，新增单测不证明真实鼠标注入。键盘修饰键、focus/cursor、output scaling 尚未完成。
+
+### 2026-09-08 — 原生 Wayland 鼠标真实输入验收接入 CI
+
+- Command/platform: macOS ARM64 完整 `RUSTFLAGS=-Awarnings cargo test --locked`；Windows MSVC baseview all-features check；Linux baseview/view_baseview tests 类型检查。
+- Change: 新增 seat/pointer 接线与移除时释放按键的 proptest。CI 在 Xvfb 内启动带 seat 的 Weston kiosk，由 xdotool 注入真实移动/点击；编辑器进程移除 DISPLAY，只连接 Wayland。`native_wayland_pointer_changes_rendered_pixels` 断言有坐标的左键按下、释放按顺序到达 ViewState，且 shader 像素由红变蓝；脚本强制成功标记并在失败时输出 compositor 日志。
+- Result: 完整本地测试 exit 0（/tmp/sunmao-pointer-final-tests.log）；Linux 类型检查与 Windows all-features check exit 0；locked metadata、fmt、diff 和 bash 语法检查通过。本地 macOS 不能提供 Wayland 输入运行证据。
+- Unresolved: 新增真实鼠标验收待 hosted CI；键盘/xkbcommon、修饰键、focus/cursor、output scaling、facade feature 传递仍未完成，M5 不标记完成。
