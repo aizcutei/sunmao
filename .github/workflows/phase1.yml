@@ -499,6 +499,13 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: "13.0"
         run: cargo test --locked -p sunmao_runtime --features system-capture
 
+      - name: Verify native X11 international keyboard input
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          xvfb-run -a -s "-screen 0 800x600x24 -noreset" env -u WAYLAND_DISPLAY LC_ALL=C.UTF-8 SUNMAO_X11_KEYBOARD_TEST=1 cargo test --locked -p baseview --test x11_keyboard -- --nocapture 2>&1 | tee /tmp/x11-keyboard.log
+          grep -q '^X11 KEYBOARD VERIFIED:' /tmp/x11-keyboard.log
+
       - name: Check baseview feature combinations
         run: |
           cargo test --locked -p baseview --all-features

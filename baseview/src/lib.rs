@@ -6,6 +6,8 @@ mod macos;
 mod win;
 #[cfg(target_os = "linux")]
 mod x11;
+#[cfg(target_os = "linux")]
+mod xkb_keyboard;
 
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub mod wayland;

@@ -26,7 +26,7 @@ accessibility = ["dep:accesskit", "dep:accesskit_windows", "dep:accesskit_macos"
 # Native Wayland. Off by default and Linux-only: the X11 backend already works
 # on Wayland desktops through XWayland, so this is an improvement (no X server,
 # proper per-output scaling) rather than a prerequisite.
-wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:wayland-backend", "dep:wayland-sys", "dep:khronos-egl", "dep:xkbcommon-dl", "dep:wayland-cursor"]
+wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:wayland-backend", "dep:wayland-sys", "dep:khronos-egl", "dep:wayland-cursor"]
 
 [dependencies]
 keyboard-types = { version = "0.6.1", default-features = false }
@@ -35,7 +35,7 @@ accesskit = { version = "0.25", optional = true }
 wry = { version = "=0.53.3", default-features = false, features = ["os-webview", "x11"], optional = true }
 
 [target.'cfg(target_os="linux")'.dependencies]
-x11rb = { version = "0.13.0", features = ["cursor", "resource_manager", "allow-unsafe-code"] }
+x11rb = { version = "0.13.0", features = ["cursor", "resource_manager", "allow-unsafe-code", "xkb"] }
 x11 = { version = "2.21", features = ["xlib", "xlib_xcb"] }
 nix = "0.22.0"
 gtk = { version = "0.18", features = ["unsafe-assume-initialized"], optional = true }
@@ -45,7 +45,7 @@ wayland-cursor = { version = "0.31.12", optional = true }
 wayland-client = { version = "0.31", optional = true }
 wayland-backend = { version = "0.3", features = ["client_system", "dlopen"], optional = true }
 wayland-sys = { version = "0.31", features = ["egl", "dlopen"], optional = true }
-xkbcommon-dl = { version = "0.4.2", optional = true }
+xkbcommon-dl = { version = "0.4.2", features = ["x11"] }
 khronos-egl = { version = "6", features = ["dynamic"], optional = true }
 wayland-protocols = { version = "0.32", features = ["client", "staging"], optional = true }
 
@@ -62,6 +62,7 @@ uuid = { version = "0.8", features = ["v4"] }
 accesskit_macos = { version = "0.27", optional = true }
 
 [target.'cfg(target_os="linux")'.dev-dependencies]
+x11rb = { version = "0.13.0", features = ["xtest"] }
 proptest = "1.11.0"
 
 [dev-dependencies]

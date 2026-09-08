@@ -1,4 +1,4 @@
-use crate::x11::keyboard::{convert_key_press_event, convert_key_release_event, key_mods};
+use crate::x11::keyboard::{key_mods, Keyboard};
 use crate::x11::{ParentHandle, Window, WindowInner};
 use crate::{
     Event, MouseButton, MouseEvent, PhyPoint, PhySize, ScrollDelta, Size, WindowEvent,
@@ -57,6 +57,7 @@ impl accesskit::DeactivationHandler for NoDeactivation {
 
 pub(super) struct EventLoop {
     handler: Box<dyn WindowHandler>,
+    keyboard: Keyboard,
     /// AT-SPI adapter, created on the first frame that has a tree to publish.
     ///
     /// Lazy for the same reason as the Windows one: constructing it starts a
@@ -100,12 +101,14 @@ impl EventLoop {
 
     pub fn new(
         window: WindowInner,
+        keyboard: Keyboard,
         handler: impl WindowHandler + 'static,
         parent_handle: Option<ParentHandle>,
         resize_receiver: Option<Receiver<Size>>,
         blocking_stop_requested: Option<Arc<AtomicBool>>,
     ) -> Self {
         Self {
+            keyboard,
             window,
             handler: Box::new(handler),
             #[cfg(feature = "accessibility")]
@@ -387,24 +390,55 @@ impl EventLoop {
             // keys
             ////
             XEvent::KeyPress(event) => {
+                if let Some(event) = self.keyboard.event(&event, true) {
+                    self.emit_keyboard(event);
+                }
+            }
+            XEvent::KeyRelease(event) => {
+                if let Some(event) = self.keyboard.event(&event, false) {
+                    self.emit_keyboard(event);
+                }
+            }
+            XEvent::XkbMapNotify(_) | XEvent::XkbNewKeyboardNotify(_) => {
+                self.cancel_keyboard();
+                if let Err(error) = self.keyboard.reload(&self.window.xcb_connection) {
+                    eprintln!("X11 keyboard map reload failed: {error}");
+                    self.handle_must_close();
+                }
+            }
+            XEvent::FocusOut(_) => {
+                self.cancel_keyboard();
                 self.handler.on_event(
                     &mut crate::Window::new(Window {
                         inner: &self.window,
                     }),
-                    Event::Keyboard(convert_key_press_event(&event)),
+                    Event::Window(WindowEvent::Unfocused),
                 );
             }
-
-            XEvent::KeyRelease(event) => {
+            XEvent::FocusIn(_) => {
                 self.handler.on_event(
                     &mut crate::Window::new(Window {
                         inner: &self.window,
                     }),
-                    Event::Keyboard(convert_key_release_event(&event)),
+                    Event::Window(WindowEvent::Focused),
                 );
             }
 
             _ => {}
+        }
+    }
+
+    fn emit_keyboard(&mut self, event: keyboard_types::KeyboardEvent) {
+        self.handler.on_event(
+            &mut crate::Window::new(Window {
+                inner: &self.window,
+            }),
+            Event::Keyboard(event),
+        );
+    }
+    fn cancel_keyboard(&mut self) {
+        for event in self.keyboard.cancel() {
+            self.emit_keyboard(event);
         }
     }
 

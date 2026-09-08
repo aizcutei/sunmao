@@ -1315,3 +1315,111 @@
 - Change: 提交默认关闭的 gui-wayland feature、公开 API doc-test、仅依赖 facade 的真实浮动编辑器验收与 CI 接线，并带上 output scaling 正式验收记录。
 - Result: 完整常规测试与全部 doc-tests 通过；此前 metadata/fmt/diff、macOS 独立 feature 编译、Windows target check、Linux tests 类型检查与独立 gui-wayland doc-test 均通过。没有修改示例或打包实现。
 - Unresolved: 待新提交三平台 hosted 全部成功、Linux WAYLAND FACADE VERIFIED 实际运行日志及同提交三份 artifacts 下载校验。Phase 4 与 M5 尚未完成。
+
+### 2026-09-08 — facade Wayland 已推送并触发 GitHub CI
+
+- Command/platform: HTTPS push 910f5225404c470f1dccfc2d957ee1bc50fbcf67 至 phase4/gui-component-library；GitHub Actions API 查询。
+- Change: 提交 facade feature 传递、公开文档与真实像素/resize/关闭重开验收，既有三平台 blocking 验收全部保留。
+- Result: push exit 0；新 run 34248163394 的 head_sha 精确匹配 910f522，当前 queued：https://github.com/aizcutei/sunmao/actions/runs/34248163394 。完整本地 gate 已通过。
+- Unresolved: 两次间隔 API 查询确认 run 34248163394 / 910f522 三平台持续 in_progress：Windows job 102135429500、Linux job 102135429550、macOS job 102135429745 均已进入 Test format adapters and host，暂无失败，Linux facade 专项仍 pending。上一轮为实际提交/推送进展，本轮为已验证 CI 等待。等待同提交三平台完整 jobs、Linux facade 实际执行日志与三份产物下载校验。M5 仍未完成；CI 运行期间只监控记录，实际失败按日志修复。
+
+### 2026-09-09 — facade Wayland hosted 持续运行
+
+- Command/platform: 两次间隔查询 run 34248163394 / 910f522 的三个原 jobs；git status/log。
+- Change: 本轮只核对运行状态并记录，没有改动代码或重跑 jobs。
+- Result: macOS job 102135429745 已通过格式适配器与宿主测试，进入独立 facade renderer contracts；Windows job 102135429500 与 Linux job 102135429550 仍在格式适配器与宿主测试，三平台均 in_progress，暂无失败。HEAD 保持 910f522。
+- Unresolved: 上一轮与本轮均为已验证 CI 等待。Linux facade 专项仍 pending；需同提交完整三平台成功、实际运行日志及三份产物校验，M5 保持未完成。 后续一轮两次间隔查询确认三个原 jobs 持续 in_progress：Windows/Linux 已通过格式适配器与宿主测试，进入独立 facade renderer contracts；macOS 已通过该检查，进入 standalone runtime/facade/reference examples。暂无失败，Linux Wayland 专项仍 pending。本轮为已验证等待。 再一轮两次间隔查询确认独立 facade renderer contracts 已三平台通过：Windows 进入 standalone/runtime/facade/reference examples，Linux 进入 Phase 4 acceptance fixtures；macOS 已推进至 system-capture linkage（非 blocking follow-up），Wayland 项按平台条件 skipped。三个原 jobs 仍 in_progress，暂无失败，Linux 真实 facade 编辑器专项尚未执行。本轮继续为已验证等待。
+
+### 2026-09-09 — facade Wayland 所在 hosted 步骤通过
+
+- Command/platform: 两次间隔查询 run 34248163394 / 910f522 的原三平台 jobs。
+- Change: 核对新增 facade 验收所在的 Probe a headless Wayland compositor 步骤状态；本轮没有修改代码或重跑 jobs。
+- Result: Linux job 102135429550 的 headless compositor probe 与 pointer/keyboard/cursor 均 completed/success，当前执行 activation/focus，output scaling 尚 pending；Windows job 102135429500 进入 Phase 4 acceptance fixtures；macOS job 102135429745 进入实时回调分配矩阵。三平台仍 in_progress，暂无失败。
+- Unresolved: 上一轮与本轮均为已验证 CI 等待。步骤 success 尚不等于最终验收；Linux 完整 job 结束后下载日志核实 WAYLAND FACADE VERIFIED 与实际测试结果，再核对同提交三个完整 jobs 和三份产物。M5 保持未完成。 后续一轮两次间隔查询确认 Linux 的 activation/focus 和 output scaling 也 completed/success，四项 Wayland 步骤全部通过；Windows/Linux 进入 baseview feature combinations，macOS 进入 VST3/CLAP/standalone 原生打包验收。三个原 jobs 仍在运行，无失败。本轮为已验证等待。 再一轮两次间隔查询确认 Windows/Linux 已通过实时回调分配矩阵；Windows 进入 standalone reference applications 构建，Linux/macOS 正在 native GUI backends 打包验收。三平台持续 in_progress，暂无失败；本轮为已验证等待，尚待完整 Linux 日志与产物。 后续一轮两次间隔查询确认 Windows 也已进入 native GUI backends 打包验收，三平台同一批原 jobs 均在该步骤持续 in_progress，暂无失败；未重跑或提前获取未完成日志。本轮为已验证等待。
+
+### 2026-09-09 — Linux 原生打包验收通过，开始上传产物
+
+- Command/platform: 两次间隔查询 run 34248163394 / 910f522 原三平台 jobs。
+- Change: 本轮仅监控与记录，没有重跑或修改实现。
+- Result: Linux job 102135429550 已通过 native GUI backends 与 repository packaging helper，进入 Upload packaged Phase 1 artifacts；macOS job 102135429745 已通过 native GUI backends，进入 repository packaging helper；Windows job 102135429500 仍在 native GUI backends。三个 jobs 仍 in_progress，暂无失败。
+- Unresolved: 本轮为已验证 CI 等待。Linux job 完成后获取完整日志，核实 facade 成功标记与测试结果；还需三平台完整成功及同提交三份产物下载校验，M5 保持未完成。
+
+### 2026-09-09 — facade Wayland 三平台全绿并核实实际运行
+
+- Command/platform: run 34248163394 / 910f5225404c470f1dccfc2d957ee1bc50fbcf67 completed/success，三个原 jobs 均 completed/success；下载完整 Linux 日志 /tmp/sunmao-run34248163394-linux.log（session 6667 exit 0）。
+- Change: 核实新 facade 验收真实执行，启动三份同提交产物下载及 SHA-256/ZIP CRC 校验（原 session 68362）。
+- Result: Linux 日志 5133–5141 明确编译 sunmao、运行 tests/wayland_facade.rs，输出 WAYLAND FACADE VERIFIED: shader rendering, resize, close and reopen without X11；facade_wayland_editor_renders_resizes_and_reopens ... ok，1 passed / 0 failed / 0 ignored。命令 4933–4935 明确禁用 DISPLAY，只启用 sunmao/gui-wayland。既有 output/core/cursor scale 成功标记及实际测试结果亦已核实。下载 session 68362 经轮询仍活跃。 后续一轮两次间隔轮询确认原 session 68362 持续运行：Windows 产物 78,351,539 bytes / 366 entries，SHA-256 与 ZIP CRC 已通过；Linux 产物已开始下载（约 12 MiB），macOS 等待顺序下载。本轮为已验证下载等待，并取得 Windows 产物成功校验证据。 后续一轮两次间隔轮询确认原 session 68362 仍活跃，Linux 文件由约 33 MiB 增至 160 MiB，没有下载失败或重启；macOS 仍等待顺序下载。本轮为已验证下载等待。 再一轮两次间隔轮询确认原 session 68362 活跃，Linux 文件由约 212 MiB 增至 345 MiB，未出现失败；本轮继续为已验证下载等待。 后续一轮两次间隔轮询确认原 session 68362 仍活跃，Linux 文件由约 374 MiB 增至 517 MiB；下载持续推进，macOS 尚待顺序下载。本轮为已验证等待。 再一轮两次间隔轮询确认原 session 68362 活跃，Linux 文件由约 554 MiB 增至 623 MiB，尚未开始 CRC 校验或 macOS 下载；本轮为已验证下载等待。 后续一轮两次间隔轮询确认原 session 68362 仍活跃，Linux 文件由约 661 MiB 增至 707 MiB，下载无失败；本轮继续为已验证等待。 再一轮两次间隔轮询确认原 session 68362 活跃，Linux 文件由约 724 MiB 增至 808 MiB；macOS 仍未开始下载，本轮为已验证等待。
+- Unresolved: 三平台完整 CI 与 Linux 实测证据已齐；等待原 session 68362 完成三份 artifacts 下载校验后才正式标记 facade 验收。随后仍需最终兼容/文档审计与原目标中真实输入路径证据，M5 和 Phase 4 未完成。
+
+### 2026-09-09 — facade Wayland 正式验收完成
+
+- Command/platform: run 34248163394 / 910f5225404c470f1dccfc2d957ee1bc50fbcf67 三平台 completed/success；原下载 session 68362 exit 0。
+- Change: 更新 Phase 4 状态与跨格式语义，标记 facade gui-wayland 公开入口正式验收。
+- Result: 同提交三份 artifacts 全部下载且 SHA-256/ZIP CRC 通过：Windows 78,351,539 bytes / 366 entries；Linux 972,286,464 bytes / 96 entries；macOS 53,085,660 bytes / 152 entries。文件 /tmp/sunmao-run34248163394-phase1-*.zip。完整 Linux 日志 5133–5141 已确认仅依赖 facade 的真实 shader 像素、resize、关闭重开测试实际执行，WAYLAND FACADE VERIFIED，1 passed / 0 failed / 0 ignored。
+- Unresolved: 本轮完成 facade 瓶颈。下一瓶颈为最终兼容/文档及原目标中 macOS/Windows/X11 真实输入路径审计；过时的 M3 IME 与 accessibility 描述尚待据实纠正，不能用逻辑字符映射单测替代真实输入证据。M5 与 Phase 4 未完成，验收记录留待下一实施提交携带。
+
+### 2026-09-09 — 修复 X11 硬编码布局并接入真实输入验收
+
+- Command/platform: 核对 GitHub run 34248163394 / 910f522 三平台 success；自底向上审计 baseview 的 X11/macOS/Windows 输入实现。
+- Change: X11 删除 US 硬编码逻辑字符表，读取服务器 XKB keymap；共享既有 Wayland layout/compose 翻译器及 proptest，保留物理 Code。监听服务器 keymap 更新，以事件自身的有效修饰键/group 快照翻译，申请 per-client detectable autorepeat，失焦释放 held keys 并取消 compose。新增 XTest 真实窗口测试覆盖德语 Y→z、Shift、AltGr、运行中切换 us(intl)、dead acute+e→é、失焦取消组合；CI 在独立 Xvfb 下要求明确成功标记。README 记录 Linux runtime 库要求；M3 国际输入验收重新打开，纠正合成字符单测等于真实 IME 的过度声明。
+- Result: metadata/fmt/diff 已通过；Linux default tests 类型检查 session 17576 与 wayland tests 类型检查 session 80676 exit 0，Windows baseview target check session 21154 exit 0。首次 Linux 交叉检查因 pkg-config 缺 cross 配置失败，使用 PKG_CONFIG_ALLOW_CROSS=1 后成功；这仅为类型检查，不能替代 Linux 运行。随后补 detectable autorepeat/保留命名多媒体键映射，最新 Linux 复查 session 69993 等待构建锁。完整 macOS locked 回归 session 46433 正在编译，日志 /tmp/sunmao-x11-tests.log；没有重启测试。
+- Unresolved: 本轮实现尚未提交。保持原 sessions 46433/69993，等待完整本地 gate 后提交/push 并验证同提交三平台 hosted、X11 实际成功日志和 artifacts。真实输入新测试尚未运行，不标记 X11 验收；macOS/Windows 真实国际输入及最终文档仍待完成，M5/Phase 4 未完成。该实现为国际键盘/compose，未实现 XIM/CJK 预编辑协议。
+
+### 2026-09-09 — X11 按键生命周期属性检查与 Linux 编译通过
+
+- Command/platform: 继续轮询原完整回归 session 46433 与 Linux tests 类型检查 session 69993；未重启构建。
+- Change: 新增 held_keys_release_their_original_logical_key_and_cancel_is_idempotent，以任意按键/修饰键序列检查 held 集合、重复按键标记、释放保留原始逻辑字符、失焦清理幂等且无残留。
+- Result: 最新 Linux（含 wayland feature 与 tests）session 69993 exit 0，日志 /tmp/sunmao-x11-linux-wayland.log；类型检查完成时间晚于新增属性测试文件变更。fmt/diff 再次通过。完整 macOS 回归 session 46433 已完成编译并开始常规测试，当前推进至 AU fixture，已执行项通过。上一轮为实际实现进展，本轮为新增不变量检查及 Linux 编译证据进展。
+- Unresolved: 保持原完整回归 session 46433，待退出成功后提交/push 并等待三平台 hosted 实测。X11 新测试与属性测试尚未在 Linux 上运行，不能仅凭交叉类型检查标记验收；M3 输入与 M5/Phase 4 均未完成。
+
+### 2026-09-09 — X11 修复完整回归持续运行
+
+- Command/platform: 两次间隔轮询原完整 locked 回归 session 46433，日志 /tmp/sunmao-x11-tests.log；核对 git status/log。
+- Change: 本轮只监控并记录，没有重启回归或扩大实现范围。
+- Result: 原 session 46433 持续活跃，已从 AU fixture 推进到 baseview 常规测试，已执行项均通过。HEAD 仍为 910f522，X11 修复保持未提交；此前 Linux tests 类型检查与 Windows target check 成功记录有效。上一轮为实现/编译证据进展，本轮为已验证等待。
+- Unresolved: 等待原完整回归退出成功，然后提交/push 并核对新提交三平台 hosted、真实 X11 输入日志与 artifacts。M3 输入与 M5/Phase 4 均未完成。
+
+后续一轮两次间隔轮询确认原 session 46433 持续运行：baseview 三个 macOS 测试全部通过（含 resize 重入与关闭测试），当前已推进到平台 integration tests；X11 测试在 macOS 按 cfg 为 0 tests，不构成 Linux 验收。暂无失败，未重启；上一轮与本轮均为已验证等待。
+
+再一轮两次间隔轮询确认原 session 46433 活跃：clap_rs 56 个单元/属性测试全部通过，已推进至 clap_sys fixtures，暂无失败。HEAD 与实现保持不变；本轮为已验证完整回归等待，未重启或提前提交。
+
+后续一轮两次间隔轮询确认原 session 46433 仍活跃：clap_sys 合成器零分配测试通过，sunmao facade 常规测试已推进完成，当前进入 backend_au；暂无失败。本轮继续为已验证等待，尚未提交 X11 实现，Linux hosted 真实输入验收仍待本地完整 gate 后执行。
+
+再一轮两次间隔轮询确认原 session 46433 持续运行：已通过 CLAP backend 常规测试并推进其导出元数据 integration tests，已执行项通过，暂无失败。本轮为已验证等待，保留原完整回归；提交与 hosted 验收仍待完整退出结果。
+
+后续一轮两次间隔轮询确认原 session 46433 活跃，已进入 VST3 backend；零分配、旧 state 迁移、transport 等已执行项通过。unified_view_context_notifies_vst3_handler_and_plug_frame 与 view_creation_panic_is_contained_before_returning_through_vst3_abi 报告运行超过 60 秒，但进程未退出且没有失败结果；继续保留原 handle，不能据观察超时重启。本轮为已验证等待。
+
+再一轮两次间隔轮询确认原 session 46433 活跃：此前超过 60 秒的两个 VST3 GUI 测试均已 ok，VST3 backend 28 tests 全部通过（84.94s）；core 与 DSP 已推进通过，DSP 14 条属性测试通过，当前进入效果器 fixtures。没有重启或失败；本轮取得 VST3 耗时测试完成证据，继续等待完整回归退出。
+
+后续一轮两次间隔轮询确认原 session 46433 持续运行，效果器增益/时序测试与 layout_gain 5 tests 均通过，当前进入 LPF GUI fixture，暂无失败。本轮为已验证等待；不重启原完整回归，X11 修复仍待完整本地 gate 后提交及 hosted 验收。
+
+再一轮两次间隔轮询确认原 session 46433 活跃，效果器测试持续推进：SVF 六项测试全部通过，当前进入 tempo_delay，暂无失败。本轮为已验证等待，仍保留原完整回归，未提前提交 X11 变更。
+
+后续一轮两次间隔轮询确认原 session 46433 仍活跃：tempo_delay 九项测试全部通过，已从 widgets fixture 推进到 GUI 后端，当前进入 sunmao_gui_webview；暂无失败。本轮为已验证等待；完整本地 gate 仍未结束，继续保留原进程。
+
+再一轮两次间隔轮询确认原 session 46433 活跃，已从 GUI 后端/宏测试推进至合成器 fixtures；合成器八项参数、包络、滤波与平滑测试通过，当前进入 sunmao_syn_poly_expr，暂无失败。本轮为已验证等待，继续保留原完整回归，未提交 X11 实现。
+
+后续一轮两次间隔轮询确认原 session 46433 活跃：poly_expr 六项表达控制测试通过，sine GUI 示例重置测试亦通过，当前进入模板 fixtures，暂无失败。本轮为已验证等待；完整回归尚未退出，不重跑或提前提交。
+
+再一轮两次间隔轮询确认原 session 46433 活跃：模板 fixtures 已推进，runner 的 44 项测试全部通过，当前进入 sunmao_view_baseview；暂无失败。本轮为已验证等待，保留原完整回归，X11 修复仍待其退出成功后提交及三平台 hosted。
+
+后续一轮两次间隔轮询确认原 session 46433 活跃，已从 view_baseview/CLI 推进到 vst3_sys fixtures；VST3 speaker mask 与 raw effect callback 零分配测试通过，当前进入 VST3 GUI fixture，暂无失败。本轮为已验证等待，原完整回归尚未退出，X11 实现尚未提交。
+
+再一轮两次间隔轮询确认原 session 46433 活跃：全部常规测试已完成并进入 doc-tests，VST3 raw synth 六项测试通过，当前执行 sunmao 文档测试；暂无失败。本轮取得常规测试完成证据，仍等待原完整回归含全部 doc-tests 退出成功，未提前提交。
+
+后续一轮两次间隔轮询确认原 session 46433 活跃：sunmao 文档测试 3 passed / 1 ignored，已推进至 core 的 15 项文档测试，已执行项通过，暂无失败。本轮为已验证等待，仍需全部 doc-tests 完成与原进程退出结果。
+
+再一轮两次间隔轮询确认原 session 46433 活跃：core 的 15 项文档测试全部通过，已从 DSP 文档推进至效果器文档测试，暂无失败。本轮为已验证等待；完整回归尚未退出，保持原 handle。
+
+后续一轮两次间隔轮询确认原 session 46433 仍活跃，效果器文档已推进完毕，当前执行 sunmao_gui 的四项文档测试，暂无失败。本轮为已验证等待，未重启原完整回归，仍待退出成功后提交 X11 修复。
+
+再一轮两次间隔轮询确认原 session 46433 活跃：sunmao_gui 四项文档测试全部通过，已推进至 runtime/state migration 文档，暂无失败。本轮为已验证等待，保留原完整回归，尚未提交 X11 修复。
+
+后续一轮两次间隔轮询确认原 session 46433 活跃，文档测试已从合成器推进至模板，暂无失败。本轮为已验证等待，原完整回归未退出；继续等待完整结果后提交/push。
+
+### 2026-09-09 — X11 输入修复完整本地 gate 通过
+
+- Command/platform: 原完整 locked 回归 session 46433 exit 0，日志 /tmp/sunmao-x11-tests.log；metadata/fmt/diff 最终检查通过。
+- Change: 提交服务器 XKB 布局、共享 compose 翻译、布局更新/失焦清理、按键生命周期属性测试及 Xvfb/XTest hosted 验收，携带此前 facade Wayland 正式验收记录和 M3 输入证据纠正。
+- Result: macOS 完整常规测试与全部 doc-tests 通过；Linux tests 类型检查（含 wayland）和 Windows target check 已通过。没有重启耗时回归，没有修改示例或打包实现。
+- Unresolved: 待新提交三平台完整 hosted 全绿、X11 KEYBOARD VERIFIED 实际运行日志和同提交三份 artifacts 下载校验。Linux 原生输入与新增属性测试尚待实际运行；macOS/Windows 原生国际输入及最终审计仍未完成，M5/Phase 4 保持未完成。

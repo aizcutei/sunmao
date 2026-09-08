@@ -1,6 +1,6 @@
 # Phase 4 状态
 
-更新时间：2026-09-08
+更新时间：2026-09-09
 
 ## 目标与边界
 
@@ -61,9 +61,9 @@ Linux GUI 面的风险。计划在 **M2 真控件落地时接入**——Phase 3 
 | M0 脚手架与清理收口 | 文档、GUI fixture、workspace/CI 骨架；ABI 去重取得三平台绿 | **完成**（三平台 hosted 全绿）：清理收口由 run #71/#72 完成；GUI fixture 与新 blocking 步骤 "Test Phase 4 acceptance fixtures" 由 run #73 验收，每 job **26 步零非成功**。已下载 Linux job 日志核实该步骤**非空转**：`running 9 tests ... 9 passed; 0 failed`，其中零分配断言在 glibc 分配器下同样通过 | 脚手架：[run #73](https://github.com/aizcutei/sunmao/actions/runs/33959635350)（commit `d37a46f`）三 job success，artifacts `phase1-macOS-ARM64`（49.9MB）、`phase1-Windows-X64`（74.5MB）、`phase1-Linux-X64`（901.4MB）可下载。清理：[run #71](https://github.com/aizcutei/sunmao/actions/runs/33956858763)（commit `7dabb3d`，25 步零非成功）与 run #72（commit `e844215`，同样零非成功） | — （M0 完成；进入 M1） |
 | M1 renderer 资源与线程归属 | 三后端归属与销毁顺序文档、scale/DPI 协商两格式落地 | **完成**（三平台 hosted 全绿）：`docs/phase4/ownership.md` 落地；scale/DPI 协商自 `_sys` 补起（`vst3_sys` 此前**完全没有** `IPlugViewContentScaleSupport` 绑定，IID/typedef 自上游头文件转录）→ `vst3_rs` 第二 vtable + 布局断言 → core `ViewHandle::scalable`（并删除自 Phase 1 起就无调用方、且签名 `&self` 无法改动编辑器的死钩子 `SunmaoView::set_scale_factor`）→ 两 backend 路由到**活着的** view_handle（`backend_clap` 此前从未 override `gui_set_scale`，一直告诉 CLAP 宿主“不支持缩放”）→ baseview 按 `创建尺寸 × factor` 响应 → runner `gui-test` 两格式断言 | [run #75](https://github.com/aizcutei/sunmao/actions/runs/33963105660)（commit `0b51dcb`）三 job success，每 job **26 步零非成功**，artifacts 3 份可下载。已下载三平台 job 日志核实断言**真实执行**：每平台 `GUI scale negotiated: host applied 2.0` 各 **16 次**（8 个 GUI 插件 × 2 格式），零因子拒绝亦 16 次，且**拒绝方式按格式精确分裂 8/8**（CLAP 回 `false`、VST3 回 `kInvalidArgument`），三平台完全一致 | — （M1 完成；进入 M2） |
 | M2 布局与主题 | `Column`/`Row`/gap/padding、五个控件、参数双向绑定、主题 token | **完成**（三平台 hosted 全绿）：`Theme` 角色化 token（暗/亮，对比度由测试机械断言）、新增 `Toggle`/`Dropdown`（连同既有 `Knob`/`Slider`/`Label`/`Button` 共 6 控件）、声明式 `Column`/`Row`（含 6 个布局 proptest）、`ParamBinder`+`ParamHost` 两向绑定（facade 以 `ViewContextHost` 适配 `ViewContext`），fixture 换真控件后**已无逐控件回调代码**并接入打包矩阵 | [run #77](https://github.com/aizcutei/sunmao/actions/runs/33965946234)（commit `aec872f`）三 job success，每 job **26 步零非成功**，artifacts 3 份。已下载三平台日志核实新 fixture 真被宿主执行：每平台 `SunMao Widgets GL` 出现 10 次、两格式各自 `Testing:` 一次，全 run **零失败套件**。本地打包 30→**32 套件**、600→**640 断言** | — （M2 完成；进入 M3） |
-| M3 text rendering 与输入 | 字体栅格化/度量、clipboard、IME/国际键盘、cursor/focus | **完成**（三平台 hosted 全绿）：`GlyphSource`/`Font`（字形缓存）+ fontdue `TtfFont`；`Clipboard`/`SystemClipboard` 与焦点控件 Ctrl/Cmd+C·V；`TextInput` 由 `Key::Character` 产生（跳过 `is_composing` 预编辑）＝国际键盘/IME 路径，三平台经 baseview 同一条；`Stack` 焦点模型 + 四个控件的键盘处理；VST3 `IPlugView::onKeyDown`/`onKeyUp` 由 stub 改为真实转发；GL `draw_text` 由空实现改为按覆盖率绘制（同覆盖率合并成行）| [run #84](https://github.com/aizcutei/sunmao/actions/runs/33976552655)（commit `8f959ba`）三 job success、每 job 26 步零非成功、artifacts 3 份。**关键证据不是 job 成功而是断言真的跑了**：三平台各 `GUI key verified` 1 次（VST3，`Gain moved 0 -> 1`）＋格式跳过 1 次（CLAP）。run #82 曾三平台全绿但该断言 0 次执行（fixture 不在 GUI 矩阵里），补入矩阵后才成立 | — （M3 完成；进入 M4） |
+| M3 text rendering 与输入 | 字体栅格化/度量、clipboard、IME/国际键盘、cursor/focus | **重新打开输入验收项**：字体、剪贴板、焦点与参数按键证据仍有效；2026-09-09 审计发现 X11 原生路径硬编码 US 布局，三平台真实国际输入证据不足。`GlyphSource`/`Font`（字形缓存）+ fontdue `TtfFont`；`Clipboard`/`SystemClipboard` 与焦点控件 Ctrl/Cmd+C·V；`TextInput` 由 `Key::Character` 产生（跳过 `is_composing` 预编辑）仅证明适配器逻辑字符转换，不能替代三平台原生国际键盘/IME 验收；`Stack` 焦点模型 + 四个控件的键盘处理；VST3 `IPlugView::onKeyDown`/`onKeyUp` 由 stub 改为真实转发；GL `draw_text` 由空实现改为按覆盖率绘制（同覆盖率合并成行）| [run #84](https://github.com/aizcutei/sunmao/actions/runs/33976552655)（commit `8f959ba`）三 job success、每 job 26 步零非成功、artifacts 3 份。**关键证据不是 job 成功而是断言真的跑了**：三平台各 `GUI key verified` 1 次（VST3，`Gain moved 0 -> 1`）＋格式跳过 1 次（CLAP）。run #82 曾三平台全绿但该断言 0 次执行（fixture 不在 GUI 矩阵里），补入矩阵后才成立 | 补 X11 原生布局/组合键实现及 hosted 实测，再核对 macOS/Windows 真实输入 |
 | M4 可视化与 accessibility | `VizChannel`、`SpectrumAnalyzer`/meter、accessibility 树、floating CLAP editor | **完成**（[run #100](https://github.com/aizcutei/sunmao/actions/runs/33999399095) 三平台绿）。已落地：`sunmao_core::viz` 三缓冲 `VizChannel`（audio 侧 publish 零 alloc，含跨真实线程的撕裂读检测）、`SpectrumAnalyzer`（峰值即起、落差衰减、NaN/越界收敛）、`accessibility_tree` + `AccessibleNode`/`AccessibleRole`（角色由 `ParameterWidget::accessible_role` **声明**而非从显示文本推断）、CLAP `suggest_title` 由静默 stub 改为真实转发。fixture 已从 crate 内 `SpectrumPublisher` 换成 `VizChannel`+`SpectrumAnalyzer` | [run #86](https://github.com/aizcutei/sunmao/actions/runs/33980911401)（commit `1ddc210`）三 job success，每 job **26 步零非成功**，artifacts 3 份可下载（macOS 53.0MB / Windows 78.3MB / Linux 971.2MB）。已下载三平台 job 日志核实新断言**真的执行且通过**：`the_editor_describes_itself_to_assistive_technology ... ok`、accessibility proptest 套件、`VizChannel` 跨线程撕裂读测试各 1 次/平台，`GUI scale negotiated` 由 16 增至 **18** 次（widgets fixture 入 GUI 矩阵后 9 插件 × 2 格式），三平台**零 FAILED 套件**。⚠️ **但其中的跨线程测试当时是 flaky 的**：run #87 在 Linux 上以 `the consumer never saw a frame` 失败，根因是该测试固定轮询 50000 次、断言依赖线程调度而非通道行为（详见 progress.md）。已改为轮询至生产者置位再做收尾 take。**#86 对其余确定性断言的验收不受影响，但"跨线程行为已三平台验证"这一条要等修复版取绿才成立** | **完成**（三平台 hosted 全绿）：floating editor 与 accessibility 三平台桥接均已补上，Windows 侧有真实 UIA 往返断言 |
-| M5 Wayland 与总验收 | Wayland、GUI 侧兼容策略、proptest/文档收尾 | **未完成**：EGL 已验收；浮动窗口分派与帧循环已编译通过，真实 GL 编辑器运行验收已通过 #116，真实鼠标输入与像素更新已通过 #119；键盘/xkbcommon、修饰键与被动焦点已由 #120 hosted 验收；cursor 通用协议、隐藏与原生双窗口重入的真实像素验收已由 8dee3e8 三平台 hosted 验证；主动 focus 已由 7ed7be0 三平台 hosted 验收；output scaling 已由 aa8694e 三平台 hosted 验收，三份产物已下载校验；facade gui-wayland 已实现、待 hosted 验收 | [run #119](https://github.com/aizcutei/sunmao/actions/runs/34216552175)（`7e78eb3`）三平台 success，三份产物已下载且校验通过；[run #120](https://github.com/aizcutei/sunmao/actions/runs/34219433180)（`aa9d25e`）三平台 success，真实鼠标/键盘日志已核实，三份产物已下载且 SHA-256/ZIP CRC 校验通过；[光标验收](https://github.com/aizcutei/sunmao/actions/runs/34226222440)（8dee3e8）三平台 success，真实光标日志已核实，三份产物已下载且 SHA-256/ZIP CRC 校验通过 | output scaling 已通过 [aa8694e 三平台 hosted](https://github.com/aizcutei/sunmao/actions/runs/34242729268) 与产物校验；facade gui-wayland 编译/真实浮动编辑器验收待 hosted |
+| M5 Wayland 与总验收 | Wayland、GUI 侧兼容策略、proptest/文档收尾 | **未完成**：EGL 已验收；浮动窗口分派与帧循环已编译通过，真实 GL 编辑器运行验收已通过 #116，真实鼠标输入与像素更新已通过 #119；键盘/xkbcommon、修饰键与被动焦点已由 #120 hosted 验收；cursor 通用协议、隐藏与原生双窗口重入的真实像素验收已由 8dee3e8 三平台 hosted 验证；主动 focus 已由 7ed7be0 三平台 hosted 验收；output scaling 已由 aa8694e 三平台 hosted 验收，三份产物已下载校验；facade gui-wayland 已由 910f522 三平台 hosted 验收，实际运行日志与三份产物校验完成 | [run #119](https://github.com/aizcutei/sunmao/actions/runs/34216552175)（`7e78eb3`）三平台 success，三份产物已下载且校验通过；[run #120](https://github.com/aizcutei/sunmao/actions/runs/34219433180)（`aa9d25e`）三平台 success，真实鼠标/键盘日志已核实，三份产物已下载且 SHA-256/ZIP CRC 校验通过；[光标验收](https://github.com/aizcutei/sunmao/actions/runs/34226222440)（8dee3e8）三平台 success，真实光标日志已核实，三份产物已下载且 SHA-256/ZIP CRC 校验通过 | output scaling 已通过 [aa8694e 三平台 hosted](https://github.com/aizcutei/sunmao/actions/runs/34242729268) 与产物校验；facade gui-wayland 已通过 [910f522 三平台 hosted](https://github.com/aizcutei/sunmao/actions/runs/34248163394)、实际日志与产物校验；下一步为最终兼容/文档及真实输入路径审计 |
 
 ## 完成规则
 
@@ -73,7 +73,8 @@ Phase 4 完成的唯一判定：同一 commit 三平台 hosted native jobs 全�
 ### 当前判定：**Phase 4 未完成，M5 输入与平台收尾待完成**
 
 三平台 hosted 全绿 + artifacts 可下载这两条长期满足；Milestone 矩阵里
-**M0–M4 已有验收记录**；M5 的窗口探针不等于原生 Wayland 编辑器。
+**M0–M4 已有历史验收记录，但 M3 原生国际输入证据在最终审计中重新打开**；
+M5 原生 Wayland 编辑器与 facade 已验收，尚待输入缺口与最终文档收尾。
 
 | Milestone | 验收 run |
 |---|---|
@@ -106,7 +107,7 @@ output scaling 已由 [aa8694e 三平台 hosted](https://github.com/aizcutei/sun
 Sway 动态整数/分数比例、跨屏/移除、3x resize 与显式覆盖的 EGL 尺寸/边缘像素通过；
 Weston core 2x fallback 与 48px 光标图像/24-unit viewport 的真实像素断言通过。
 同提交三份 artifacts 已下载，SHA-256 与 ZIP CRC 均通过。
-facade feature 传递与最终兼容/文档审计仍未完成，因此 Phase 4 不能标记完成。
+facade feature 传递已由 910f522 验收：三平台完整 jobs 成功，Linux 实际输出 WAYLAND FACADE VERIFIED，三份产物 SHA-256/ZIP CRC 校验通过。最终兼容/文档审计及 macOS/Windows/X11 真实输入路径证据仍需核对，因此 Phase 4 不能标记完成。
 
 **两次判断被自己推翻，都记在这里而不是抹掉**：floating editor 与 accessibility
 平台桥接都曾被我判为"受阻、规模大于 M4 其余全部"，两次都是**读了函数名而没读函数**

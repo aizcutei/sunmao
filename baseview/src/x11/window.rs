@@ -451,6 +451,7 @@ impl<'a> Window<'a> {
                             | EventMask::BUTTON_RELEASE
                             | EventMask::KEY_PRESS
                             | EventMask::KEY_RELEASE
+                            | EventMask::FOCUS_CHANGE
                             | EventMask::STRUCTURE_NOTIFY
                             | EventMask::ENTER_WINDOW
                             | EventMask::LEAVE_WINDOW,
@@ -517,6 +518,7 @@ impl<'a> Window<'a> {
             gl_context,
         };
 
+        let keyboard = super::keyboard::Keyboard::new(&inner.xcb_connection)?;
         let mut window = crate::Window::new(Window { inner: &mut inner });
 
         let mut handler = build(&mut window);
@@ -547,6 +549,7 @@ impl<'a> Window<'a> {
 
         EventLoop::new(
             inner,
+            keyboard,
             handler,
             parent_handle,
             resize_receiver,
