@@ -944,3 +944,10 @@
 - Change: 验证 `crate::wayland::dispatch` 路径修正后的完整 workflow。
 - Result: 三平台 jobs 全部 success；Ubuntu 的 headless Wayland probe success。Artifacts `phase1-macOS-ARM64`、`phase1-Windows-X64`、`phase1-Linux-X64` 均已上传且未过期，API digest 已记录。
 - Unresolved: M5 仍未完成：`Window::open_floating` 在 Linux 尚未分派到原生 Wayland，编辑器 renderer/event-loop/input 尚未接线。
+
+### 2026-09-08 — 原生 Wayland 浮动编辑器接线与 run #114
+
+- Command/platform: commit `ea89eab`，Ubuntu hosted Weston、macOS ARM64、Windows x86_64。
+- Change: Linux 新增 X11/Wayland 分派层；`open_floating` 在 Wayland 会话创建持久化 `xdg_toplevel` worker，绑定 EGL，返回 Wayland raw handle，发送初始/变化 `Resized`，执行 `WindowHandler::on_frame`，处理 compositor close 与有序 EGL/协议销毁；embedded 仍走 X11。
+- Result: [run #114](https://github.com/aizcutei/sunmao/actions/runs/34202574798) 三平台 jobs success，Ubuntu Wayland 步骤 success；三份 artifacts 已上传且未过期（macOS 53,086,626 bytes；Windows 78,340,787 bytes；Linux 971,756,295 bytes）。
+- Unresolved: `wl_seat`/xkbcommon 输入、output scaling 和面向真实 editor 的 hosted acceptance 尚未完成；M5 继续进行。
