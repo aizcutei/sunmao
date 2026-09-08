@@ -6,8 +6,9 @@ description = "Baseview integration for SunMao plugin editors"
 license = "MIT"
 
 [features]
-default = ["gl"]
+default = ["gl", "wayland"]
 gl = ["sunmao_gui/gl", "baseview/opengl"]
+wayland = ["gl", "baseview/wayland"]
 wgpu = ["sunmao_gui/wgpu", "dep:wgpu", "dep:pollster"]
 webview = ["baseview/webview"]
 # Publish the editor's accessibility tree. Pulls the feature through both the

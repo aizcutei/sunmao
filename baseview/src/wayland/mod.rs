@@ -15,6 +15,8 @@
 pub mod probe;
 #[cfg(feature = "wayland")]
 pub mod toplevel;
+#[cfg(feature = "wayland")]
+pub(crate) mod window;
 
 pub(crate) mod dispatch;
 

@@ -8,12 +8,12 @@ use crate::event::{Event, EventStatus};
 use crate::window_open_options::WindowOpenOptions;
 use crate::{MouseCursor, Size};
 
+#[cfg(target_os = "linux")]
+use crate::linux as platform;
 #[cfg(target_os = "macos")]
 use crate::macos as platform;
 #[cfg(target_os = "windows")]
 use crate::win as platform;
-#[cfg(target_os = "linux")]
-use crate::x11 as platform;
 
 pub struct WindowHandle {
     window_handle: platform::WindowHandle,
@@ -103,10 +103,21 @@ impl<'a> Window<'a> {
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     pub(crate) fn new(window: platform::Window) -> Window {
         Window {
             window,
+            phantom: PhantomData,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn new<W>(window: W) -> Window<'a>
+    where
+        W: Into<platform::Window<'a>>,
+    {
+        Window {
+            window: window.into(),
             phantom: PhantomData,
         }
     }
