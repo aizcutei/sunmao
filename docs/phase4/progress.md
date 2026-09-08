@@ -937,3 +937,10 @@
 - Change: 上次替换把嵌套 tests 模块内四处调用写成 super::dispatch，错误地指向 toplevel::dispatch，触发 E0433。统一使用 crate::wayland::dispatch，避免模块深度影响路径解析。
 - Result: 日志确认原失败发生在编译阶段，未运行 Wayland 测试。当前 metadata、fmt、diff、Windows MSVC target check 均通过；完整本地测试仍在运行（/tmp/sunmao-fix112-tests.log）。
 - Unresolved: 修正待完整本地 gate、提交推送及 hosted 验证。M5 原生浮动编辑器接入仍未完成。
+
+### 2026-09-08 — run #113 通过；Linux Wayland 编译修正验收
+
+- Command/platform: GitHub Actions run #113 / `a6c9e8b`，macOS ARM64、Windows x86_64、Ubuntu x86_64。
+- Change: 验证 `crate::wayland::dispatch` 路径修正后的完整 workflow。
+- Result: 三平台 jobs 全部 success；Ubuntu 的 headless Wayland probe success。Artifacts `phase1-macOS-ARM64`、`phase1-Windows-X64`、`phase1-Linux-X64` 均已上传且未过期，API digest 已记录。
+- Unresolved: M5 仍未完成：`Window::open_floating` 在 Linux 尚未分派到原生 Wayland，编辑器 renderer/event-loop/input 尚未接线。
