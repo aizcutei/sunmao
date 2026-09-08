@@ -1007,3 +1007,31 @@
 - Change: WM_CLASS 修正确认有效，真实测试已执行并读到红色帧，但等待蓝色帧超时。renderer probe 位于 swap/commit 之前，不能据红帧判定表面已映射并获得输入。验收改为先移动并等待 ViewState 收到坐标事件，再点击并等待有序 press/release，最后校验蓝色像素；加入测试事件日志与 WAYLAND_DEBUG=client，区分协议、事件转发、渲染各阶段。
 - Result: 原 headless renderer 验收通过；原 pointer 失败只证明点击后未观察到蓝帧，尚不能定位为平台实现缺陷或映射竞态。当前 Linux tests 类型检查、metadata、fmt、diff、bash 语法检查通过；完整本地 RUSTFLAGS=-Awarnings cargo test --locked 已 exit 0（/tmp/sunmao-pointer-readiness-tests.log）。
 - Unresolved: 本地 gate 已通过，待提交及 hosted 运行，按事件和协议证据继续修复；M5 其余输入、焦点、光标、缩放与 feature 传递仍未完成。
+
+### 2026-09-08 — 分阶段鼠标验收已推送，等待协议证据
+
+- Command/platform: `7e78eb3` 已 HTTPS 推送到 phase4/gui-component-library；完整本地测试 exit 0。
+- Change: 点击前确认移动事件已到达 ViewState，点击后分别确认 press/release 和像素更新，并启用 Wayland 客户端协议日志。
+- Result: GitHub API 确认 run 34216552175 / 7e78eb3bfbae9b0cbbedd182267691e6747a58f3 状态 queued；前一 run 34214877140 已 completed/failure。
+- Unresolved: [新 CI](https://github.com/aizcutei/sunmao/actions/runs/34216552175) 已进入 in_progress：两次间隔查询确认 Linux job 102029553653、Windows job 102029553912、macOS job 102029553981 均在执行格式适配器与宿主测试；尚无失败，pointer 步骤尚未开始，M5 保持未完成。
+
+### 2026-09-08 — 分阶段鼠标 CI 步骤通过，等待完整 job
+
+- Command/platform: GitHub Actions run 34216552175 / 7e78eb3；Linux job 102029553653。
+- Change: 核对本次分阶段输入与协议诊断验收状态，未修改代码。
+- Result: GitHub jobs API 确认 Probe a headless Wayland compositor 和 Verify native Wayland pointer input 均 completed/success；后续间隔查询确认三平台均已通过 realtime callback allocation matrix，正在 Package and exercise native GUI backends；尚无失败。
+- Unresolved: 三平台 jobs 尚未结束，需下载 Linux 日志核对 WAYLAND POINTER EVENT 与 WAYLAND POINTER VERIFIED 的实际输出，不能据单个步骤宣称 M5 完成。
+
+### 2026-09-08 — run #119：真实 Wayland 鼠标输入验收完成
+
+- Command/platform: GitHub Actions run 34216552175 / 7e78eb3 三平台全部 success；Linux job 102029553653 完整日志已下载至 /tmp/sunmao-run119-linux.log。
+- Change: 核对协议事件、编辑器事件与 shader 像素变化，更新状态矩阵和跨格式语义的证据范围。
+- Result: 日志 10:45:10Z 明确显示 wl_pointer.enter(320,240)、button 272 的 press/release、ViewState 的 MouseMove/MouseDown/MouseUp，随后 WAYLAND POINTER VERIFIED 与测试 ok。早先普通包测试的 skip 不作为证据。Artifacts API 确认 Linux 971,756,359 bytes、macOS 53,086,641 bytes、Windows 78,345,325 bytes 均已上传且未过期；本轮随后完成三份下载，SHA-256 与 ZIP CRC 均通过：Linux 96 条目、macOS 152 条目、Windows 367 条目，文件 /tmp/sunmao-run34216552175-phase1-*.zip。
+- Unresolved: M5 键盘/xkbcommon、修饰键、focus/cursor、output scaling、facade feature 传递及最终同提交产物下载验证仍未完成；下一瓶颈为原生键盘输入。
+
+### 2026-09-08 — 原生 Wayland 键盘接入与真实输入验收
+
+- Command/platform: 按 wl_keyboard 上游协议与 xkbcommon API 实现；Linux baseview/view_baseview tests 类型检查、Windows MSVC all-features check 均通过。
+- Change: 按 seat 管理 keyboard/keymap 生命周期，使用 compositor 的 XKB 布局和 masks/group；支持 compose、修饰键、重复与释放，Enter/Leave 驱动被动焦点。失焦/移除清理按键与 compose 状态；复用 Linux 物理键码映射，不复用 X11 硬编码 US 逻辑字符。GL ViewState 接收 FocusIn/FocusOut。
+- Result: 新增布局组/Shift/é 测试与焦点重置 proptest，CI 真实注入 Shift+A、dead_acute+e、长按 r 与释放，要求编辑器文字事件和像素更新。核对 Weston X11 backend 后发现其布局来自外层 X server，故测试床用 setxkbmap 与 Xvfb -noreset 明确设定 us(intl)，避免仅改 weston.ini 无效。完整本地 RUSTFLAGS=-Awarnings cargo test --locked 已 exit 0（/tmp/sunmao-keyboard-tests.log）；fmt、diff、locked metadata、bash 语法检查通过。
+- Unresolved: 键盘已通过本地 gate，尚待 hosted 实际运行；compose 不等于 text-input-v3 IME。cursor、主动 focus、output scaling、facade feature 传递与最终同提交产物下载核验仍未完成，M5 保持进行中。

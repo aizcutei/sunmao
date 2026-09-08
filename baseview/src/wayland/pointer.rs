@@ -9,6 +9,7 @@ use crate::{Event, MouseButton, MouseEvent, Point, ScrollDelta};
 pub(super) struct Seat {
     seat: wl_seat::WlSeat,
     pointer: Option<wl_pointer::WlPointer>,
+    pub(super) keyboard: Option<super::keyboard::Keyboard>,
     frame: PointerFrame,
 }
 
@@ -17,8 +18,19 @@ impl Seat {
         Self {
             seat,
             pointer: None,
+            keyboard: None,
             frame: PointerFrame::default(),
         }
+    }
+
+    pub(super) fn remove_keyboard(&mut self, events: &mut Vec<Event>) {
+        if let Some(mut keyboard) = self.keyboard.take() {
+            keyboard.cancel(events);
+        }
+    }
+
+    pub(super) fn flush_pointer(&mut self, events: &mut Vec<Event>) {
+        self.frame.finish(events);
     }
 
     pub(super) fn remove_pointer(&mut self, events: &mut Vec<Event>) {
@@ -49,6 +61,7 @@ struct PointerFrame {
     pending: Vec<MouseEvent>,
     pressed: Vec<MouseButton>,
     entered: bool,
+    modifiers: Modifiers,
 }
 
 impl PointerFrame {
@@ -62,7 +75,7 @@ impl PointerFrame {
     fn motion(&mut self, x: f64, y: f64) {
         self.pending.push(MouseEvent::CursorMoved {
             position: Point::new(x, y),
-            modifiers: Modifiers::empty(),
+            modifiers: self.modifiers,
         });
     }
 
@@ -84,13 +97,13 @@ impl PointerFrame {
             }
             self.pending.push(MouseEvent::ButtonPressed {
                 button,
-                modifiers: Modifiers::empty(),
+                modifiers: self.modifiers,
             });
         } else {
             self.pressed.retain(|value| *value != button);
             self.pending.push(MouseEvent::ButtonReleased {
                 button,
-                modifiers: Modifiers::empty(),
+                modifiers: self.modifiers,
             });
         }
     }
@@ -104,7 +117,7 @@ impl PointerFrame {
         for button in self.pressed.drain(..) {
             events.push(Event::Mouse(MouseEvent::ButtonReleased {
                 button,
-                modifiers: Modifiers::empty(),
+                modifiers: self.modifiers,
             }));
         }
         if self.entered {
@@ -123,6 +136,10 @@ impl Dispatch<wl_seat::WlSeat, u32> for OpenState {
         _: &Connection,
         handle: &QueueHandle<Self>,
     ) {
+        let was_focused = state
+            .seats
+            .values()
+            .any(|seat| seat.keyboard.as_ref().is_some_and(|k| k.focused));
         let Some(input) = state.seats.get_mut(name) else {
             return;
         };
@@ -130,12 +147,31 @@ impl Dispatch<wl_seat::WlSeat, u32> for OpenState {
             capabilities: WEnum::Value(capabilities),
         } = event
         {
+            if capabilities.contains(wl_seat::Capability::Keyboard) {
+                if input.keyboard.is_none() {
+                    input.keyboard = Some(super::keyboard::Keyboard::new(
+                        seat.get_keyboard(handle, *name),
+                    ));
+                }
+            } else {
+                input.flush_pointer(&mut state.events);
+                input.remove_keyboard(&mut state.events);
+            }
             if capabilities.contains(wl_seat::Capability::Pointer) {
                 if input.pointer.is_none() {
                     input.pointer = Some(seat.get_pointer(handle, *name));
                 }
             } else {
                 input.remove_pointer(&mut state.events);
+            }
+            let focused = state
+                .seats
+                .values()
+                .any(|seat| seat.keyboard.as_ref().is_some_and(|k| k.focused));
+            if was_focused && !focused {
+                state
+                    .events
+                    .push(Event::Window(crate::WindowEvent::Unfocused));
             }
         }
     }
@@ -156,6 +192,10 @@ impl Dispatch<wl_pointer::WlPointer, u32> for OpenState {
         if input.pointer.as_ref() != Some(pointer) {
             return;
         }
+        input.frame.modifiers = input
+            .keyboard
+            .as_ref()
+            .map_or(Modifiers::empty(), |k| k.modifiers());
         match event {
             wl_pointer::Event::Enter {
                 surface_x,
@@ -194,7 +234,7 @@ impl Dispatch<wl_pointer::WlPointer, u32> for OpenState {
                 };
                 input.frame.pending.push(MouseEvent::WheelScrolled {
                     delta: ScrollDelta::Pixels { x, y },
-                    modifiers: Modifiers::empty(),
+                    modifiers: input.frame.modifiers,
                 });
             }
             wl_pointer::Event::Frame => input.frame.finish(&mut state.events),

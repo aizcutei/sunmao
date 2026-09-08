@@ -6,7 +6,15 @@ set -euo pipefail
 log_dir="${RUNNER_TEMP:-$XDG_RUNTIME_DIR}"
 export SUNMAO_INPUT_DISPLAY="$DISPLAY"
 export LIBGL_ALWAYS_SOFTWARE=1
-weston --backend=x11-backend.so --shell=kiosk-shell.so --width=640 --height=480 \
+# The nested X11 backend obtains its keymap from the X server, overriding
+# weston.ini keymap settings. Keep Xvfb alive with -noreset across this command.
+setxkbmap -layout us -variant intl
+cat > "$log_dir/weston-input.ini" <<'CONFIG'
+[keyboard]
+repeat-rate=30
+repeat-delay=200
+CONFIG
+weston --config="$log_dir/weston-input.ini" --backend=x11-backend.so --shell=kiosk-shell.so --width=640 --height=480 \
   --socket=wayland-pointer-ci --idle-time=0 >"$log_dir/weston-pointer.log" 2>&1 &
 weston_pid=$!
 cleanup() {
@@ -32,3 +40,5 @@ env -u DISPLAY WAYLAND_DEBUG=client WAYLAND_DISPLAY=wayland-pointer-ci SUNMAO_GU
   native_wayland_pointer_changes_rendered_pixels -- --nocapture \
   2>&1 | tee "$log_dir/wayland-pointer.log"
 grep -q 'WAYLAND POINTER VERIFIED' "$log_dir/wayland-pointer.log"
+
+grep -q 'WAYLAND KEYBOARD VERIFIED' "$log_dir/wayland-pointer.log"

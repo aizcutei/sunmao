@@ -80,7 +80,7 @@ pub(super) struct OpenState {
     compositor: Option<wl_compositor::WlCompositor>,
     wm_base: Option<xdg_wm_base::XdgWmBase>,
     configured: bool,
-    close_requested: bool,
+    pub(super) close_requested: bool,
     configured_size: Option<(u32, u32)>,
 }
 
@@ -123,6 +123,16 @@ impl Dispatch<wl_registry::WlRegistry, ()> for OpenState {
         if let wl_registry::Event::GlobalRemove { name } = event {
             if let Some(mut seat) = state.seats.remove(&name) {
                 seat.remove_pointer(&mut state.events);
+                let focused = seat.keyboard.as_ref().is_some_and(|k| k.focused);
+                seat.remove_keyboard(&mut state.events);
+                if focused
+                    && !state
+                        .seats
+                        .values()
+                        .any(|seat| seat.keyboard.as_ref().is_some_and(|k| k.focused))
+                {
+                    state.events.push(Event::Window(WindowEvent::Unfocused));
+                }
             }
             return;
         }
@@ -219,6 +229,7 @@ pub(crate) struct WindowInner {
     toplevel: xdg_toplevel::XdgToplevel,
     window_info: Cell<WindowInfo>,
     close_requested: Cell<bool>,
+    focused: Cell<bool>,
 }
 
 impl Drop for WindowInner {
@@ -329,6 +340,11 @@ impl<'a> Window<'a> {
         toplevel.set_app_id("sunmao".into());
         surface.commit();
         super::dispatch::roundtrip(&connection, &mut queue, &mut state, Duration::from_secs(5))?;
+        if state.close_requested {
+            return Err(
+                "Wayland initialization was rejected; see protocol/input diagnostics".into(),
+            );
+        }
         if !state.configured {
             return Err("compositor did not configure the Wayland surface".into());
         }
@@ -359,6 +375,7 @@ impl<'a> Window<'a> {
             toplevel,
             window_info: Cell::new(info),
             close_requested: Cell::new(false),
+            focused: Cell::new(false),
         };
         let mut window = crate::Window::new(Window { inner: &inner });
         let mut handler = build(&mut window);
@@ -376,7 +393,17 @@ impl<'a> Window<'a> {
             && !inner.close_requested.get()
             && !state.close_requested
         {
+            for seat in state.seats.values_mut() {
+                if let Some(keyboard) = seat.keyboard.as_mut() {
+                    keyboard.tick(Instant::now(), &mut state.events);
+                }
+            }
             for event in state.events.drain(..) {
+                match &event {
+                    Event::Window(WindowEvent::Focused) => inner.focused.set(true),
+                    Event::Window(WindowEvent::Unfocused) => inner.focused.set(false),
+                    _ => {}
+                }
                 handler.on_event(&mut window, event);
             }
             if let Some(size) = resize_receiver.try_iter().last() {
@@ -438,7 +465,7 @@ impl<'a> Window<'a> {
     pub fn set_mouse_cursor(&mut self, _: MouseCursor) {}
 
     pub fn has_focus(&mut self) -> bool {
-        false
+        self.inner.focused.get()
     }
 
     pub fn focus(&mut self) {}

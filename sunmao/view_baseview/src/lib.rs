@@ -1015,6 +1015,12 @@ mod gl_backend {
                         self.state.on_keyboard_event(gui_event)
                     });
                 }
+                Event::Window(WindowEvent::Focused) => {
+                    self.state.on_keyboard_event(&GuiEvent::FocusIn);
+                }
+                Event::Window(WindowEvent::Unfocused) => {
+                    self.state.on_keyboard_event(&GuiEvent::FocusOut);
+                }
                 Event::Window(WindowEvent::Resized(info)) => {
                     self.width = info.logical_size().width as f32;
                     self.height = info.logical_size().height as f32;

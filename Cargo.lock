@@ -627,6 +627,7 @@ dependencies = [
  "wry",
  "x11",
  "x11rb",
+ "xkbcommon-dl",
 ]
 
 [[package]]

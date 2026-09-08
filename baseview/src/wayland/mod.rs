@@ -11,6 +11,7 @@
 //! reach it. The X11 backend keeps serving every embedded editor, on Wayland
 //! desktops too, via XWayland.
 
+mod keyboard;
 mod pointer;
 #[cfg(feature = "wayland")]
 pub mod probe;

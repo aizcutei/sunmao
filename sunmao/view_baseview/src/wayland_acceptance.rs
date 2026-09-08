@@ -113,7 +113,17 @@ fn native_wayland_editor_renders_resizes_and_reopens() {
     println!("WAYLAND EDITOR VERIFIED: shader rendering, resize, close and reopen without X11");
 }
 
+#[derive(Default)]
+struct KeyboardEvidence {
+    focused: AtomicBool,
+    shifted: AtomicBool,
+    text: AtomicUsize,
+    repeats: AtomicUsize,
+    released: AtomicBool,
+}
+
 struct PointerState {
+    keyboard: Arc<KeyboardEvidence>,
     moved: Arc<AtomicBool>,
     phase: Arc<AtomicUsize>,
 }
@@ -125,6 +135,42 @@ impl ViewState for PointerState {
             Color::RED
         };
         ctx.fill_rect(0.0, 0.0, width, height, Fill::Solid(color));
+    }
+
+    fn on_keyboard_event(&mut self, event: &GuiEvent) -> bool {
+        eprintln!("WAYLAND KEYBOARD EVENT: {event:?}");
+        match event {
+            GuiEvent::FocusIn => self.keyboard.focused.store(true, Ordering::SeqCst),
+            GuiEvent::FocusOut => self.keyboard.focused.store(false, Ordering::SeqCst),
+            GuiEvent::KeyDown {
+                key: sunmao_gui::KeyCode::A,
+                modifiers,
+            } if modifiers.shift => {
+                self.keyboard.shifted.store(true, Ordering::SeqCst);
+            }
+            GuiEvent::TextInput { text }
+                if text == "A" && self.keyboard.shifted.load(Ordering::SeqCst) =>
+            {
+                self.keyboard.text.store(1, Ordering::SeqCst);
+            }
+            GuiEvent::TextInput { text }
+                if text == "é" && self.keyboard.text.load(Ordering::SeqCst) == 1 =>
+            {
+                self.keyboard.text.store(2, Ordering::SeqCst);
+                self.phase.store(3, Ordering::SeqCst);
+            }
+            GuiEvent::TextInput { text } if text == "r" => {
+                self.keyboard.repeats.fetch_add(1, Ordering::SeqCst);
+            }
+            GuiEvent::KeyUp {
+                key: sunmao_gui::KeyCode::R,
+                ..
+            } => {
+                self.keyboard.released.store(true, Ordering::SeqCst);
+            }
+            _ => {}
+        }
+        true
     }
 
     fn on_mouse_event(&mut self, event: &GuiEvent) -> bool {
@@ -200,6 +246,8 @@ fn native_wayland_pointer_changes_rendered_pixels() {
     );
     assert!(pixel_probe::enabled());
     let window = std::env::var("SUNMAO_INPUT_WINDOW").expect("nested compositor window");
+    let keyboard = Arc::new(KeyboardEvidence::default());
+    let state_keyboard = keyboard.clone();
     let phase = Arc::new(AtomicUsize::new(0));
     let state_phase = phase.clone();
     let moved = Arc::new(AtomicBool::new(false));
@@ -211,6 +259,7 @@ fn native_wayland_pointer_changes_rendered_pixels() {
             ..Default::default()
         },
         move |_| PointerState {
+            keyboard: state_keyboard.clone(),
             moved: state_moved.clone(),
             phase: state_phase.clone(),
         },
@@ -257,6 +306,48 @@ fn native_wayland_pointer_changes_rendered_pixels() {
         2,
         "ordered press/release must reach ViewState"
     );
-    drop(handle);
     println!("WAYLAND POINTER VERIFIED: compositor click reaches editor and changes shader pixels without X11");
+    let inject = |args: &[&str]| {
+        assert!(std::process::Command::new("xdotool")
+            .env("DISPLAY", &display)
+            .args(args)
+            .status()
+            .expect("keyboard injector")
+            .success());
+    };
+    inject(&["windowfocus", "--sync", &window]);
+    wait_for_input(|| keyboard.focused.load(Ordering::SeqCst), "keyboard focus");
+    inject(&["key", "--clearmodifiers", "shift+a", "dead_acute", "e"]);
+    wait_for_input(
+        || keyboard.text.load(Ordering::SeqCst) == 2,
+        "shifted A and composed é",
+    );
+    wait_for_solid_frame(false);
+    inject(&["keydown", "r"]);
+    wait_for_input(
+        || keyboard.repeats.load(Ordering::SeqCst) >= 3,
+        "held-key repeat",
+    );
+    inject(&["keyup", "r"]);
+    wait_for_input(|| keyboard.released.load(Ordering::SeqCst), "key release");
+    let count = keyboard.repeats.load(Ordering::SeqCst);
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(
+        keyboard.repeats.load(Ordering::SeqCst),
+        count,
+        "release must cancel repeat"
+    );
+    drop(handle);
+    println!("WAYLAND KEYBOARD VERIFIED: focus, shifted text, composed é, repeat and release change editor pixels without X11");
+}
+
+fn wait_for_input(mut ready: impl FnMut() -> bool, label: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !ready() {
+        assert!(
+            Instant::now() < deadline,
+            "Wayland input did not reach ViewState: {label}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
