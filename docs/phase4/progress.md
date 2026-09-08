@@ -1203,3 +1203,24 @@
 - Change: 准备提交 Wayland 输出整数/分数缩放、逻辑几何与缓冲区密度分离、光标密度更新，以及 Sway/Weston 实际 EGL 尺寸/像素验收。
 - Result: 原完整回归 exit 0，包含全部常规测试与 doc-tests。Linux tests 类型检查、Windows all-features 检查、locked metadata、fmt、diff 与脚本语法检查已通过。未改动示例或打包逻辑。
 - Unresolved: 缩放实现仍需同提交三平台 hosted 完整 jobs、实际动态密度/跨输出/移除/显式覆盖/2x 光标验收日志和三份产物下载校验。facade feature 传递与最终审计仍待完成；M5 保持未完成。
+
+### 2026-09-08 — 缩放提交已推送，hosted CI 已排队
+
+- Command/platform: HTTPS 推送 708f391f7ac2aea308381facfcd24276f127eb2e 至 phase4/gui-component-library；GitHub Actions API 查询。
+- Change: 提交输出缩放实现与新增 blocking Sway/Weston 缩放及 2x 光标步骤，保留全部旧验收。
+- Result: push exit 0；API 确认 run 34237571022 的 head_sha 精确匹配 708f391f7ac2aea308381facfcd24276f127eb2e，状态 queued：https://github.com/aizcutei/sunmao/actions/runs/34237571022 。完整本地 gate 已通过。
+- Unresolved: 两次间隔 API 查询确认 run 34237571022 / 708f391 三平台持续 in_progress：macOS job 102099154161 已通过格式适配器与宿主测试，进入 standalone runtime/facade/reference examples；Linux job 102099154608 已通过格式适配器与宿主测试，进入 facade renderer contracts；Windows job 102099154489 正在格式适配器与宿主测试。尚无失败，Linux 新缩放步骤仍 pending。本轮为已验证的 CI 等待。后续一轮两次间隔查询确认 Windows 已通过格式适配器与宿主测试，正在 facade renderer contracts；Linux 已推进到 accessibility；macOS 已通过 accessibility，进入 baseview feature combinations（Wayland 步骤按平台条件 skipped）。Linux 新缩放步骤仍 pending，三平台尚无失败。需同提交三平台完整 jobs、Linux 新缩放步骤实际运行日志和三份产物下载校验；CI 运行期间只监控记录，失败按日志修复。M5 保持未完成。
+
+### 2026-09-08 — 修正输出移除验收的首选比例假设
+
+- Command/platform: run 34237571022 / 708f391，Linux job 102099154608 failure；下载 /tmp/sunmao-run34237571022-linux.log，核对 check-runs/annotations；阅读 fractional-scale-v1 XML 与 Sway 1.9 surface.c、output.c、container.c。
+- Change: Sway 验收不再假定禁用 2x 输出必然下发 1x preference。保留移除后真实绘制检查，清空旧帧后确认最后的 2x surface preference 仍生效；随后将剩余输出调到 3x，验证新通知、EGL 密度和逻辑 resize。脚本增加 global_remove、wl_output release 和 preferred_scale(360) 的日志检查。平台实现未改动，语义文档补充首选比例独立于输出集合。
+- Result: 原 hosted 日志确认 1→2→1.5→1 与跨屏 2x 的 EGL 实际尺寸/边缘像素全部通过；global_remove(45) 与 enter(output10) 后未收到新 preferred_scale，客户端继续正常提交 320x240 缓冲区，旧测试等待 1x 超时。Sway surface_update_outputs 对 current_outputs 求最大比例，而 output_disable 直接 untrack 容器输出，不走 surface_leave_output，因此此场景保留 2x。Linux tests 类型检查 exit 0（/tmp/sunmao-scale-removal-check.log），metadata/fmt/diff/bash 语法检查通过。完整本地回归 session 70371 已启动，日志 /tmp/sunmao-scale-removal-tests.log。
+- Unresolved: 本轮多次间隔轮询确认原 session 70371 持续推进，常规测试全部通过，文档测试已推进过 core/DSP 至效果器示例；暂无失败。旧 CI 的 macOS job 102099154161 已 completed/success，Windows job 102099154489 进入原生 GUI 打包验收。上一轮为修正进展，本轮为已验证等待。修正仍待完整本地 gate 与新提交 hosted 运行；Weston core fallback、2x 光标步骤在旧失败之后尚未执行，不能宣称缩放验收完成。原 CI 的 Windows/macOS 继续运行，不重跑旧 Linux job 掩盖失败；M5 保持未完成。
+
+### 2026-09-08 — 输出移除验收修正完整 gate 通过
+
+- Command/platform: 原 session 70371 的 macOS ARM64 RUSTFLAGS=-Awarnings cargo test --locked 完整结束，日志 /tmp/sunmao-scale-removal-tests.log。
+- Change: 提交 Sway 输出移除后的 surface preference 保留与后续 3x 通知验收，以及协议日志检查和语义说明。
+- Result: 完整回归 exit 0，包含全部 doc-tests；Linux tests 类型检查、metadata/fmt/diff/bash 语法检查已通过。只修改 Linux 专属测试、验收脚本与文档，无平台实现或示例/打包改动。
+- Unresolved: 修正待新提交三平台 hosted 验收，旧 run 的 macOS 已 success、Linux 为已定位的测试假设失败；还需新日志与三份同提交 artifacts。M5 保持未完成。

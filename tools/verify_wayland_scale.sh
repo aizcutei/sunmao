@@ -37,6 +37,9 @@ env -u DISPLAY WAYLAND_DEBUG=client SUNMAO_SCALE_TEST=sway \
 grep -q 'WAYLAND SCALE VERIFIED' "$log_dir/wayland-scale.log"
 grep -Eq 'wp_fractional_scale_v1@.*preferred_scale\(180\)' "$log_dir/wayland-scale.log"
 grep -Eq 'wp_viewport@.*set_destination\(160, 120\)' "$log_dir/wayland-scale.log"
+grep -Eq 'wl_registry@.*global_remove\(' "$log_dir/wayland-scale.log"
+grep -Eq 'wl_output@.*release\(' "$log_dir/wayland-scale.log"
+grep -Eq 'wp_fractional_scale_v1@.*preferred_scale\(360\)' "$log_dir/wayland-scale.log"
 kill "$compositor_pid"
 wait "$compositor_pid" || true
 unset SWAYSOCK

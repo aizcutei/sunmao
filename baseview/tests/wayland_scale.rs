@@ -163,9 +163,20 @@ fn native_wayland_scaling_tracks_density_outputs_and_buffer_pixels() {
     sway("[title=\"SunMao scale acceptance\"] move container to output HEADLESS-2");
     wait_frame(&rx, size, 2.0);
     sway("output HEADLESS-2 disable");
-    wait_frame(&rx, size, 1.0);
+    // Sway 1.9 withdraws wl_output but retains the surface's last preferred
+    // scale (240/120). A surface preference is not an output property: do not
+    // replace it with the remaining output's scale without a new notification.
+    // Discard frames queued before removal, then verify rendering continues.
+    std::thread::sleep(Duration::from_millis(300));
+    while rx.try_recv().is_ok() {}
+    wait_frame(&rx, size, 2.0);
+    // A new preference must still be applied after output removal. Sway's
+    // disabled output remains in its surface output list, so use a larger
+    // scale than that output's retained 2x to exercise a fresh notification.
+    sway("output HEADLESS-1 scale 3");
+    wait_frame(&rx, size, 3.0);
     window.resize(Size::new(180.0, 130.0));
-    wait_frame(&rx, Size::new(180.0, 130.0), 1.0);
+    wait_frame(&rx, Size::new(180.0, 130.0), 3.0);
     window.close();
     // Explicit density remains explicit across an output-scale change.
     let (mut fixed, rx) = open(WindowScalePolicy::ScaleFactor(1.25));
