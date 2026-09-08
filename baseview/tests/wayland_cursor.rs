@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 struct Handler {
     gl: glow::Context,
+    color: [f32; 3],
     desired: Arc<AtomicUsize>,
     entered: Arc<AtomicUsize>,
     left: Arc<AtomicUsize>,
@@ -28,7 +29,8 @@ impl WindowHandler for Handler {
         let context = window.gl_context().unwrap();
         unsafe {
             context.make_current().unwrap();
-            self.gl.clear_color(1.0, 0.0, 0.0, 1.0);
+            self.gl
+                .clear_color(self.color[0], self.color[1], self.color[2], 1.0);
             self.gl.clear(glow::COLOR_BUFFER_BIT);
         }
         context.swap_buffers().unwrap();
@@ -69,6 +71,36 @@ fn capture() -> Vec<u8> {
     result.stdout
 }
 
+fn open_window(
+    title: &str,
+    color: [f32; 3],
+    desired: Arc<AtomicUsize>,
+    entered: Arc<AtomicUsize>,
+    left: Arc<AtomicUsize>,
+) -> baseview::WindowHandle {
+    let mut options = WindowOpenOptions::new(
+        title,
+        Size::new(640.0, 480.0),
+        WindowScalePolicy::ScaleFactor(1.0),
+    );
+    options.gl_config = Some(baseview::gl::GlConfig::default());
+    Window::open_floating(options, move |window| {
+        let context = window.gl_context().expect("native EGL context");
+        unsafe {
+            context.make_current().unwrap();
+        }
+        let gl =
+            unsafe { glow::Context::from_loader_function(|name| context.get_proc_address(name)) };
+        Handler {
+            gl,
+            color,
+            desired,
+            entered,
+            left,
+        }
+    })
+}
+
 #[test]
 fn native_wayland_cursor_changes_compositor_pixels_and_survives_reentry() {
     let Some(display) = std::env::var_os("SUNMAO_INPUT_DISPLAY") else {
@@ -80,28 +112,13 @@ fn native_wayland_cursor_changes_compositor_pixels_and_survives_reentry() {
     let desired = Arc::new(AtomicUsize::new(0));
     let entered = Arc::new(AtomicUsize::new(0));
     let left = Arc::new(AtomicUsize::new(0));
-    let (handler_desired, handler_entered, handler_left) =
-        (desired.clone(), entered.clone(), left.clone());
-    let mut options = WindowOpenOptions::new(
+    let mut handle = open_window(
         "Wayland cursor acceptance",
-        Size::new(640.0, 480.0),
-        WindowScalePolicy::ScaleFactor(1.0),
+        [1.0, 0.0, 0.0],
+        desired.clone(),
+        entered.clone(),
+        left.clone(),
     );
-    options.gl_config = Some(baseview::gl::GlConfig::default());
-    let mut handle = Window::open_floating(options, move |window| {
-        let context = window.gl_context().expect("native EGL context");
-        unsafe {
-            context.make_current().unwrap();
-        }
-        let gl =
-            unsafe { glow::Context::from_loader_function(|name| context.get_proc_address(name)) };
-        Handler {
-            gl,
-            desired: handler_desired,
-            entered: handler_entered,
-            left: handler_left,
-        }
-    });
     assert!(handle.is_open());
     let inject = |args: &[&str]| {
         assert!(std::process::Command::new("xdotool")
@@ -142,10 +159,29 @@ fn native_wayland_cursor_changes_compositor_pixels_and_survives_reentry() {
         "hide must remove the previous cursor",
     );
     let prior_left = left.load(Ordering::SeqCst);
-    inject(&["mousemove", "--sync", "700", "500"]);
+    // Weston 13 clear_pointer_focus() is a no-op: leaving its outer X11
+    // window does not send wl_pointer.leave. Switch between real Wayland
+    // surfaces instead, keeping the original editor and cursor alive.
+    let other_entered = Arc::new(AtomicUsize::new(0));
+    let mut other = open_window(
+        "Wayland cursor focus peer",
+        [0.0, 1.0, 0.0],
+        Arc::new(AtomicUsize::new(0)),
+        other_entered.clone(),
+        Arc::new(AtomicUsize::new(0)),
+    );
+    assert!(other.is_open());
+    let green = [0_u8, 255, 0].repeat(64 * 64);
+    wait(|| capture() == green, "second surface must be mapped");
+    inject(&["mousemove", "--sync", "--window", &compositor, "321", "240"]);
     wait(|| left.load(Ordering::SeqCst) > prior_left, "pointer leave");
+    wait(
+        || other_entered.load(Ordering::SeqCst) > 0,
+        "second surface pointer entry",
+    );
     desired.store(2, Ordering::SeqCst);
     let prior_entered = entered.load(Ordering::SeqCst);
+    other.close();
     inject(&["mousemove", "--sync", "--window", &compositor, "320", "240"]);
     wait(
         || entered.load(Ordering::SeqCst) > prior_entered,

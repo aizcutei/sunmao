@@ -1077,3 +1077,24 @@
 - Change: 光标实现、主题依赖与真实 compositor 像素测试准备提交；未重启完整测试，未重复已通过的 Linux/Windows 类型检查。
 - Result: 完整测试含 doc-tests 已 exit 0（/tmp/sunmao-cursor-tests.log）。远端仍为 aa9d25e，对应 run #120 三平台 success；光标改动在本地，尚未包含在该 run 中。Linux tests check、Windows all-features check、locked metadata、fmt/diff 和脚本语法检查均已通过。
 - Unresolved: 新光标提交需触发 hosted CI，核对真实 WAYLAND CURSOR VERIFIED 与三平台同提交产物；主动 focus、output scaling、facade feature 传递和最终审计仍未完成，M5 不标记完成。
+
+### 2026-09-08 — 光标提交已推送，GitHub CI 已启动
+
+- Command/platform: HTTPS 推送 dcbebb7fe00b7946041a0f5ea701f2007fc503d6 至 phase4/gui-component-library；GitHub Actions API 查询。
+- Change: 提交原生 Wayland 光标主题/隐藏/动画/重入处理，以及 Weston 输出像素验收。
+- Result: 推送成功，API 确认新 run 34224204311 的 head_sha 为 dcbebb7fe00b7946041a0f5ea701f2007fc503d6，初始状态 queued：https://github.com/aizcutei/sunmao/actions/runs/34224204311 。完整本地 gate 已通过。
+- Unresolved: 两次间隔 API 查询确认同一 run 已 in_progress：Linux job 102054224166 完成依赖安装，Windows job 102054224314 完成 Rust 安装，与 macOS job 102054224525 均进入 Test format adapters and host。尚无失败，真实 pointer/keyboard/cursor 步骤仍 pending。本轮为已验证的 CI 等待；需核对 Linux WAYLAND CURSOR VERIFIED 实际日志与三份 artifacts。后续两次间隔查询确认三平台均已通过格式适配器与宿主测试；最新 Linux/macOS 正在 Test standalone runtime, facade, and reference examples，Windows 正在 Check facade renderer contracts independently，真实光标步骤仍 pending，尚无失败。M5 保持未完成，CI 运行期间不推进其它实现。
+
+### 2026-09-08 — 定位并修正光标重入测试的 compositor 假设
+
+- Command/platform: run 34224204311 / dcbebb7，Linux job 102054224166 failure；下载完整日志至 /tmp/sunmao-run34224204311-linux.log，核对 commit check-runs 与 annotations，阅读 Weston 13 libweston/input.c、backend-x11/x11.c、kiosk-shell/kiosk-shell.c 上游源码。
+- Change: 原测试移动到外层 X11 窗口之外等待 wl_pointer.leave；Weston 的 X11 LeaveNotify 调用 clear_pointer_focus，而该函数实际上为空（上游 FIXME），所以没有 leave 协议事件。改为映射第二个绿色原生 Wayland 窗口，验证原窗口 leave 和新窗口 enter，然后关闭第二窗口，验证原窗口的新 enter 与手形像素恢复。保留十字/手形/隐藏/重入全部断言，不重跑旧 job 掩盖失败。
+- Result: 旧 run 的真实鼠标和键盘标记通过；光标已通过隐藏、十字、手形、再次隐藏的像素断言，失败明确为 pointer leave 超时。修正后的 Linux baseview tests 类型检查 exit 0（/tmp/sunmao-cursor-reentry-check.log）；locked metadata、fmt 和 diff 检查通过。完整本地回归已启动并确认持续运行，session 24351（/tmp/sunmao-cursor-reentry-tests.log）；不得因观察超时重启。本轮仅修改 Linux 专属验收测试，没有改动平台实现或打包/示例。
+- Unresolved: 本地完整 gate 仍运行；本轮两次轮询确认 session 24351 持续存活，baseview 的三项 macOS 生命周期/handler 测试已通过，尚无失败。旧 run 的 Windows 正在 Build cross-platform examples and tools、macOS 正在 Package and exercise native GUI backends，暂无新增失败。后续两次轮询确认同一 session 24351 已推进过 CLAP/VST3 后端与 core，DSP 的 48 项单元测试全部通过，正在运行 DSP proptest；尚无失败。旧 run 的 Windows/macOS 均已进入原生 GUI 打包验收。本轮为已验证的等待，修正尚未提交。需修正提交的真实 hosted 光标重入证据及三平台同提交产物；M5 主动 focus、缩放、feature 传递与最终审计仍待完成。
+
+### 2026-09-08 — 光标重入修正完整本地 gate 通过
+
+- Command/platform: 原 session 24351 的 macOS ARM64 `RUSTFLAGS=-Awarnings cargo test --locked` 完整执行，含 doc-tests；GitHub API 核对旧 run 34224204311。
+- Change: 用第二个原生 Wayland 表面替代外层 X11 窗口离开动作，保留真实 leave/enter 与光标像素恢复断言。
+- Result: 完整本地回归 exit 0（/tmp/sunmao-cursor-reentry-tests.log）；Linux tests 类型检查、locked metadata、fmt、diff 检查已通过。旧 CI 已结束，Windows/macOS success，Linux 仅真实 pointer/keyboard/cursor 步骤 failure，已定位为 Weston 空 clear_pointer_focus 引起的 leave 超时。
+- Unresolved: 修正待提交推送与 hosted 验收，尚无新重入运行证据；M5 其它输入平台收尾与最终审计保持未完成。
