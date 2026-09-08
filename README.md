@@ -121,6 +121,12 @@ independent and may be combined with any renderer. Plug-in code should not
 need direct dependencies on `sunmao_core`, `sunmao_macros`, `sunmao_gui`,
 `sunmao_view_baseview`, or the VST3/CLAP backends.
 
+Enable `gui-wayland` for native Linux Wayland floating editors. It includes
+`gui-gl` and propagates Wayland support to the window adapter. With
+`WAYLAND_DISPLAY` set, floating editors use Wayland; embedded VST3/CLAP
+editors keep using X11/XWayland. This feature does not enable native Wayland
+for the WGPU or WebView adapters. It is off by default.
+
 ## Build And Verify
 
 From the repository root:

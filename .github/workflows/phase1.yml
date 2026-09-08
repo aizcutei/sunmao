@@ -205,9 +205,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for feature in gui-gl gui-wgpu gui-webview; do
+          for feature in gui-gl gui-wgpu gui-webview gui-wayland; do
             cargo check --locked -p sunmao --no-default-features --features "$feature"
           done
+          cargo test --locked -p sunmao --no-default-features --features gui-wayland --doc
 
           manifests=(
             examples/sunmao_fx_gain_gui_gl/Cargo.toml
@@ -433,6 +434,17 @@ jobs:
             status=${PIPESTATUS[0]}
             if [ "$status" -eq 0 ] && ! grep -q "WAYLAND EDITOR VERIFIED" "$RUNNER_TEMP/wayland-editor.log"; then
               echo "::error::Native Wayland editor acceptance did not run"
+              status=1
+            fi
+          fi
+          if [ "$status" -eq 0 ]; then
+            env -u DISPLAY WAYLAND_DISPLAY=wayland-ci LIBGL_ALWAYS_SOFTWARE=1 SUNMAO_GUI_PIXEL_PROBE=1 \
+              timeout 180s cargo test --locked -p sunmao --no-default-features --features gui-wayland \
+              --test wayland_facade -- --nocapture \
+              2>&1 | tee "$RUNNER_TEMP/wayland-facade.log"
+            status=${PIPESTATUS[0]}
+            if [ "$status" -eq 0 ] && ! grep -q "WAYLAND FACADE VERIFIED" "$RUNNER_TEMP/wayland-facade.log"; then
+              echo "::error::Facade Wayland acceptance did not run"
               status=1
             fi
           fi

@@ -30,6 +30,9 @@ gui-gl = [
     "sunmao_view_baseview/gl",
     "sunmao_view_baseview/wgpu",
 ]
+# Native Linux Wayland floating editors use the GL renderer. Embedded
+# editors retain X11/XWayland; this opt-in does not change other renderers.
+gui-wayland = ["gui-gl", "sunmao_view_baseview/wayland"]
 gui-wgpu = [
     "gui",
     "dep:sunmao_view_baseview",

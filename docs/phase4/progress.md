@@ -1259,3 +1259,59 @@
 - Change: 将 XCURSOR_SIZE 解释为逻辑尺寸（默认 24），乘以输出整数比例后通过 load_from_name 加载；保留 XCURSOR_THEME，不修改宿主环境。补充默认值、用户尺寸、非法值与溢出测试，保留 hosted 48px buffer / 24-unit viewport 与真实光标像素断言。
 - Result: 旧 hosted 的动态/分数/跨屏/移除/3x/resize/显式覆盖 EGL 尺寸和像素、Weston core 2x 全部通过。光标形状/隐藏/重入像素通过，但协议日志显示 viewport(12,12)：load_or 将请求的 48px 覆盖为环境变量 24px，导致尺寸错误。Windows all-features target check、metadata/fmt/diff 通过；Linux tests 类型检查 exit 0（使用 PKG_CONFIG_ALLOW_CROSS=1 与 /opt/X11/lib/pkgconfig，仅类型检查，不作 Linux 原生运行证据）；完整本地回归 session 47691 exit 0，含全部文档测试，日志 /tmp/sunmao-cursor-density-tests.log。
 - Unresolved: 修正待完整本地 gate、新提交三平台 hosted 和产物校验；M5 保持未完成。
+
+### 2026-09-08 — 光标密度修复已推送并触发 hosted CI
+
+- Command/platform: HTTPS push aa8694e20d93fb0e20f8b68f6f1c695ea952c88e 至 phase4/gui-component-library；Actions API 查询。
+- Change: 提交逻辑光标尺寸读取、输出密度换算、环境变量覆盖修复与回归测试，保留原有严格 hosted 断言。
+- Result: 完整本地 locked 回归、metadata/fmt/diff、Windows target 和 Linux tests 类型检查通过；push exit 0。新 run 34242729268 精确匹配 aa8694e，当前 pending：https://github.com/aizcutei/sunmao/actions/runs/34242729268 。
+- Unresolved: 本轮间隔查询确认新 run 34242729268 / aa8694e 从 pending 转为 in_progress：Linux job 102116978531、Windows job 102116978681、macOS job 102116978792 均已进入 Test format adapters and host，尚无失败，缩放专项仍 pending。上一轮为实际修复/提交进展，本轮为已验证 CI 等待。旧 run 34241125174 已 completed/cancelled（macOS success、Linux 已定位 failure、Windows cancelled），不能替代新提交验收。后续一轮间隔轮询确认三个原 job 持续 in_progress：Linux 已通过格式适配器与宿主测试并进入 facade renderer contracts，macOS 推进到 Phase 4 acceptance fixtures，Windows 仍在格式适配器与宿主测试；暂无失败，缩放专项仍 pending。本轮为已验证等待。再一轮两次查询确认三个原 job 持续运行：macOS 进入 Build standalone reference applications，Linux 推进到 Phase 4 acceptance fixtures，Windows 已通过格式适配器与宿主测试并进入 facade renderer contracts。一次沙箱 DNS 查询失败经沙箱外重试恢复；没有重启任何 job，暂无 CI 失败，Linux 缩放仍 pending。本轮和上一轮均为已验证 CI 等待。等待新提交三平台 hosted 完整 jobs、48px/24-unit 光标日志与同提交三份产物下载校验；M5 保持未完成。
+
+### 2026-09-08 — 光标密度修复的 hosted 缩放步骤通过
+
+- Command/platform: 两次间隔查询 run 34242729268 / aa8694e 的同一组三平台 jobs。
+- Change: 本轮只核对 CI 实际进展并记录等待，没有重跑或修改代码。
+- Result: Linux job 102116978531 的 Wayland probe、pointer/keyboard/cursor、activation/focus、output scaling 四项均 completed/success，已进入 Check baseview feature combinations。macOS job 102116978792 正在原生 GUI 打包验收，Windows job 102116978681 正在 standalone/runtime/facade/reference examples；暂无失败。上一轮与本轮均为已验证 CI 等待。
+- Unresolved: 后续一轮两次间隔查询确认同一组三平台 jobs 持续 in_progress；Linux 已通过 baseview feature combinations 并进入 Build standalone reference applications，Windows 进入 accessibility，macOS 仍在原生 GUI 打包验收，暂无失败。本轮为已验证等待。再一轮间隔查询确认 macOS job 102116978792 已 completed/success；Linux job 102116978531 正在原生 GUI 打包验收，Windows job 102116978681 已通过实时分配检查并进入 Build cross-platform examples and tools；暂无失败。本轮仍为已验证 CI 等待。本轮继续间隔核对同一组三平台 jobs：Linux 已通过原生 GUI 打包验收并进入 Exercise repository packaging helper，Windows 进入原生 GUI 打包验收，macOS 保持 success；暂无失败。本轮为已验证等待。缩放专项步骤 success 尚不等于同提交三平台完整验收；Linux job 未结束，待完整日志核实 48px buffer、24-unit viewport 与所有实际缩放/像素断言，并下载校验三份产物。M5 保持未完成。
+
+### 2026-09-08 — Linux 完整成功并核实缩放日志
+
+- Command/platform: run 34242729268 / aa8694e；Linux job 102116978531 completed/success；下载 /tmp/sunmao-run34242729268-linux.log。
+- Change: 核实实际输出缩放、EGL 尺寸与光标协议/像素证据；没有改动代码或重跑 CI。
+- Result: 日志 14644–15368 确认 1→2→1.5→1、跨屏/移除 2x、后续 3x、180x130 resize 的 EGL 540x390、显式 1.25 下 EGL 200x150（输出变更前后）和边缘像素全部通过，含 WAYLAND SCALE VERIFIED。15520–15561 确认 Weston core 2x 与 resize、WAYLAND CORE SCALE VERIFIED。15814/15854 的主题缓冲区实际为 48x48/stride192，15818/15856/16135 的 viewport 实际为 24x24；16172/16177 含真实光标像素及 WAYLAND CURSOR SCALE VERIFIED。新 cursor_size_setting_is_logical_and_validated 在 16330 明确 ok。macOS job 102116978792 亦 completed/success。
+- Unresolved: Windows job 102116978681 仍在原生 GUI 打包验收，暂无失败。本轮获得了新的完整 Linux 实测证据，仍需 Windows 完整成功及同提交三份产物下载校验；缩放尚不标记正式验收，M5 保持未完成。
+
+### 2026-09-08 — 缩放修复三平台全绿，下载同提交产物
+
+- Command/platform: run 34242729268 / aa8694e20d93fb0e20f8b68f6f1c695ea952c88e completed/success；三个原 jobs 均 completed/success。产物下载校验 session 59899。
+- Change: 核对 Windows 原生 GUI 与打包收尾成功，开始下载并校验三份同提交 artifacts；Linux 缩放完整日志已在上一轮核实。
+- Result: Windows artifact 78,350,159 bytes / 364 entries，SHA-256 与 ZIP CRC 通过。Linux artifact 正在下载，已观察到约 242 MiB 文件，原 session 59899 经多次轮询仍活跃；后续一轮两次轮询仍在运行，Linux 文件从约 277 MiB 增至 423 MiB，未重启下载。再一轮两次轮询确认原 session 59899 仍活跃，Linux 文件从约 444 MiB 增至 562 MiB。本轮两次间隔轮询仍确认原 session 59899 活跃，Linux 文件从约 626 MiB 增至 729 MiB。本轮为已验证下载等待；macOS artifact 待顺序下载。
+- Unresolved: 保持原下载 session，不重启下载；剩余 Linux/macOS 产物校验完成后才能将 output scaling 标记正式验收。M5 仍有 facade feature 传递与最终兼容/文档审计，不能标记 Phase 4 完成。
+
+### 2026-09-08 — 输出缩放正式验收完成
+
+- Command/platform: run 34242729268 / aa8694e20d93fb0e20f8b68f6f1c695ea952c88e 三平台 completed/success；原下载校验 session 59899 exit 0。
+- Change: 更新 Phase 4 状态与跨格式语义，标记 output scaling 已正式验收，下一瓶颈为 facade Wayland feature 传递。
+- Result: 三份同提交 artifacts 全部下载且 SHA-256/ZIP CRC 通过：Windows 78,350,159 bytes / 364 entries；Linux 972,286,517 bytes / 96 entries；macOS 53,085,612 bytes / 152 entries。文件 /tmp/sunmao-run34242729268-phase1-*.zip。Linux 完整日志 /tmp/sunmao-run34242729268-linux.log 已核实动态整数/分数/跨屏/移除/3x/resize/显式覆盖的 EGL 尺寸与边缘像素、Weston core 2x，以及 48x48 光标缓冲区、24x24 viewport 和真实 compositor 光标像素。严格验收脚本全部成功；此前 XCURSOR_SIZE 覆盖物理尺寸的真实缺陷已被修复并由 hosted 验证。
+- Unresolved: M5 仍有 facade feature 传递及最终兼容/文档审计（包括过时的 M3 输入与 accessibility 描述）；Phase 4 未完成。本轮完成缩放瓶颈，验收文档留待下一实施提交一并带上。
+
+### 2026-09-08 — 接通 facade Wayland feature 与公开 API 验收
+
+- Command/platform: facade/适配器 manifests、公开 prelude、现有 Wayland acceptance 与 CI 自底向上核对；新增 sunmao/tests/wayland_facade.rs。
+- Change: 新增默认关闭的 sunmao/gui-wayland，包含 gui-gl 并传递 sunmao_view_baseview/wayland → baseview/wayland。README 与 doc-test 说明 GL 浮动编辑器范围，保留 X11 嵌入；测试只依赖 facade，禁用 DISPLAY，通过公开 API 绘制红/绿像素、resize、关闭及重开，使用既有 C 诊断 ABI 读回实际 renderer 像素。CI 独立编译 gui-wayland、执行 doc-test，并在 Weston 下要求 WAYLAND FACADE VERIFIED。
+- Result: macOS 独立 gui-wayland 编译 exit 0（/tmp/sunmao-facade-wayland-check.log），metadata/fmt/diff 通过。Linux tests 类型检查 session 64341 已 exit 0（4m31s，包含新的 facade integration test 类型检查）；Windows target check session 94098、doc-test session 68432、完整 locked 回归 session 16900 已启动。后续一轮两次轮询确认原 handles 持续运行：doc-test 已拿到锁并编译 WGPU/proptest，Windows 和完整回归仍等待构建锁，没有失败。再一轮两次间隔轮询确认 doc-test session 68432 exit 0（3 passed / 1 ignored，新 Native Wayland 示例明确 ok）；完整回归 session 16900 已获得锁并编译效果器/乐器示例，Windows session 94098 仍等待锁，暂无失败。本轮为已验证等待并取得 doc-test 成功证据。后续一轮两次轮询确认完整回归 session 16900 已完成编译并开始执行常规单元测试（当前 AU fixture 部分），Windows session 94098 已拿到锁并编译到 backend_vst3；暂无失败。本轮为已验证等待。本轮确认 Windows target check session 94098 exit 0；完整回归原 session 16900 经两次间隔轮询仍活跃，已推进至 CLAP backend 测试，已执行项均通过。本轮为已验证等待并取得 Windows 编译成功证据，现仅剩完整回归门槛。后续一轮两次间隔轮询确认原 session 16900 仍活跃：VST3 backend 与 core 已推进通过，DSP 48 单元测试全部通过，当前进入 DSP property tests，无失败。本轮为已验证完整回归等待。日志分别 /tmp/sunmao-facade-wayland-{linux,windows,doc,tests}.log。
+- Unresolved: 上一轮为实际实现进展，本轮为已验证等待并取得 Linux tests 类型检查成功证据。完整本地 gate 尚未完成，变更未提交；不重启等待中的检查。通过后推送并验证同提交三平台 hosted、真实 facade 编辑器日志与三份产物。Phase 4 仍未完成。
+
+### 2026-09-08 — 手动 push 后核对 CI 与剩余本地 gate
+
+- Command/platform: 查询最新 GitHub Actions runs；继续轮询原完整回归 session 16900，日志 /tmp/sunmao-facade-wayland-tests.log；git status/log/diff --check。
+- Change: 确认远端最新运行仍为 aa8694e 的 run 34242729268，三平台 completed/success；gui-wayland facade 八个文件仍为未提交改动，尚未进入该运行。本轮未重启测试或 CI。
+- Result: 原完整回归连续轮询仍活跃，已从效果器示例推进通过 GUI 后端至合成器 GUI 示例，已执行测试均通过；diff --check exit 0。既有 scaling 同提交三份产物校验成功记录有效。
+- Unresolved: 仅剩原完整本地回归退出结果；随后提交并推送 facade feature 与严格 hosted 验收。当前 GitHub success 不覆盖未提交改动，不能据此标记 facade 或 Phase 4 完成。本轮为已验证等待。 后续一轮两次间隔轮询确认原 session 16900 仍活跃，常规测试已通过并进入 doc-tests；facade 文档测试 3 passed / 1 ignored，当前推进至 backend_vst3 文档测试，无失败。HEAD 仍为 aa8694e；本轮继续为已验证等待。
+
+### 2026-09-08 — facade Wayland 完整本地 gate 通过
+
+- Command/platform: macOS ARM64 原完整 locked 回归 session 16900 exit 0；日志 /tmp/sunmao-facade-wayland-tests.log。
+- Change: 提交默认关闭的 gui-wayland feature、公开 API doc-test、仅依赖 facade 的真实浮动编辑器验收与 CI 接线，并带上 output scaling 正式验收记录。
+- Result: 完整常规测试与全部 doc-tests 通过；此前 metadata/fmt/diff、macOS 独立 feature 编译、Windows target check、Linux tests 类型检查与独立 gui-wayland doc-test 均通过。没有修改示例或打包实现。
+- Unresolved: 待新提交三平台 hosted 全部成功、Linux WAYLAND FACADE VERIFIED 实际运行日志及同提交三份 artifacts 下载校验。Phase 4 与 M5 尚未完成。

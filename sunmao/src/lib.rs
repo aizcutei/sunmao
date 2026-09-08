@@ -23,6 +23,26 @@
 //!
 //! sunmao_export!(MyPlugin);
 //! ```
+//!
+//! ## Native Wayland editors
+//!
+//! Enable `gui-wayland` to use the GL floating editor on Linux Wayland.
+//! It includes `gui-gl`; embedded editors continue to use X11/XWayland.
+//! The WGPU and WebView adapters do not gain native Wayland support.
+//!
+//! ```
+//! # #[cfg(feature = "gui-wayland")]
+//! # {
+//! use sunmao::prelude::*;
+//! struct Editor;
+//! impl ViewState for Editor {
+//!     fn draw(&mut self, _: &mut dyn GuiContext, _: f32, _: f32) {}
+//!     fn on_mouse_event(&mut self, _: &GuiEvent) -> bool { false }
+//! }
+//! let view = BaseviewView::new(BaseviewConfig::default(), |_| Editor);
+//! assert!(view.supports_floating());
+//! # }
+//! ```
 
 pub mod voice;
 
