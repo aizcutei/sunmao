@@ -135,6 +135,7 @@ jobs:
             xauth \
             xdotool \
             x11-xkb-utils \
+            adwaita-icon-theme \
             weston \
             pkg-config
 
@@ -463,7 +464,7 @@ jobs:
             fi
           fi
 
-      - name: Verify native Wayland pointer and keyboard input
+      - name: Verify native Wayland pointer, keyboard and cursor
         if: runner.os == 'Linux'
         run: xvfb-run -a -s "-screen 0 1280x1024x24 -noreset" bash tools/verify_wayland_pointer.sh
 

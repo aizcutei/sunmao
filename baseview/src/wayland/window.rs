@@ -9,7 +9,7 @@ use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle, WindowHandle as RwhWindowHandle,
 };
-use wayland_client::protocol::{wl_callback, wl_compositor, wl_registry, wl_surface};
+use wayland_client::protocol::{wl_callback, wl_compositor, wl_registry, wl_shm, wl_surface};
 use wayland_client::{delegate_noop, Connection, Dispatch, Proxy, QueueHandle};
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 
@@ -79,6 +79,8 @@ pub(super) struct OpenState {
     pub(super) events: Vec<Event>,
     compositor: Option<wl_compositor::WlCompositor>,
     wm_base: Option<xdg_wm_base::XdgWmBase>,
+    shm: Option<wl_shm::WlShm>,
+    cursor_theme: Option<wayland_cursor::CursorTheme>,
     configured: bool,
     pub(super) close_requested: bool,
     configured_size: Option<(u32, u32)>,
@@ -91,10 +93,52 @@ impl Default for OpenState {
             events: Vec::new(),
             compositor: None,
             wm_base: None,
+            shm: None,
+            cursor_theme: None,
             configured: false,
             close_requested: false,
             configured_size: None,
         }
+    }
+}
+
+impl OpenState {
+    fn update_cursors(
+        &mut self,
+        requested: MouseCursor,
+        connection: &Connection,
+        handle: &QueueHandle<Self>,
+    ) -> Result<(), String> {
+        if !self.seats.values().any(|seat| seat.cursor.entered()) {
+            return Ok(());
+        }
+        let compositor = self
+            .compositor
+            .as_ref()
+            .ok_or("missing cursor compositor")?;
+        if requested != MouseCursor::Hidden && self.cursor_theme.is_none() {
+            let shm = self
+                .shm
+                .clone()
+                .ok_or("wl_shm is unavailable for cursor images")?;
+            self.cursor_theme = Some(
+                wayland_cursor::CursorTheme::load(connection, shm, 24)
+                    .map_err(|error| error.to_string())?,
+            );
+        }
+        for seat in self.seats.values_mut() {
+            if let Some(pointer) = &seat.pointer {
+                seat.cursor.update(
+                    pointer,
+                    requested,
+                    self.cursor_theme.as_mut(),
+                    compositor,
+                    handle,
+                    Instant::now(),
+                )?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -153,6 +197,9 @@ impl Dispatch<wl_registry::WlRegistry, ()> for OpenState {
                             name,
                         )),
                     );
+                }
+                "wl_shm" => {
+                    state.shm = Some(registry.bind(name, 1, handle, ()));
                 }
                 "wl_compositor" => {
                     state.compositor = Some(registry.bind(name, version.min(4), handle, ()))
@@ -217,6 +264,7 @@ impl Dispatch<xdg_toplevel::XdgToplevel, ()> for OpenState {
 }
 
 delegate_noop!(OpenState: ignore wl_compositor::WlCompositor);
+delegate_noop!(OpenState: ignore wl_shm::WlShm);
 delegate_noop!(OpenState: ignore wl_surface::WlSurface);
 
 pub(crate) struct WindowInner {
@@ -230,6 +278,7 @@ pub(crate) struct WindowInner {
     window_info: Cell<WindowInfo>,
     close_requested: Cell<bool>,
     focused: Cell<bool>,
+    cursor: Cell<MouseCursor>,
 }
 
 impl Drop for WindowInner {
@@ -376,6 +425,7 @@ impl<'a> Window<'a> {
             window_info: Cell::new(info),
             close_requested: Cell::new(false),
             focused: Cell::new(false),
+            cursor: Cell::new(MouseCursor::Default),
         };
         let mut window = crate::Window::new(Window { inner: &inner });
         let mut handler = build(&mut window);
@@ -427,6 +477,7 @@ impl<'a> Window<'a> {
                 handler.on_frame(&mut window);
                 last_frame = Instant::now();
             }
+            state.update_cursors(inner.cursor.get(), &inner.connection, &handle)?;
             super::dispatch::dispatch_for(
                 &mut queue,
                 &mut state,
@@ -462,7 +513,9 @@ impl<'a> Window<'a> {
         self.inner.surface.commit();
     }
 
-    pub fn set_mouse_cursor(&mut self, _: MouseCursor) {}
+    pub fn set_mouse_cursor(&mut self, cursor: MouseCursor) {
+        self.inner.cursor.set(cursor);
+    }
 
     pub fn has_focus(&mut self) -> bool {
         self.inner.focused.get()

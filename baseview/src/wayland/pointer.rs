@@ -8,7 +8,8 @@ use crate::{Event, MouseButton, MouseEvent, Point, ScrollDelta};
 
 pub(super) struct Seat {
     seat: wl_seat::WlSeat,
-    pointer: Option<wl_pointer::WlPointer>,
+    pub(super) pointer: Option<wl_pointer::WlPointer>,
+    pub(super) cursor: super::cursor::PointerCursor,
     pub(super) keyboard: Option<super::keyboard::Keyboard>,
     frame: PointerFrame,
 }
@@ -18,6 +19,7 @@ impl Seat {
         Self {
             seat,
             pointer: None,
+            cursor: Default::default(),
             keyboard: None,
             frame: PointerFrame::default(),
         }
@@ -35,6 +37,7 @@ impl Seat {
 
     pub(super) fn remove_pointer(&mut self, events: &mut Vec<Event>) {
         self.frame.cancel(events);
+        self.cursor = Default::default();
         if let Some(pointer) = self.pointer.take() {
             if pointer.version() >= 3 {
                 pointer.release();
@@ -45,6 +48,7 @@ impl Seat {
 
 impl Drop for Seat {
     fn drop(&mut self) {
+        self.cursor = Default::default();
         if let Some(pointer) = self.pointer.take() {
             if pointer.version() >= 3 {
                 pointer.release();
@@ -198,11 +202,16 @@ impl Dispatch<wl_pointer::WlPointer, u32> for OpenState {
             .map_or(Modifiers::empty(), |k| k.modifiers());
         match event {
             wl_pointer::Event::Enter {
+                serial,
                 surface_x,
                 surface_y,
                 ..
-            } => input.frame.enter(surface_x, surface_y),
+            } => {
+                input.cursor.enter(serial);
+                input.frame.enter(surface_x, surface_y);
+            }
             wl_pointer::Event::Leave { .. } => {
+                input.cursor.leave();
                 input.frame.pending.push(MouseEvent::CursorLeft);
                 input.frame.entered = false;
             }

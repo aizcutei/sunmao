@@ -621,6 +621,7 @@ dependencies = [
  "uuid 0.8.2",
  "wayland-backend",
  "wayland-client",
+ "wayland-cursor",
  "wayland-protocols",
  "wayland-sys",
  "winapi",

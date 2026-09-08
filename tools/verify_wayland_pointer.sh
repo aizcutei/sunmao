@@ -6,6 +6,8 @@ set -euo pipefail
 log_dir="${RUNNER_TEMP:-$XDG_RUNTIME_DIR}"
 export SUNMAO_INPUT_DISPLAY="$DISPLAY"
 export LIBGL_ALWAYS_SOFTWARE=1
+export XCURSOR_THEME=Adwaita
+export XCURSOR_SIZE=24
 # The nested X11 backend obtains its keymap from the X server, overriding
 # weston.ini keymap settings. Keep Xvfb alive with -noreset across this command.
 setxkbmap -layout us -variant intl
@@ -42,3 +44,11 @@ env -u DISPLAY WAYLAND_DEBUG=client WAYLAND_DISPLAY=wayland-pointer-ci SUNMAO_GU
 grep -q 'WAYLAND POINTER VERIFIED' "$log_dir/wayland-pointer.log"
 
 grep -q 'WAYLAND KEYBOARD VERIFIED' "$log_dir/wayland-pointer.log"
+
+# The observer alone reads the outer X11 window. Weston draws the Wayland
+# cursor into these pixels (its own X11 cursor is empty).
+export SUNMAO_CURSOR_CAPTURE="$PWD/tools/capture_wayland_cursor.py"
+env -u DISPLAY WAYLAND_DEBUG=client WAYLAND_DISPLAY=wayland-pointer-ci \
+  timeout 180s cargo test --locked -p baseview --features wayland,opengl \
+  --test wayland_cursor -- --nocapture 2>&1 | tee "$log_dir/wayland-cursor.log"
+grep -q 'WAYLAND CURSOR VERIFIED' "$log_dir/wayland-cursor.log"

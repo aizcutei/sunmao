@@ -26,7 +26,7 @@ accessibility = ["dep:accesskit", "dep:accesskit_windows", "dep:accesskit_macos"
 # Native Wayland. Off by default and Linux-only: the X11 backend already works
 # on Wayland desktops through XWayland, so this is an improvement (no X server,
 # proper per-output scaling) rather than a prerequisite.
-wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:wayland-backend", "dep:wayland-sys", "dep:khronos-egl", "dep:xkbcommon-dl"]
+wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:wayland-backend", "dep:wayland-sys", "dep:khronos-egl", "dep:xkbcommon-dl", "dep:wayland-cursor"]
 
 [dependencies]
 keyboard-types = { version = "0.6.1", default-features = false }
@@ -41,6 +41,7 @@ nix = "0.22.0"
 gtk = { version = "0.18", features = ["unsafe-assume-initialized"], optional = true }
 gdk = { version = "0.18", features = ["unsafe-assume-initialized"], optional = true }
 accesskit_unix = { version = "0.23", optional = true }
+wayland-cursor = { version = "0.31.12", optional = true }
 wayland-client = { version = "0.31", optional = true }
 wayland-backend = { version = "0.3", features = ["client_system", "dlopen"], optional = true }
 wayland-sys = { version = "0.31", features = ["egl", "dlopen"], optional = true }
