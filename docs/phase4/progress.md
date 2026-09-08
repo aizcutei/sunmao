@@ -993,3 +993,17 @@
 - Change: Weston 已创建 640×480 X11 输出（日志 window id 2097157），但只设置 _NET_WM_NAME；xdotool --name 使用 XGetWMName 查询 WM_NAME，因此测试床查找超时。改为按明确设置的 WM_CLASS 精确查找 Weston Compositor，并用 --limit 1 避免管道。
 - Result: 原 Linux job 的 headless EGL/editor 验收及 pointer 单测/proptest 均通过；真实鼠标测试尚未启动，不能宣称输入失败或成功。当前 bash 语法、metadata、fmt、diff 检查通过；完整本地 RUSTFLAGS=-Awarnings cargo test --locked 已 exit 0（/tmp/sunmao-pointer-class-tests.log）。
 - Unresolved: 修正已通过完整本地 gate，待提交推送与 hosted 实测；本轮继续聚焦真实 pointer 验收，M5 其余未完成项保持不变。
+
+### 2026-09-08 — Weston WM_CLASS 修正已推送
+
+- Command/platform: macOS 完整本地回归 exit 0；HTTPS 推送 `a511279` 到 phase4/gui-component-library。
+- Change: 修正嵌套 Weston 的窗口查找，使真实 pointer 测试能够越过测试床准备阶段。
+- Result: GitHub API 确认新 run 34214877140 的 head_sha 为 a5112791eb06f9bcd55a3341c3938ce71d6a7b74，状态 queued；原 run 34213118156 已 completed/failure。
+- Unresolved: [修正后 CI](https://github.com/aizcutei/sunmao/actions/runs/34214877140) 已从 queued 进入 in_progress。两次间隔 API 查询核实 Linux job 102024176963、macOS job 102024176947、Windows job 102024176777 均已进入 Test format adapters and host；尚无失败，pointer 步骤仍未开始。需核对真实 WAYLAND POINTER VERIFIED 标记及三平台结果，M5 保持未完成。
+
+### 2026-09-08 — 定位鼠标验收的事件与渲染断点
+
+- Command/platform: run 34214877140 / a511279；Linux job 102024176963 日志下载至 /tmp/sunmao-run118-linux.log，已核对 check-run annotations。
+- Change: WM_CLASS 修正确认有效，真实测试已执行并读到红色帧，但等待蓝色帧超时。renderer probe 位于 swap/commit 之前，不能据红帧判定表面已映射并获得输入。验收改为先移动并等待 ViewState 收到坐标事件，再点击并等待有序 press/release，最后校验蓝色像素；加入测试事件日志与 WAYLAND_DEBUG=client，区分协议、事件转发、渲染各阶段。
+- Result: 原 headless renderer 验收通过；原 pointer 失败只证明点击后未观察到蓝帧，尚不能定位为平台实现缺陷或映射竞态。当前 Linux tests 类型检查、metadata、fmt、diff、bash 语法检查通过；完整本地 RUSTFLAGS=-Awarnings cargo test --locked 已 exit 0（/tmp/sunmao-pointer-readiness-tests.log）。
+- Unresolved: 本地 gate 已通过，待提交及 hosted 运行，按事件和协议证据继续修复；M5 其余输入、焦点、光标、缩放与 feature 传递仍未完成。

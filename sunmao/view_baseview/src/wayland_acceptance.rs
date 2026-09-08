@@ -114,6 +114,7 @@ fn native_wayland_editor_renders_resizes_and_reopens() {
 }
 
 struct PointerState {
+    moved: Arc<AtomicBool>,
     phase: Arc<AtomicUsize>,
 }
 impl ViewState for PointerState {
@@ -127,7 +128,12 @@ impl ViewState for PointerState {
     }
 
     fn on_mouse_event(&mut self, event: &GuiEvent) -> bool {
+        eprintln!("WAYLAND POINTER EVENT: {event:?}");
         match event {
+            GuiEvent::MouseMove { x, y, .. } if *x > 0.0 && *y > 0.0 => {
+                self.moved.store(true, Ordering::SeqCst);
+                false
+            }
             GuiEvent::MouseDown {
                 x,
                 y,
@@ -196,6 +202,8 @@ fn native_wayland_pointer_changes_rendered_pixels() {
     let window = std::env::var("SUNMAO_INPUT_WINDOW").expect("nested compositor window");
     let phase = Arc::new(AtomicUsize::new(0));
     let state_phase = phase.clone();
+    let moved = Arc::new(AtomicBool::new(false));
+    let state_moved = moved.clone();
     let view = BaseviewView::new(
         BaseviewConfig {
             width: 640,
@@ -203,6 +211,7 @@ fn native_wayland_pointer_changes_rendered_pixels() {
             ..Default::default()
         },
         move |_| PointerState {
+            moved: state_moved.clone(),
             phase: state_phase.clone(),
         },
     );
@@ -212,20 +221,36 @@ fn native_wayland_pointer_changes_rendered_pixels() {
     wait_for_solid_frame(false);
     // XTest targets the nested compositor; the editor connects only to Wayland.
     let status = std::process::Command::new("xdotool")
-        .env("DISPLAY", display)
-        .args([
-            "mousemove",
-            "--sync",
-            "--window",
-            &window,
-            "320",
-            "240",
-            "click",
-            "1",
-        ])
+        .env("DISPLAY", &display)
+        .args(["mousemove", "--sync", "--window", &window, "320", "240"])
         .status()
         .expect("XTest input injector");
-    assert!(status.success(), "pointer injection failed");
+    assert!(status.success(), "pointer motion injection failed");
+    // The renderer probe captures before swap/commit. A red frame alone does
+    // not prove the compositor has mapped the surface or assigned input focus.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !moved.load(Ordering::SeqCst) {
+        assert!(
+            Instant::now() < deadline,
+            "Wayland pointer motion did not reach ViewState"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let status = std::process::Command::new("xdotool")
+        .env("DISPLAY", &display)
+        .args(["click", "1"])
+        .status()
+        .expect("XTest click injector");
+    assert!(status.success(), "pointer click injection failed");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while phase.load(Ordering::SeqCst) != 2 {
+        assert!(
+            Instant::now() < deadline,
+            "Wayland click incomplete: phase={}",
+            phase.load(Ordering::SeqCst)
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
     wait_for_solid_frame(true);
     assert_eq!(
         phase.load(Ordering::SeqCst),

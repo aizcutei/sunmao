@@ -27,7 +27,7 @@ for _ in $(seq 1 100); do
 done
 : "${SUNMAO_INPUT_WINDOW:?Weston X11 window did not appear}"
 export SUNMAO_INPUT_WINDOW
-env -u DISPLAY WAYLAND_DISPLAY=wayland-pointer-ci SUNMAO_GUI_PIXEL_PROBE=1 \
+env -u DISPLAY WAYLAND_DEBUG=client WAYLAND_DISPLAY=wayland-pointer-ci SUNMAO_GUI_PIXEL_PROBE=1 \
   timeout 180s cargo test --locked -p sunmao_view_baseview --features wayland \
   native_wayland_pointer_changes_rendered_pixels -- --nocapture \
   2>&1 | tee "$log_dir/wayland-pointer.log"
