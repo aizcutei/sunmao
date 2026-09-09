@@ -970,6 +970,12 @@ impl WindowState {
 
     /// Trigger the event immediately and return the event status.
     pub(super) fn trigger_event(&self, event: Event) -> EventStatus {
+        if matches!(&event, Event::Window(crate::WindowEvent::Unfocused)) {
+            let releases = self.keyboard_state.reset_composition();
+            for release in releases {
+                self.trigger_event(Event::Keyboard(release));
+            }
+        }
         if !self.handler_available() {
             self.deferred_events.borrow_mut().push_back(event);
             return EventStatus::Ignored;

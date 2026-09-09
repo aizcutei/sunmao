@@ -499,6 +499,13 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: "13.0"
         run: cargo test --locked -p sunmao_runtime --features system-capture
 
+      - name: Verify native macOS international keyboard input
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          SUNMAO_MACOS_KEYBOARD_TEST=1 cargo test --locked -p baseview --test macos_keyboard 2>&1 | tee /tmp/macos-keyboard.log
+          grep -q '^MACOS KEYBOARD VERIFIED:' /tmp/macos-keyboard.log
+
       - name: Verify native X11 international keyboard input
         if: runner.os == 'Linux'
         run: |

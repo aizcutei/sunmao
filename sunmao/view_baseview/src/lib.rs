@@ -522,16 +522,14 @@ fn convert_key_code(code: keyboard_types::Code) -> GuiKeyCode {
 
 /// Text produced by a key press, if any.
 ///
-/// This is the **international and IME path**. `Code` is a physical key
-/// position — `KeyA` is the same key whether the layout is QWERTY, AZERTY or
-/// Dvorak — so a French `é`, a German `ü` or a committed CJK phrase can only
-/// arrive through the *logical* `Key::Character`, which the platform has
-/// already run through the keyboard layout and any input method.
+/// Converts the platform's logical `Key::Character` into text. Physical
+/// `Code` positions cannot identify characters across keyboard layouts.
+/// International layout and compose support depends on the native adapter;
+/// this conversion alone does not provide an IME commit/preedit protocol.
 ///
 /// Composition-in-progress events are skipped: `is_composing` marks the
-/// preedit that an IME is still editing, and inserting it would type every
-/// intermediate candidate. The platform sends the committed text as a separate,
-/// non-composing event.
+/// unfinished composition, which must not be inserted as committed text.
+/// Only non-composing character events produce text here.
 fn text_input_from_key(event: &keyboard_types::KeyboardEvent) -> Option<GuiEvent> {
     if event.state != keyboard_types::KeyState::Down || event.is_composing {
         return None;

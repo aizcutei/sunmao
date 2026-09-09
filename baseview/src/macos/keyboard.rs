@@ -18,7 +18,8 @@
 
 //! Conversion of platform keyboard event into cross-platform event.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 
 use cocoa::appkit::{NSEvent, NSEventModifierFlags, NSEventType};
 use cocoa::base::id;
@@ -38,15 +39,16 @@ pub(crate) fn from_nsstring(s: id) -> String {
 
 /// State for processing of keyboard events.
 ///
-/// This needs to be stateful for proper processing of dead keys. The current
-/// implementation is somewhat primitive and is not based on IME; in the future
-/// when IME is implemented, it will need to be redone somewhat, letting the IME
-/// be the authoritative source of truth for Unicode string values of keys.
+/// Native layout translation retains per-window dead-key state. This handles
+/// international keyboard composition; a full NSTextInputClient IME commit
+/// and preedit protocol is not implemented here.
 ///
 /// Most of the logic in this module is adapted from Mozilla, and in particular
 /// TextInputHandler.mm.
 pub(crate) struct KeyboardState {
     last_mods: Cell<NSEventModifierFlags>,
+    compose: RefCell<LayoutCompose>,
+    held: RefCell<HeldKeys>,
 }
 
 /// Convert a macOS platform key code (keyCode field of NSEvent).
@@ -272,7 +274,17 @@ fn is_modifier_code(code: Code) -> bool {
 impl KeyboardState {
     pub(crate) fn new() -> KeyboardState {
         let last_mods = Cell::new(NSEventModifierFlags::empty());
-        KeyboardState { last_mods }
+        KeyboardState {
+            last_mods,
+            compose: RefCell::new(LayoutCompose::default()),
+            held: RefCell::new(HeldKeys::default()),
+        }
+    }
+
+    pub(crate) fn reset_composition(&self) -> Vec<KeyboardEvent> {
+        self.compose.borrow_mut().dead = 0;
+        self.last_mods.set(NSEventModifierFlags::empty());
+        self.held.borrow_mut().cancel()
     }
 
     pub(crate) fn last_mods(&self) -> NSEventModifierFlags {
@@ -313,13 +325,39 @@ impl KeyboardState {
                 }
                 _ => unreachable!(),
             };
-            let is_composing = false;
+            let mut is_composing = false;
             let repeat: bool = event_type == NSEventType::NSKeyDown && msg_send![event, isARepeat];
+            if let Some(event) = self
+                .held
+                .borrow_mut()
+                .existing(key_code, state, modifiers, repeat)
+            {
+                return Some(event);
+            }
             let key = if let Some(key) = code_to_key(code) {
+                if state == KeyState::Down && !is_modifier_code(code) {
+                    // Escape, editing and navigation keys cancel an unfinished
+                    // dead-key sequence without inserting the pending accent.
+                    self.compose.borrow_mut().dead = 0;
+                }
                 key
             } else {
-                let characters = from_nsstring(event.characters());
-                if is_valid_key(&characters) {
+                let mut characters = from_nsstring(event.characters());
+                if state == KeyState::Down {
+                    let mut compose = self.compose.borrow_mut();
+                    if characters.is_empty() || compose.dead != 0 {
+                        if let Some(text) = compose.translate(key_code, modifiers) {
+                            characters = text;
+                        }
+                    }
+                }
+                if characters.is_empty() {
+                    // AppKit emits no characters for a dead key. Falling back
+                    // to charactersIgnoringModifiers would insert its base
+                    // letter before the composed character arrives.
+                    is_composing = true;
+                    Key::Dead
+                } else if is_valid_key(&characters) {
                     Key::Character(characters)
                 } else {
                     let chars_ignoring = from_nsstring(event.charactersIgnoringModifiers());
@@ -340,6 +378,9 @@ impl KeyboardState {
                 is_composing,
                 repeat,
             };
+            if state == KeyState::Down {
+                self.held.borrow_mut().0.insert(key_code, event.clone());
+            }
             Some(event)
         }
     }
@@ -364,4 +405,179 @@ pub(crate) fn make_modifiers(raw: NSEventModifierFlags) -> Modifiers {
         }
     }
     modifiers
+}
+
+// UCKeyTranslate owns no process-global compose state: each window retains its
+// own dead-key state and the system layout data that gives that state meaning.
+#[derive(Default)]
+struct LayoutCompose {
+    layout: Option<core_foundation::data::CFData>,
+    dead: u32,
+}
+#[link(name = "Carbon", kind = "framework")]
+extern "C" {
+    fn TISCopyCurrentKeyboardLayoutInputSource() -> *const std::ffi::c_void;
+    fn TISGetInputSourceProperty(
+        source: *const std::ffi::c_void,
+        property: *const std::ffi::c_void,
+    ) -> *const std::ffi::c_void;
+    static kTISPropertyUnicodeKeyLayoutData: *const std::ffi::c_void;
+    fn LMGetKbdType() -> u8;
+    fn UCKeyTranslate(
+        layout: *const std::ffi::c_void,
+        key: u16,
+        action: u16,
+        modifiers: u32,
+        keyboard_type: u32,
+        options: u32,
+        dead: *mut u32,
+        capacity: u32,
+        length: *mut u32,
+        output: *mut u16,
+    ) -> i32;
+}
+impl LayoutCompose {
+    fn translate(&mut self, key: u16, modifiers: Modifiers) -> Option<String> {
+        use core_foundation::{
+            base::{CFRelease, TCFType},
+            data::CFData,
+        };
+        unsafe {
+            let source = TISCopyCurrentKeyboardLayoutInputSource();
+            if source.is_null() {
+                self.dead = 0;
+                return None;
+            }
+            let data = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData);
+            let layout = if data.is_null() {
+                None
+            } else {
+                Some(CFData::wrap_under_get_rule(data as _))
+            };
+            CFRelease(source);
+            let layout = match layout {
+                Some(layout) => layout,
+                None => {
+                    self.dead = 0;
+                    return None;
+                }
+            };
+            if self.layout.as_ref() != Some(&layout) {
+                self.dead = 0;
+                self.layout = Some(layout);
+            }
+            let layout = self.layout.as_ref().unwrap();
+            // Carbon modifier bits shifted right by 8, as UCKeyTranslate
+            // requires. NSEvent modifier bit positions are different.
+            let mut flags = 0;
+            for (modifier, bit) in [
+                (Modifiers::META, 1),
+                (Modifiers::SHIFT, 2),
+                (Modifiers::CAPS_LOCK, 4),
+                (Modifiers::ALT, 8),
+                (Modifiers::CONTROL, 16),
+            ] {
+                if modifiers.contains(modifier) {
+                    flags |= bit;
+                }
+            }
+            let mut output = [0u16; 256];
+            let mut length = 0;
+            let status = UCKeyTranslate(
+                layout.bytes().as_ptr() as _,
+                key,
+                0,
+                flags,
+                LMGetKbdType() as u32,
+                0,
+                &mut self.dead,
+                output.len() as u32,
+                &mut length,
+                output.as_mut_ptr(),
+            );
+            if status != 0 || length as usize > output.len() {
+                self.dead = 0;
+                eprintln!("macOS keyboard layout translation failed: {}", status);
+                return None;
+            }
+            match String::from_utf16(&output[..length as usize]) {
+                Ok(text) => Some(text),
+                Err(_) => {
+                    self.dead = 0;
+                    eprintln!("macOS keyboard layout returned invalid UTF-16");
+                    None
+                }
+            }
+        }
+    }
+}
+
+// Releases and repeats retain the logical key chosen on the initial press,
+// even if a modifier or the input source changes while the key is held.
+#[derive(Default)]
+struct HeldKeys(HashMap<u16, KeyboardEvent>);
+impl HeldKeys {
+    fn existing(
+        &mut self,
+        code: u16,
+        state: KeyState,
+        modifiers: Modifiers,
+        repeat: bool,
+    ) -> Option<KeyboardEvent> {
+        let mut event = if state == KeyState::Up {
+            self.0.remove(&code)?
+        } else if repeat {
+            self.0.get(&code)?.clone()
+        } else {
+            return None;
+        };
+        event.state = state;
+        event.modifiers = modifiers;
+        event.repeat = repeat;
+        Some(event)
+    }
+    fn cancel(&mut self) -> Vec<KeyboardEvent> {
+        self.0
+            .drain()
+            .map(|(_, mut event)| {
+                event.state = KeyState::Up;
+                event.modifiers = Modifiers::empty();
+                event.repeat = false;
+                event
+            })
+            .collect()
+    }
+}
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use proptest::prelude::*;
+    proptest! {
+        #[test]
+        fn logical_keys_survive_modifier_changes_and_cancel_releases_once(
+            keys in proptest::collection::vec((0u16..128, any::<char>()), 0..256)
+        ) {
+            let mut held = HeldKeys::default();
+            for (physical, character) in keys {
+                let event = KeyboardEvent {
+                    code: Code::KeyA, key: Key::Character(character.to_string()),
+                    state: KeyState::Down, location: keyboard_types::Location::Standard,
+                    modifiers: Modifiers::ALT, repeat: false, is_composing: false,
+                };
+                held.0.insert(physical, event.clone());
+                let repeated = held.existing(physical, KeyState::Down, Modifiers::SHIFT, true).unwrap();
+                prop_assert_eq!(&repeated.key, &event.key);
+                prop_assert!(repeated.repeat);
+                let released = held.existing(physical, KeyState::Up, Modifiers::empty(), false).unwrap();
+                prop_assert_eq!(&released.key, &event.key);
+                prop_assert!(held.existing(physical, KeyState::Up, Modifiers::empty(), false).is_none());
+                held.0.insert(physical, event);
+            }
+            let count = held.0.len();
+            let releases = held.cancel();
+            prop_assert_eq!(releases.len(), count);
+            prop_assert!(releases.iter().all(|e| e.state == KeyState::Up && !e.repeat && e.modifiers.is_empty()));
+            prop_assert!(held.cancel().is_empty());
+        }
+    }
 }

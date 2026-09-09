@@ -1423,3 +1423,213 @@
 - Change: 提交服务器 XKB 布局、共享 compose 翻译、布局更新/失焦清理、按键生命周期属性测试及 Xvfb/XTest hosted 验收，携带此前 facade Wayland 正式验收记录和 M3 输入证据纠正。
 - Result: macOS 完整常规测试与全部 doc-tests 通过；Linux tests 类型检查（含 wayland）和 Windows target check 已通过。没有重启耗时回归，没有修改示例或打包实现。
 - Unresolved: 待新提交三平台完整 hosted 全绿、X11 KEYBOARD VERIFIED 实际运行日志和同提交三份 artifacts 下载校验。Linux 原生输入与新增属性测试尚待实际运行；macOS/Windows 原生国际输入及最终审计仍未完成，M5/Phase 4 保持未完成。
+
+### 2026-09-09 — X11 修复已推送并触发三平台 CI
+
+- Command/platform: HTTPS push 90bf6de4f85519801d7d5f499e4c4596559a346f 至 phase4/gui-component-library；原 push session 30847 exit 0；Actions API 查询。
+- Change: 推送 X11 原生布局/compose 修复与真实按键 blocking 验收，保留既有三平台 gate。
+- Result: 新 run 34255696871 的 head_sha 精确匹配 90bf6de，当前 queued：https://github.com/aizcutei/sunmao/actions/runs/34255696871 。完整本地 gate 已通过。
+- Unresolved: 等待同提交三平台完整 jobs 成功、X11 实际运行标记及三份 artifacts 下载校验。CI 运行期间只监控/记录，实际失败依日志处理；M3 输入与 M5/Phase 4 保持未完成。
+
+### 2026-09-09 — X11 修复三平台 hosted 持续运行
+
+- Command/platform: 两次间隔查询 run 34255696871 / 90bf6de 原 jobs；git status/log。
+- Change: 本轮仅监控/记录；状态查询 helper 加入 X11 步骤展示，未修改实现或重跑 jobs。
+- Result: Linux job 102160815689 安装 GUI 构建依赖，Windows job 102160815799 与 macOS job 102160815981 已进入 Test format adapters and host，三个 jobs 均 in_progress，暂无失败。新 X11 输入步骤 pending。上一轮为提交/push 进展，本轮为已验证 CI 等待。
+- Unresolved: 等待同提交三个完整 jobs、X11 实际成功标记与三份产物校验。M3 输入与 M5/Phase 4 未完成，不能仅据已触发 CI 宣称验收。
+
+### 2026-09-09 — 继续核对已推送提交的 hosted CI
+
+- Command/platform: 两次间隔查询 Actions run 34255696871，核对 HEAD 90bf6de 与 phase4/gui-component-library。
+- Change: 仅监控原三平台 jobs 并记录，没有重跑或修改实现。
+- Result: 三个平台均 in_progress，暂无失败；Linux 已推进到 Check facade renderer contracts independently，Windows 执行 Test format adapters and host，macOS 执行 Test standalone runtime, facade, and reference examples。X11 原生输入步骤仍 pending。本轮为已验证 CI 等待。
+- Unresolved: 等待同提交三个完整 jobs 全绿、X11 实际运行成功日志与三份 artifacts 下载校验；M3 输入与 M5/Phase 4 尚未完成。
+
+### 2026-09-09 — 三平台原 jobs 继续推进
+
+- Command/platform: 两次间隔查询 run 34255696871 / 90bf6de 的原三平台 jobs，核对分支与 HEAD。
+- Change: 本轮仅监控并记录，没有重启 jobs 或修改实现。
+- Result: 三个平台均 in_progress，暂无失败；Linux 推进至 Test standalone runtime, facade, and reference examples，Windows 执行 Check facade renderer contracts independently，macOS 推进至 system-capture linkage 后续检查。Linux X11 原生输入步骤仍 pending。上一轮与本轮均为已验证等待。
+- Unresolved: 同提交三平台完整成功、X11 原生输入日志和三份 artifacts 校验仍待完成；M3 输入与 M5/Phase 4 保持未完成。
+
+### 2026-09-09 — 三平台 CI 推进到 accessibility 与实时分配检查
+
+- Command/platform: 两次间隔查询 run 34255696871 / 90bf6de 原 jobs；核对 git status/log 与既定文档。
+- Change: 仅监控并记录，没有重启 CI 或修改实现。
+- Result: 三个平台均 in_progress，暂无失败；Linux 已进入 Test the accessibility feature，Windows 执行 standalone/runtime/facade 测试，macOS 已进入 Test realtime callback allocation matrix。macOS 的 X11 步骤按平台跳过，Linux X11 步骤仍 pending，不构成原生输入验收。上一轮与本轮均为已验证等待。
+- Unresolved: 等待同提交三个完整 jobs 成功、Linux X11 真实输入日志及三份 artifacts 下载校验；M3 输入与 M5/Phase 4 未完成。
+
+### 2026-09-09 — Linux 进入原生 Wayland 回归
+
+- Command/platform: 两次间隔查询 run 34255696871 / 90bf6de 原 jobs，核对分支、HEAD 与既定文档。
+- Change: 仅监控并记录，没有重启 jobs 或修改实现。
+- Result: 三平台均 in_progress，暂无失败；Linux compositor probe 成功，正在执行 native Wayland pointer/keyboard/cursor；Windows 执行 accessibility 测试；macOS 已推进至 Package and exercise native GUI backends。Linux X11 原生输入仍 pending。上一轮与本轮均为已验证等待。
+- Unresolved: 等待三平台完整成功、Linux X11 实际输入成功日志及同提交三份 artifacts 下载校验；M3 输入与 M5/Phase 4 未完成。
+
+### 2026-09-09 — X11 原生国际键盘 hosted 步骤成功
+
+- Command/platform: 两次间隔查询 run 34255696871 / 90bf6de 原三平台 jobs，核对 HEAD、分支及既定文档。
+- Change: 仅监控并记录，没有重启 CI 或修改实现。
+- Result: Linux 的 Verify native X11 international keyboard input 已 completed success；Wayland compositor、pointer/keyboard/cursor、activation/focus、output scaling 步骤均成功。Linux 与 Windows 当前检查 baseview feature combinations，macOS 正在打包验证 GUI 后端；三 jobs 仍 in_progress，暂无失败。上一轮为已验证等待，本轮获得原生输入步骤成功证据。
+- Unresolved: 尚需完整 Linux 原始日志核对实际 X11 测试/标记、同提交三平台完整 jobs 成功与三份 artifacts 下载校验，不能只据单步成功宣称完整验收。macOS/Windows 原生国际输入及 M5 总审计仍待处理，Phase 4 未完成。
+
+### 2026-09-09 — 原三平台 CI 进入构建与打包验证
+
+- Command/platform: 两次间隔查询 run 34255696871 / 90bf6de 原三平台 jobs；核对既定文档、git status/log。
+- Change: 本轮仅监控并记录，没有重启 CI 或修改实现。
+- Result: Linux 与 macOS 已进入 Package and exercise native GUI backends，Windows 已进入 Build standalone reference applications；三 jobs 均 in_progress，暂无失败。Linux X11 与 Wayland 输入相关步骤保持成功。上一轮获得 X11 单步成功证据，本轮为已验证等待。
+- Unresolved: 完整三平台 jobs 成功、Linux 原始 X11 日志及三份 artifacts 下载校验仍待完成；M3 的 macOS/Windows 原生国际输入与 M5 总审计尚未收口，Phase 4 未完成。
+
+### 2026-09-09 — macOS 推进到 job 收尾
+
+- Command/platform: 两次间隔查询 run 34255696871 / 90bf6de 原三平台 jobs，核对既定文档与 git status/log。
+- Change: 本轮仅监控并记录，没有重启 jobs 或修改实现。
+- Result: Linux 和 Windows 正在 Package and exercise native GUI backends；macOS 已推进到 Complete job，但 API 仍报告 in_progress，尚未判定完整成功。三平台暂无失败，Linux X11 与 Wayland 步骤保持成功。上一轮与本轮均为已验证等待。
+- Unresolved: 等待三平台完整 jobs 成功、Linux 原始输入日志及三份 artifacts 下载校验；M3 的 macOS/Windows 原生国际输入与 M5 总审计仍未完成。
+
+### 2026-09-09 — macOS 完整 hosted job 成功
+
+- Command/platform: 两次间隔查询 run 34255696871 / 90bf6de 原三平台 jobs；核对既定文档、git status/log。
+- Change: 仅监控并记录，没有重启 CI 或修改实现。
+- Result: macOS job 102160815981 已 completed success；Linux 推进到 Exercise repository packaging helper，Windows 正在 Package and exercise native GUI backends，二者均 in_progress，暂无失败。Linux X11 与 Wayland 输入步骤保持成功。上一轮为已验证等待，本轮取得 macOS 完整 job 成功证据。
+- Unresolved: 等待 Linux/Windows 完整成功、Linux 原始输入日志和同提交三份 artifacts 下载校验；M3 的 macOS/Windows 原生国际输入及 M5 总审计尚未收口，Phase 4 未完成。
+
+### 2026-09-09 — Linux 开始上传产物
+
+- Command/platform: 两次间隔查询 run 34255696871 / 90bf6de 原三平台 jobs；核对既定文档与 git status/log。
+- Change: 仅监控并记录，没有重启 CI 或修改实现。
+- Result: macOS 保持 completed success；Linux 已进入 Upload packaged Phase 1 artifacts，Windows 已进入 Exercise repository packaging helper，两者仍 in_progress，暂无失败。Linux X11 与 Wayland 输入步骤均成功。上一轮取得 macOS 完整成功证据，本轮为已验证等待。
+- Unresolved: 等待 Linux/Windows 完整 jobs 成功、Linux 原始输入日志及三份 artifacts 下载校验；M3 的 macOS/Windows 原生国际输入和 M5 总审计尚未完成。
+
+### 2026-09-09 — X11 修复三平台完整 CI 全绿，核对真实输入日志
+
+- Command/platform: run 34255696871 / 90bf6de 三平台 jobs API；Linux 日志下载 session 42565 exit 0，/tmp/sunmao-run34255696871-linux.log；同提交 artifacts 下载 session 1148。
+- Change: 监控完成后下载验收证据，未重启 jobs 或修改实现。
+- Result: Linux 102160815689、Windows 102160815799、macOS 102160815981 均 completed success。Linux 日志 16318–16325 显示隔离 Xvfb 实际测试 1 passed / 0 failed / 0 ignored，X11 KEYBOARD VERIFIED 明确覆盖物理键、German、Shift、AltGr、实时布局切换、compose、focus reset；5077–5081 和 16439–16443 证实共享布局与两项属性测试实际通过。常规测试中的 skip 不计原生证据。上一轮为已验证等待，本轮取得三平台成功与原始输入证据。
+- Unresolved: 原 artifacts 下载 session 1148 仍在运行，继续轮询同 handle，不重复下载；三份产物校验完成后才能正式收口 X11。macOS/Windows 原生国际输入与 M5 总审计仍未完成，Phase 4 保持未完成。
+
+### 2026-09-09 — Windows 产物下载校验成功
+
+- Command/platform: 两次间隔轮询原 artifacts 下载 session 1148；核对既定文档、git status/log。
+- Change: 保留原下载进程并记录验收证据，没有重复下载或修改实现。
+- Result: phase1-Windows-X64 产物 78,349,539 bytes、364 entries，SHA-256 与 ZIP CRC 校验成功；session 1148 仍在运行。三平台完整 CI 与 Linux X11 真实输入成功证据保持有效。上一轮取得三平台与原始日志证据，本轮取得 Windows 产物校验证据。
+- Unresolved: 等待同进程完成 Linux/macOS 产物下载校验；M3 macOS/Windows 原生国际输入及 M5 总审计仍待完成，Phase 4 未完成。
+
+### 2026-09-09 — 继续等待原产物下载进程
+
+- Command/platform: 两次间隔轮询原 artifacts 下载 session 1148，核对既定文档与 git status/log。
+- Change: 仅监控记录，保留原下载进程，没有重复下载或修改实现。
+- Result: session 1148 两次均确认仍在运行，尚无新的产物校验输出；此前 Windows SHA-256/CRC 成功、同提交三平台完整 CI 成功和 X11 真实输入日志证据有效。上一轮取得 Windows 产物证据，本轮为已验证等待。
+- Unresolved: Linux/macOS 产物校验仍待完成；M3 macOS/Windows 原生国际输入及 M5 总审计仍未完成，Phase 4 保持未完成。
+
+### 2026-09-09 — 原产物下载仍在运行
+
+- Command/platform: 两次间隔轮询原下载 session 1148，核对既定文档、分支与 HEAD。
+- Change: 仅监控记录，未重启下载或修改实现。
+- Result: session 1148 仍在运行，尚无 Linux/macOS 校验完成输出；Windows 产物校验、三平台完整 CI 与 X11 实际输入证据保持有效。上一轮与本轮均为已验证等待。
+- Unresolved: 等待剩余两平台产物下载校验；M3 macOS/Windows 原生国际输入与 M5 总审计尚未完成。
+
+### 2026-09-09 — X11 原生国际输入正式验收
+
+- Command/platform: 原下载 session 1148 exit 0；run 34255696871 / 90bf6de 三平台完整 jobs 与 Linux 原始日志。
+- Change: 三份产物校验完成，更新 status 的 X11 输入证据与下一瓶颈，没有重启下载或修改实现。
+- Result: Windows 78,349,539 bytes / 364 entries、Linux 996,747,245 bytes / 96 entries、macOS 53,085,619 bytes / 152 entries，三份 SHA-256 与 ZIP CRC 均通过。产物位于 /tmp/sunmao-run34255696871-phase1-{Windows-X64,Linux-X64,macOS-ARM64}.zip。同提交三 jobs success；Linux 日志 16318–16325 确认 X11 实际输入测试 1 passed、0 failed、0 ignored 与 VERIFIED 标记，布局/compose 和按键生命周期属性测试亦实际通过。上一轮为已验证等待，本轮完成 X11 验收。
+- Unresolved: M3 仍需 macOS/Windows 各一条真实原生国际输入路径的验收；M5 最终兼容与文档审计尚未完成，Phase 4 不标记完成。
+
+### 2026-09-09 — macOS 原生死键处理缺陷定位
+
+- Command/platform: 检查 baseview/src/macos/{keyboard,view,window}.rs 与已有测试；Swift AppKit/CoreGraphics 探针 /tmp/sunmao-macos-keyboard-probe.swift，session 29299 exit 0。探针只由原始物理键码及 modifier 构造 CGEvent，再通过 NSEvent(cgEvent:) 让系统生成字符，不手工写入 Unicode，也不向其他应用发送按键。
+- Change: 定位下一输入瓶颈；更新 semantics 的 X11 hosted 验收引用。未修改 macOS 实现，未重跑已完成 CI。
+- Result: 系统返回 KeyA→a、Option+KeyA→å、Option+KeyE→空 characters 且 charactersIgnoringModifiers=e。现有 KeyboardState 在第三种情况下回退为 Character("e") 且 is_composing=false，会把尚未提交的死键当普通 e 交给文本适配器。view.rs 的 keyDown 只直接转发，未接 interpretKeyEvents/insertText/markedText。这个系统探针证明了底层输入语义及现有错误分支，但不是完整窗口/宿主验收。上一轮完成 X11 验收，本轮取得 macOS 实现缺陷证据。
+- Unresolved: macOS 需要正确处理原生组合文本提交与死键，不可只增加 Character("å") 合成测试；补实际 NSView 输入路径、失焦清理及 hosted 验收后再处理 Windows。M3 与 M5/Phase 4 未完成。
+
+### 2026-09-09 — macOS 死键分支修复开发中
+
+- Command/platform: 核对 SDK UnicodeUtilities.h / TextInputSources.h；AppKit 组合探针 /tmp/sunmao-macos-compose-probe.swift；cargo test --locked -p baseview native_dead_key_does_not_emit_its_unmodified_letter -- --nocapture，原 session 32726。
+- Change: macOS 空 characters 不再回退到 charactersIgnoringModifiers，而输出 Key::Dead / is_composing=true；新增 CoreGraphics 原始键码到 NSEvent 的回归测试草稿。cargo fmt 与 git diff --check 通过，尚未提交。
+- Result: AppKit 探针明确显示 Option+E 为空、后续 E 的 NSEvent.characters 为 é，但测试 NSTextView 没收到 insertText，断言失败（不是框架测试成功证据）。Rust 回归已编译完成，session 32726 仍在运行，尚无退出结果；不能因观察超时重启。测试草稿依赖当前布局，非死键布局的分支目前仅诊断，正式验收前必须改成显式选择布局/强断言的主线程窗口 harness，不能空转计通过。上一轮定位缺陷，本轮修复已知错误分支并启动验证。
+- Unresolved: 保留 session 32726 并核对其结果；继续主线程 NSView 原生国际输入 harness、组合/失焦语义及必要属性测试。完整本地 gate 与三平台 hosted 尚未执行，macOS/Windows 输入与 M5 总审计仍未完成。
+
+### 2026-09-09 — macOS 原生 harness 暴露输入源约束
+
+- Command/platform: 主线程 `baseview/tests/macos_keyboard.rs` harness 编译并以 `SUNMAO_MACOS_KEYBOARD_TEST=1` 运行；沙箱外 session 37427 exit 101，日志 /tmp/sunmao-macos-keyboard.log。
+- Change: 新增 macOS 测试入口并接入 workflow 草稿；测试明确要求系统键盘布局为 US/ABC，避免把输入法事件误判为物理键盘国际输入。
+- Result: 当前会话实际输入源为 `com.apple.keylayout.PinyinKeyboard`，测试在发送事件前明确失败退出；没有伪造字符、没有宣称验收。此前死键分支 Rust 回归通过；`git diff --check` 仍通过。
+- Unresolved: hosted macOS 需显式切换到英文键盘布局后运行真实 NSView harness；当前修改尚未提交，CI workflow 也需在实现稳定后再纳入 blocking。Windows 原生国际输入和 M5 总审计未完成。
+
+### 2026-09-09 — macOS 真正 NSView 组合输入回归失败已定位
+
+- Command/platform: `SUNMAO_MACOS_KEYBOARD_TEST=1 RUSTFLAGS=-Awarnings cargo test --locked -p baseview --test macos_keyboard`，沙箱外 session 20429 exit 101，/tmp/sunmao-macos-keyboard.log；此前普通入口 session 21913 exit 0 仅显式 skip，不计原生验收。
+- Change: harness 通过 TIS 枚举已启用 US/ABC 并临时选择，RAII 保存精确原输入源（含 IME），成功或断言 unwind 均恢复；移除需要人工切换输入源的前置条件。CoreGraphics 空句柄 Drop 已安全处理。
+- Result: 真实 baseview NSView 的 a、Option+å、Dead/composing 断言均已通过；后续 E 实际返回 Character("e") 而非预期 Character("é")，强断言准确失败。临时输入源恢复未报告错误。现有 captured keyDown 没有让 AppKit 解释组合序列；此前 NSTextView 探针调用系统 keyDown 后能在后续 NSEvent 中观察到 é，而 baseview captured 路径不能。仅修空 characters 不足以完成 macOS 输入。
+- Unresolved: 需接通 AppKit 组合输入上下文及文本提交，继续使用这个失败的窗口回归验证，不能降低断言或把 skip 计通过。失焦清理、属性测试、本地完整 gate 与三平台 hosted 尚未完成；修改未提交，Phase 4 未完成。
+
+### 2026-09-09 — macOS 原生组合字符窗口回归通过
+
+- Command/platform: 原生 NSView harness session 5467 exit 0，/tmp/sunmao-macos-keyboard.log 输出 MACOS KEYBOARD VERIFIED；SDK UCKeyTranslate/TIS API 已核对。
+- Change: 单独 interpretKeyEvents 实验仍失败（session 54386 exit 101），已移除；改为每窗口保存系统 Unicode 布局数据和 UCKeyTranslate dead state，原生布局数据变化时清空旧组合状态；空 characters 不再误输出普通字母。添加 Unfocused 时清理组合状态与后续 plain e 的窗口断言。
+- Result: 已完成版本的 NSView a、Option+å、Dead/composing、组合 é 强断言全部通过且输入源恢复成功。随后新增的失焦清理版本已启动独立原生测试，结果待核对。fmt 与 diff 检查通过，没有提交或推送。
+- Unresolved: 核对 /tmp/sunmao-macos-keyboard-focus.log 对应原进程；继续复核 key-up/repeat、布局切换、错误路径、属性测试及完整本地 gate/Windows check，然后三平台 hosted 验收。此实现为原生国际键盘/compose，不是完整 CJK IME 预编辑。Windows 输入与 M5 总审计尚未完成。
+
+### 2026-09-09 — macOS 失焦组合清理通过，补按键生命周期
+
+- Command/platform: 原失焦测试 session 55804 exit 0，/tmp/sunmao-macos-keyboard-focus.log 包含 MACOS KEYBOARD VERIFIED；属性测试 session 39334 在运行，日志 /tmp/sunmao-macos-lifecycle.log。
+- Change: 按物理键记录按下时的 KeyboardEvent，key-up 与 repeat 保持原逻辑字符；失焦清空组合与 modifier 状态并释放 held keys。新增逻辑字符保持和 cancel 幂等属性测试；原生 harness 改为每次真实 keyDown/keyUp 配对并断言释放字符一致。
+- Result: 之前的真实 NSView 组合/失焦清理全部通过；当前新增生命周期版本属性测试已编译，仍待退出结果。fmt 与 diff 检查通过。原生生命周期版本已启动，日志 /tmp/sunmao-macos-keyboard-lifecycle.log，尚未取得成功结果。
+- Unresolved: 继续原属性/原生测试进程，检查布局变化及异常路径；完整本地 gate、Windows target check 与三平台 hosted 尚未执行。macOS 修复未提交，Windows 原生国际输入和 M5 总审计尚未完成。
+
+### 2026-09-09 — macOS 生命周期测试通过，完整本地 gate 启动
+
+- Command/platform: 原属性测试 session 39334 exit 0（属性测试 1 passed，0.14s）；原生生命周期 session 25960 exit 0，/tmp/sunmao-macos-keyboard-lifecycle.log 当时输出 VERIFIED；metadata/fmt/diff 与 Windows baseview target check exit 0。
+- Change: 补 named editing/navigation key 取消未完成 compose、非法 UTF-16 清理组合状态；原生 harness 增加 Escape 取消与 held key 失焦单次释放强断言。semantics 更新 macOS 国际键盘实现与 hosted 待验收状态。
+- Result: 上述新增断言版本 session 27118 仍在运行，日志 /tmp/sunmao-macos-keyboard-lifecycle.log；完整 `RUSTFLAGS=-Awarnings cargo test --locked` session 51485 已启动，日志 /tmp/sunmao-macos-full-tests.log。没有重启原活跃进程，未提前提交/push；无打包/示例实现改动，不追加打包 gate。
+- Unresolved: 轮询原 27118 与 51485，待两个测试完整成功后最后审查并提交/push，再做同提交三平台 hosted/原生日志/artifacts 验收。Windows 原生输入与 M5 总审计仍未完成。
+
+### 2026-09-09 — macOS 原生边界断言通过，完整回归编译推进
+
+- Command/platform: 原生边界测试 session 27118 exit 0，/tmp/sunmao-macos-keyboard-lifecycle.log 输出 VERIFIED；两次间隔轮询完整 locked 回归 session 51485。
+- Change: 本轮仅核对与记录测试证据，没有重启测试或修改实现。
+- Result: 最新原生 harness 包含 Escape 取消、按键释放保持原字符、失焦单次释放，整体成功退出。完整回归原 session 51485 仍在运行，编译已从 baseview 推进到 view_baseview 和 VST3/CLAP GUI fixtures，暂无失败。上一轮启动完整 gate，本轮取得原生边界测试成功证据并确认完整回归活跃。
+- Unresolved: 等待原完整回归含 doc-tests 成功退出，随后审查提交/push 与三平台 hosted/实际输入日志/产物验收；Windows 原生输入和 M5 总审计仍未完成。
+
+### 2026-09-09 — 完整 macOS 回归持续运行
+
+- Command/platform: 两次间隔轮询原完整 locked 回归 session 51485，日志 /tmp/sunmao-macos-full-tests.log；核对分支与 HEAD。
+- Change: 仅监控记录，没有重启回归或修改实现。
+- Result: 原 session 51485 持续活跃，当前仍在 GUI fixtures 编译阶段，尚无失败输出。此前原生边界/属性测试与 Windows target check 成功记录有效。上一轮取得原生边界证据，本轮为已验证等待。
+- Unresolved: 等待原完整回归含 doc-tests 成功退出，再提交/push 并完成同提交三平台 hosted/原生日志/产物验收；M3 Windows 原生输入与 M5 总审计仍未完成。
+
+### 2026-09-09 — 完整回归完成编译并进入 baseview 测试
+
+- Command/platform: 两次间隔轮询原完整 locked 回归 session 51485，/tmp/sunmao-macos-full-tests.log；核对分支与 HEAD。
+- Change: 仅监控记录，没有重启回归或修改实现。
+- Result: 原 session 51485 仍活跃，编译已完成并进入测试；baseview 的 webview 名称校验、窗口资源销毁及新增按键生命周期属性测试均已 ok，暂无失败。上一轮与本轮均为已验证等待。
+- Unresolved: 等待原完整回归含全部 doc-tests 成功退出，再提交/push 与三平台 hosted 验收；M3 Windows 输入及 M5 总审计仍未完成。
+
+### 2026-09-09 — 完整回归 baseview 四项测试通过
+
+- Command/platform: 两次间隔轮询原完整 locked 回归 session 51485，/tmp/sunmao-macos-full-tests.log；核对分支与 HEAD。
+- Change: 仅监控记录，没有重启回归或修改实现。
+- Result: baseview 四项测试全部通过（23.08s），含窗口 resize 重入/关闭与新增按键属性测试；完整回归继续推进平台 integration tests，session 51485 仍活跃，暂无失败。macOS 上 Linux cfg 的 0 tests 不计对应原生验收。上一轮与本轮均为已验证等待。
+- Unresolved: 等待原完整回归含 doc-tests 成功退出，再提交/push 并进行三平台 hosted/日志/产物验收；M3 Windows 输入及 M5 总审计未完成。
+
+### 2026-09-09 — 完整回归 CLAP 包装层通过
+
+- Command/platform: 两次间隔轮询原完整 locked 回归 session 51485，/tmp/sunmao-macos-full-tests.log；核对分支与 HEAD。
+- Change: 仅监控记录，没有重启回归或修改实现。
+- Result: CLAP 包装层 56 项测试全部通过，完整回归继续推进 fixtures；原 session 51485 仍在运行，暂无失败。上一轮与本轮均为已验证等待。
+- Unresolved: 等待原完整回归含 doc-tests 成功退出，再提交/push 与三平台 hosted/原生日志/产物验收；M3 Windows 输入和 M5 总审计仍未完成。
+
+### 2026-09-09 — 完整回归推进至 VST3 backend
+
+- Command/platform: 两次间隔轮询原完整 locked 回归 session 51485，日志 /tmp/sunmao-macos-full-tests.log；核对分支与 HEAD。
+- Change: 仅监控记录，没有重启回归或修改实现。
+- Result: 原回归从 facade/AU backend 推进到 VST3 backend，音频成功路径零分配、旧 state 迁移、transport 等已执行项通过；session 51485 仍活跃，暂无失败。上一轮与本轮均为已验证等待。
+- Unresolved: 等待原完整回归含 doc-tests 成功退出，再提交/push 与三平台 hosted/日志/产物验收；M3 Windows 输入和 M5 总审计仍未完成。
+
+### 2026-09-09 — 完整回归 VST3 backend 全部通过
+
+- Command/platform: 两次间隔轮询原完整 locked 回归 session 51485，/tmp/sunmao-macos-full-tests.log；核对分支与 HEAD。
+- Change: 仅监控记录，没有重启回归或修改实现。
+- Result: VST3 backend 28 tests 全部通过（27.35s），含两个 GUI/view 测试；回归已继续进入 core 后续测试，session 51485 仍活跃，暂无失败。上一轮与本轮均为已验证等待。
+- Unresolved: 等待原完整回归含 doc-tests 成功退出，再提交/push 与三平台 hosted/实际日志/产物验收；M3 Windows 输入及 M5 总审计尚未完成。
