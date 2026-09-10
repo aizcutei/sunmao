@@ -499,6 +499,13 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: "13.0"
         run: cargo test --locked -p sunmao_runtime --features system-capture
 
+      - name: Verify native Windows international keyboard input
+        if: runner.os == 'Windows'
+        run: |
+          set -euo pipefail
+          SUNMAO_WINDOWS_KEYBOARD_TEST=1 cargo test --locked -p baseview --test windows_keyboard 2>&1 | tee /tmp/windows-keyboard.log
+          grep -q '^WINDOWS KEYBOARD VERIFIED:' /tmp/windows-keyboard.log
+
       - name: Verify native macOS international keyboard input
         if: runner.os == 'macOS'
         run: |

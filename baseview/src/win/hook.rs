@@ -14,9 +14,9 @@ use winapi::{
         libloaderapi::GetModuleHandleW,
         processthreadsapi::GetCurrentThreadId,
         winuser::{
-            CallNextHookEx, SetWindowsHookExW, UnhookWindowsHookEx, HC_ACTION, MSG, PM_REMOVE,
-            WH_GETMESSAGE, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
-            WM_USER,
+            CallNextHookEx, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HC_ACTION,
+            MSG, PM_REMOVE, WH_GETMESSAGE, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_SYSCHAR,
+            WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER,
         },
     },
 };
@@ -134,12 +134,19 @@ unsafe fn offer_message_to_baseview(msg: *mut MSG) -> bool {
     }
 
     // check if this is one of our windows. if so, intercept it
-    if HOOK_STATE
+    let registered = HOOK_STATE
         .read()
         .unwrap()
         .open_windows
-        .contains(&HWNDWrapper(msg.hwnd))
-    {
+        .contains(&HWNDWrapper(msg.hwnd));
+    if registered {
+        // This hook consumes the message before the host's message loop can
+        // translate it. Generate the OS layout/compose messages first, so the
+        // keyboard adapter can find and consume the resulting WM_CHAR sequence.
+        // Release the registry lock before callbacks that may close a window.
+        if matches!(msg.message, WM_KEYDOWN | WM_SYSKEYDOWN) {
+            TranslateMessage(msg);
+        }
         let _ = wnd_proc(msg.hwnd, msg.message, msg.wParam, msg.lParam);
 
         return true;

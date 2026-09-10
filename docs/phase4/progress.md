@@ -1633,3 +1633,150 @@
 - Change: 仅监控记录，没有重启回归或修改实现。
 - Result: VST3 backend 28 tests 全部通过（27.35s），含两个 GUI/view 测试；回归已继续进入 core 后续测试，session 51485 仍活跃，暂无失败。上一轮与本轮均为已验证等待。
 - Unresolved: 等待原完整回归含 doc-tests 成功退出，再提交/push 与三平台 hosted/实际日志/产物验收；M3 Windows 输入及 M5 总审计尚未完成。
+
+### 2026-09-10 — macOS 输入提交三平台 hosted 成功，产物核验进行中
+
+- Command/platform: 原完整 locked 回归 session 51485 exit 0；metadata、fmt、diff 检查通过；推送 e14e5b3，查询 run 34361057036。
+- Change: 提交 macOS 原生布局 compose、按键生命周期、NSView harness 与 blocking CI 步骤，修正 IME 支持范围注释。
+- Result: 同提交 macOS 102497837797、Linux 102497838165、Windows 102497838208 三个完整 jobs 均 success。产物下载 session 90326 仍活跃，Linux ZIP 约 19 MB，尚未完成 SHA-256/CRC 核验，不能据此正式验收。
+- Unresolved: 继续轮询原下载 session 90326，核对 macOS 原始日志的实际成功标记并完成三份产物校验；随后处理 Windows 原生国际输入及 M5 总审计。
+
+### 2026-09-10 — macOS hosted 原生输入日志核实
+
+- Command/platform: 下载 run 34361057036 的 macOS job 102497837797 原始日志，/tmp/sunmao-run34361057036-macos.log；轮询原产物下载 session 90326。
+- Change: semantics.md 更新为 hosted 实际输入已验证、产物校验待定，未提前关闭 M3。
+- Result: 日志第 3107 行实际输出 MACOS KEYBOARD VERIFIED，涵盖原生布局、Option 字符、dead key、组合字符及 NSView focus reset；第 3159 行 logical_keys_survive_modifier_changes_and_cancel_releases_once 通过。下载 session 90326 仍活跃，Linux ZIP 增长至约 21 MB。上一轮为提交/CI 成功的进展，本轮取得原始运行证据。
+- Unresolved: 等待原下载 session 90326 完成三份产物 SHA-256/CRC 校验；Windows 国际输入及 M5 总审计仍未完成。
+
+### 2026-09-10 — 清理重复产物下载进程
+
+- Command/platform: 轮询 session 90326；通过 ps 核对下载父子进程；TERM 81461/81495 与 82019/82049。
+- Change: 停止前轮误启动的两组重复下载，保留最新原进程 82276/82308（session 90326），没有重启下载。
+- Result: 发现此前丢弃 exec_command 返回的 session_id 导致错误重启，两组重复 curl 同时写同一 ZIP；本轮已清理，保留进程仍活跃。最终必须以 SHA-256/CRC 判断文件完整性，不以文件大小判断成功。上一轮取得日志证据，本轮修正下载操作错误。
+- Unresolved: 等待 session 90326 下载及校验三份 artifacts；macOS 实际日志已核实但正式验收尚未关闭，Windows 国际输入和 M5 总审计待完成。
+
+### 2026-09-10 — 原产物下载进程继续等待
+
+- Command/platform: 间隔 40 秒轮询原 session 90326，核对 ZIP stat 与当前 e14e5b3 工作区。
+- Change: 仅监控原下载，没有再次启动进程。
+- Result: session 90326 两次均确认活跃，无退出结果；Linux ZIP 当前 22904832 bytes，观察间隔大小不变、修改时间从 13:28:19 更新到 13:29:17。此前重复写入使文件大小不能代表保留进程的下载偏移，因此不据此判断下载完成或失败。上一轮清理重复进程属进展，本轮为已验证等待。
+- Unresolved: 等待原进程完成并给出三份产物 SHA-256/CRC 结果；M3 Windows 原生输入与 M5 总审计仍未完成。
+
+### 2026-09-10 — 核对下载实际写入偏移
+
+- Command/platform: 两次 lsof -a -p 82308 -o -d 8，并间隔 40 秒轮询原 session 90326。
+- Change: 仅监控记录；没有重启下载或修改实现。
+- Result: 原 session 90326 仍活跃，curl 的 artifact HTTPS 连接 ESTABLISHED；两次实际写入偏移均为 22904832，本观察窗口没有新增字节，尚无退出/失败结果。不能把连接存活解释为吞吐正常，也不能据一次观察停滞重启下载。上一轮与本轮为已验证等待。
+- Unresolved: 等待原下载进程的终态及 SHA-256/CRC 结果；M3 Windows 国际输入和 M5 总审计未完成。
+
+### 2026-09-10 — macOS 与 Windows 产物完整校验通过
+
+- Command/platform: 独立目录 /tmp/sunmao-mac-evidence，macOS 下载 session 21958 exit 0、Windows session 3650 exit 0；保留原 Linux session 90326。
+- Change: 在当前产物验收瓶颈内独立下载较小的两平台 ZIP，添加连接/低速超时，避免受 Linux 单条连接影响；未重启原 Linux 下载。
+- Result: macOS 53678427 bytes，SHA-256 eb727cf2944312c9494e9e793dcdf06231bb84ab541c228e0a84eead4ea89721；Windows 78349905 bytes，SHA-256 9eb2a314105bc0cfdd160687faca978a5518ca079491aabda4656d1ac709cdb8；两份均与 GitHub digest 一致且 ZIP CRC 通过。原 Linux curl 仍在偏移 22904832，session 活跃。上一轮为已验证等待，本轮完成两份实际产物验收。
+- Unresolved: Linux ZIP 尚未完整下载/校验，不能关闭 macOS 提交正式验收；Windows 原生国际输入及 M5 总审计仍需完成。
+
+### 2026-09-10 — Linux 停滞连接断点续传恢复
+
+- Command/platform: 原 session 90326 多轮实际偏移固定 22904832；两份独立产物已成功，确认传输问题局限于旧连接。TERM 82276/82308 后 session 90326 exit 143；curl -C - 开始 session 94806。
+- Change: 保留已下载前缀，从文件末尾续传，增加 connect-timeout 30 与 speed-limit 1024 / speed-time 60；不是因一次观察超时从零重启。
+- Result: session 94806 仍活跃，文件由 22904832 增长至 124780544 bytes，总大小 996747105；传输已恢复。macOS、Windows 两份既有 SHA-256/CRC 通过证据保留。上一轮完成两份产物核验，本轮恢复 Linux 实际传输。
+- Unresolved: 继续轮询 session 94806，等待 Linux SHA-256/CRC 通过才能关闭本提交正式验收；随后 Windows 国际输入与 M5 总审计。
+
+### 2026-09-10 — 三平台 CI 全步骤核对，Linux 续传推进
+
+- Command/platform: run 34361057036 --audit-steps（session 11119 exit 0）；间隔轮询 Linux 续传 session 94806。
+- Change: 补充全步骤状态核验，没有改动实现或重启下载。
+- Result: 同提交三个 jobs 各 33 steps，所有步骤均 success 或 skipped，零 failure/cancelled；macOS 专项国际键盘步骤 success。Linux ZIP 从 188809216 增长至 377044992 bytes，总计 996747105，session 94806 仍活跃，尚未到 SHA-256/CRC 阶段。上一轮恢复续传属进展，本轮新增步骤证据并确认续传推进。
+- Unresolved: 等待 session 94806 完成 Linux 产物校验；Windows 原生国际输入与 M5 总审计尚未完成。
+
+### 2026-09-10 — macOS 国际键盘修复正式验收完成
+
+- Command/platform: 持续轮询 Linux 断点续传 session 94806，最终 exit 0；对照 run 34361057036 / e14e5b3 的三平台 jobs、macOS 原始日志与三份产物校验。
+- Change: status.md 与 semantics.md 将 macOS 国际键盘/compose 标为已验收，保留 Windows 原生输入与 M5 总审计缺口。
+- Result: Linux ZIP 996747105 bytes，SHA-256 1607d20b4d6063e6e3df8cac44f4abdf713d7b915a20a2194fdad5843fe12150，与 GitHub digest 相符且 ZIP CRC 通过。连同此前 macOS 53678427 bytes / Windows 78349905 bytes，两份均已 SHA-256/CRC 通过，本提交三平台产物全部验收。三平台完整 jobs success，每平台 33 steps 无失败/取消；macOS 实际 NSView 输入成功标记与生命周期属性测试已核实。
+- Unresolved: 下一瓶颈是 Windows 至少一条真实国际输入路径；随后 M5 兼容性、文档与全部原始要求的总审计，Phase 4 尚未完成。
+
+### 2026-09-10 — Windows 消息钩子补系统字符翻译
+
+- Command/platform: 核查 win/keyboard.rs、hook.rs 与 window.rs；cargo check --locked -p baseview --test windows_keyboard --target x86_64-pc-windows-msvc（session 70014 exit 0）；metadata/fmt/diff 通过；完整回归 session 83565 已启动，日志 /tmp/sunmao-windows-keyboard-full-tests.log。
+- Change: WH_GETMESSAGE 钩子在吞掉按键前调用 TranslateMessage，确保 Windows 可产生布局/组合字符；释放注册表锁后再进入窗口回调。新增 windows_keyboard 主线程原生消息队列 harness 和 blocking Windows CI 步骤，仅输入扫描码/虚拟键，不合成 WM_CHAR 或 Unicode payload。
+- Result: 发现普通键依靠缓存布局映射掩盖了系统 compose 消息从未生成的问题。harness 覆盖德语物理键 Y→z、ü、Shift Ü、dead-key é，检查单次按键只产生一个逻辑事件并恢复线程布局/修饰键。初次交叉检查抓出 HKL 导入位置错误，修正后 Windows target 编译通过；尚无 Windows 实际运行证据。上一轮正式验收 macOS，本轮实现 Windows 缺陷修复与原生验收入口。
+- Unresolved: 等待原完整回归 session 83565 成功，再最终检查、commit/push 与三平台 hosted 原生输入/产物验收；M5 总审计尚未完成。
+
+### 2026-09-10 — Windows 修复完整回归继续编译
+
+- Command/platform: 间隔 40 秒轮询原完整回归 session 83565，/tmp/sunmao-windows-keyboard-full-tests.log；复核 windows_keyboard harness 与钩子 diff。
+- Change: 仅复核与监控，没有重启回归或修改实现。
+- Result: session 83565 仍活跃，编译从 baseview/view_baseview 推进到 VST3/CLAP baseview 示例，尚无错误；复核确认 harness 不提交 WM_CHAR/Unicode，dead-key 后的 é 断言可区分系统 compose 与旧缓存 e 映射。Windows 实际执行证据仍需 hosted 提供。上一轮实现修复属进展，本轮为已验证等待。
+- Unresolved: 等待原 session 83565 含 doc-tests 成功退出，再提交/push 与三平台完整 hosted/原生日志/产物验收；M5 总审计仍待完成。
+
+### 2026-09-10 — Windows 修复回归推进到框架 fixtures
+
+- Command/platform: 间隔 40 秒轮询原完整回归 session 83565，/tmp/sunmao-windows-keyboard-full-tests.log；核对 HEAD e14e5b3 与工作区。
+- Change: 仅监控记录，没有重启回归或修改实现。
+- Result: 原进程仍活跃，编译已由格式层示例推进到 effect/instrument 模板、SVF、tempo delay、GL/WGPU GUI 等 fixtures，暂无编译错误；尚未得到完整回归退出结果。上一轮与本轮均为已验证等待。
+- Unresolved: 等待原 session 83565 成功退出，再提交/push 并完成 Windows 原生输入及三平台完整 hosted/产物验收；M5 总审计待完成。
+
+### 2026-09-10 — Windows 修复完整回归开始执行测试
+
+- Command/platform: 两次间隔 40 秒轮询原完整回归 session 83565，日志 /tmp/sunmao-windows-keyboard-full-tests.log。
+- Change: 仅监控记录，没有重启回归或修改实现。
+- Result: 完整编译结束，测试已从 AU/baseview 推进到平台 integration harness，原进程仍活跃且暂无失败。macOS 上 windows_keyboard 的非 Windows 空入口不构成 Windows 原生验收；真实输入须由后续 Windows hosted flag 步骤执行。上一轮与本轮均为已验证等待。
+- Unresolved: 等待原 session 83565 含全部 doc-tests 成功退出，再提交/push 并核验同提交三平台 jobs、原生输入日志及产物；M5 总审计未完成。
+
+### 2026-09-10 — Windows 修复回归进入 facade
+
+- Command/platform: 间隔 40 秒轮询原完整回归 session 83565，日志 /tmp/sunmao-windows-keyboard-full-tests.log。
+- Change: 仅监控记录，没有重启回归或修改实现。
+- Result: 原进程由 CLAP 打包器/包装层相关测试推进至 sunmao facade，最新 raw_clap_synth_callback_does_not_allocate 测试通过，暂无失败；session 83565 仍活跃。上一轮与本轮均为已验证等待。
+- Unresolved: 等待原 session 83565 含全部 doc-tests 成功退出，再提交/push 与三平台 hosted 原生输入/日志/产物验收；M5 总审计仍未完成。
+
+### 2026-09-10 — Windows 修复回归推进至 CLAP backend
+
+- Command/platform: 间隔 40 秒轮询原完整回归 session 83565，/tmp/sunmao-windows-keyboard-full-tests.log；核对工作区与 HEAD。
+- Change: 仅监控记录，没有重启回归或修改实现。
+- Result: 回归由 facade 属性测试推进至 CLAP backend，日志中的 latency/tail、expression/mod 路由、参数通知与 smoothing 零分配测试均 ok；session 83565 仍活跃，暂无失败。上一轮与本轮均为已验证等待。
+- Unresolved: 等待原 session 83565 含 doc-tests 成功退出，再提交/push 与三平台 hosted 原生 Windows 输入/日志/产物验收；M5 总审计仍未完成。
+
+### 2026-09-10 — Windows 修复回归两格式 backend 通过
+
+- Command/platform: 间隔 40 秒轮询原完整回归 session 83565，/tmp/sunmao-windows-keyboard-full-tests.log。
+- Change: 仅监控记录，没有重启回归或修改实现。
+- Result: CLAP backend 38 tests 全通过（44.52s），VST3 backend 28 tests 全通过（43.86s），含旧 state 迁移、transport、GUI view 与 ABI panic containment；回归进入 core，原 session 83565 仍活跃且暂无失败。上一轮与本轮均为已验证等待。
+- Unresolved: 等待原 session 83565 含全部 doc-tests 成功退出，再提交/push 与三平台 hosted 原生 Windows 输入/日志/产物验收；M5 总审计未完成。
+
+### 2026-09-10 — Windows 修复回归推进到效果器 GUI
+
+- Command/platform: 间隔 40 秒轮询原完整回归 session 83565，/tmp/sunmao-windows-keyboard-full-tests.log。
+- Change: 仅监控记录，没有重启回归或修改实现。
+- Result: 回归从 core 属性测试、DSP 推进到效果器及 GL/WebView/WGPU GUI fixtures，暂无失败；原 session 83565 仍活跃，尚未返回完整回归退出结果。上一轮与本轮均为已验证等待。
+- Unresolved: 等待原 session 83565 含 doc-tests 成功退出，再提交/push 与三平台 hosted 原生 Windows 输入/日志/产物验收；M5 总审计仍未完成。
+
+### 2026-09-10 — Windows 修复回归继续效果器套件
+
+- Command/platform: 间隔 40 秒轮询原完整回归 session 83565，/tmp/sunmao-windows-keyboard-full-tests.log。
+- Change: 仅监控记录，没有重启回归或修改实现。
+- Result: layout gain 5 tests、SVF 6 tests 全通过，回归推进到 tempo delay；session 83565 仍活跃，暂无失败。上一轮与本轮均为已验证等待。
+- Unresolved: 等待原 session 83565 含全部 doc-tests 成功退出，再提交/push 与三平台 hosted 原生 Windows 输入/日志/产物验收；M5 总审计未完成。
+
+### 2026-09-10 — Windows 修复回归越过 GUI 套件
+
+- Command/platform: 间隔 40 秒轮询原完整回归 session 83565，/tmp/sunmao-windows-keyboard-full-tests.log。
+- Change: 仅监控记录，没有重启回归或修改实现。
+- Result: widgets fixture 9 tests 全通过，含 accessibility 描述与 audio 线程频谱发布；回归越过 GUI crate 并进入参数宏测试，原 session 83565 仍活跃，暂无失败。Windows UIA 在 macOS 上的 0 tests 不计原生证据。上一轮与本轮均为已验证等待。
+- Unresolved: 等待原 session 83565 含全部 doc-tests 成功退出，再提交/push 与三平台 hosted 原生 Windows 输入/日志/产物验收；M5 总审计未完成。
+
+### 2026-09-10 — Windows 修复回归推进至合成器示例
+
+- Command/platform: 间隔 40 秒轮询原完整回归 session 83565，/tmp/sunmao-windows-keyboard-full-tests.log。
+- Change: 仅监控记录，没有重启回归或修改实现。
+- Result: state migration 5 tests 全通过，回归继续合成器 GUI fixtures；timed volume sample offsets 与 reset silences active voices 均 ok，原 session 83565 仍活跃且暂无失败。上一轮与本轮均为已验证等待。
+- Unresolved: 等待原 session 83565 含全部 doc-tests 成功退出，再提交/push 与三平台 hosted 原生 Windows 输入/日志/产物验收；M5 总审计未完成。
+
+### 2026-09-10 — Windows 输入修复本地完整 gate 通过
+
+- Command/platform: 原完整 locked 回归 session 83565 exit 0，包含所有 doc-tests；Windows target harness check session 70014 exit 0；metadata/fmt/diff 检查通过。
+- Change: 完成 Windows TranslateMessage 钩子修复、主线程原生消息队列 harness 与 blocking CI 步骤的提交准备，保留 macOS 验收文档。
+- Result: 本地完整回归通过，没有用非 Windows 空入口冒充 Windows 原生执行。harness 使用系统德语布局与 TranslateMessage 生成 z/ü/Ü/é，实际结果需下一次 Windows hosted 运行证明。
+- Unresolved: 提交/push 后核实同提交三平台完整 jobs、Windows 原生日志和三份 artifacts；M5 总审计尚未完成。

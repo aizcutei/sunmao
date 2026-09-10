@@ -91,3 +91,7 @@ doctest = true
 [[test]]
 name = "macos_keyboard"
 harness = false
+
+[[test]]
+name = "windows_keyboard"
+harness = false
