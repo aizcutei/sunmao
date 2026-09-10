@@ -70,6 +70,7 @@ mod native {
         shift: bool,
         rx: &mpsc::Receiver<KeyboardEvent>,
     ) -> KeyboardEvent {
+        assert_eq!(GetKeyboardLayout(0), layout, "layout before physical press");
         let mut state = [0u8; 256];
         if shift {
             state[VK_SHIFT as usize] = 0x80;
@@ -81,6 +82,7 @@ mod native {
         let bits = ((scan as isize) << 16) | 1;
         assert_ne!(PostMessageW(hwnd, WM_KEYDOWN, vk as usize, bits), 0);
         pump();
+        assert_eq!(GetKeyboardLayout(0), layout, "layout after physical press");
         let down = rx.recv_timeout(Duration::from_secs(5)).unwrap();
         assert_eq!(down.state, KeyState::Down);
         assert!(rx.try_recv().is_err(), "one logical event per press");
@@ -105,8 +107,6 @@ mod native {
         let german: Vec<u16> = "00000407\0".encode_utf16().collect();
         let layout = LoadKeyboardLayoutW(german.as_ptr(), 0);
         assert!(!layout.is_null(), "German layout must be available");
-        assert!(!ActivateKeyboardLayout(layout, 0).is_null());
-        assert_eq!(GetKeyboardLayout(0), layout);
         let (tx, rx) = mpsc::channel();
         let mut window = Window::open_floating(
             WindowOpenOptions::new(
@@ -120,7 +120,15 @@ mod native {
             RawWindowHandle::Win32(h) => h.hwnd.get() as HWND,
             _ => panic!("expected Win32"),
         };
+        SetFocus(hwnd);
+        assert_eq!(GetFocus(), hwnd);
         pump();
+        // Window activation can restore the desktop's input language. Select
+        // the test layout only after creation/focus messages have settled.
+        // The real WM_INPUTLANGCHANGE also refreshes the window's key cache.
+        assert!(!ActivateKeyboardLayout(layout, 0).is_null());
+        pump();
+        assert_eq!(GetKeyboardLayout(0), layout);
         let z = press(hwnd, layout, 0x15, false, &rx);
         assert_eq!(z.code, Code::KeyY);
         assert_eq!(z.key, Key::Character("z".into()));

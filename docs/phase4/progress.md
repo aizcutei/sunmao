@@ -1822,3 +1822,52 @@
 - Change: 仅 CI shell 配置与进度日志，本轮不涉及平台实现或打包/示例变更。
 - Result: 全部本地 gate 通过，含 doc-tests；准备提交 shell 修复并推送当前 Phase 4 分支。
 - Unresolved: 后续同提交三平台 hosted 及 Windows 原生输入必须实际通过，下载日志/产物校验后方可验收；M5 总审计未完成。
+
+### 2026-09-10 — shell 修复已推送并进入 hosted 队列
+
+- Command/platform: HTTPS push session 74011 exit 0；Actions API exit 0，HEAD 14583b8317498192e8ab8e520f4fd23e0b6474b9。
+- Change: 将已通过完整本地 gate 的 Windows CI shell 修复推送至 phase4/gui-component-library。
+- Result: 新 run 34444978927 queued，https://github.com/aizcutei/sunmao/actions/runs/34444978927；旧 run 34443897665 completed failure，Windows 原生测试因 PowerShell 解释 Bash 首行失败而未执行。
+- Unresolved: 监控新 run 34444978927，核验 Windows 原生测试实际运行与同提交三平台 jobs/原始日志/产物；M5 总审计未完成。
+
+### 2026-09-10 — shell 修复三平台 hosted 已启动
+
+- Command/platform: 原 run 34444978927 / 14583b8，两次 API 查询 session 41776/31814 均 exit 0，间隔 40 秒；核对分支与 HEAD。
+- Change: 仅监控记录，未重启 CI 或修改实现。
+- Result: Linux job 102767710362 已从依赖安装推进到 format adapters and host；macOS 102767710464、Windows 102767710485 均在该测试步骤。三平台 jobs in_progress，无失败，Windows 原生国际输入仍 pending。上一轮修复/push 属进展，本轮为已验证等待。
+- Unresolved: 继续监控原 run 34444978927，核实 Windows KEYBOARD VERIFIED 实际执行及同提交三平台完整 jobs/日志/产物；M5 总审计仍未完成。
+
+### 2026-09-10 — shell 修复 hosted 推进至 facade 与 runtime
+
+- Command/platform: 间隔 40 秒轮询原 run 34444978927，API session 36763/27355 均 exit 0；HEAD 14583b8。
+- Change: 仅监控记录，没有重启 CI 或修改实现。
+- Result: macOS 已推进到 standalone runtime/facade/reference examples，Linux 推进到 facade renderer contracts，Windows 在 format adapters and host。三平台 jobs in_progress，Windows 原生键盘步骤 pending，无失败。上一轮与本轮均为已验证等待。
+- Unresolved: 继续原 run，核实 Windows 原生输入实际执行及同提交三平台完整 jobs/原始日志/产物；M5 总审计未完成。
+
+### 2026-09-10 — shell 修复 hosted macOS 原生键盘通过
+
+- Command/platform: 间隔 40 秒轮询原 run 34444978927，API session 85117/56318 均 exit 0，HEAD 14583b8。
+- Change: 仅监控记录，没有重启 CI 或修改实现。
+- Result: macOS 原生国际键盘步骤 success，当前检查 baseview feature combinations；Linux 推进到 Phase 3 fixtures，Windows 推进到 facade renderer contracts。三平台完整 jobs in_progress，Windows 原生键盘仍 pending，无失败。上一轮与本轮均为已验证等待。
+- Unresolved: 继续原 run，核实 Windows 原生输入实际执行及同提交三平台完整 jobs/原始日志/产物；M5 总审计未完成。
+
+### 2026-09-10 — shell 修复 hosted Wayland 步骤通过
+
+- Command/platform: 间隔 40 秒轮询原 run 34444978927，API session 91747/75912 均 exit 0；HEAD 14583b8。
+- Change: 仅监控记录，没有重启 CI 或修改实现。
+- Result: Linux Wayland 探针、pointer/keyboard/cursor、activation/focus、output scaling 均 success，正在执行原生 X11 国际键盘；macOS 进入 native GUI 打包验收；Windows 在 standalone runtime/facade/reference examples。三平台完整 jobs in_progress，Windows 原生键盘仍 pending，无失败。上一轮与本轮均为已验证等待。
+- Unresolved: 继续原 run，核实 Windows 原生输入实际执行及同提交三平台完整 jobs/原始日志/产物；M5 总审计未完成。
+
+### 2026-09-10 — shell 修复 hosted X11 原生键盘通过
+
+- Command/platform: 间隔 40 秒轮询原 run 34444978927，API session 17752/33255 均 exit 0，HEAD 14583b8。
+- Change: 仅监控记录，没有重启 CI 或修改实现。
+- Result: Linux X11 原生国际键盘步骤 success，当前检查 baseview feature combinations；Windows 从 Phase 4 fixtures 推进到 accessibility；macOS 在 native GUI 打包验收。三平台 jobs in_progress，Windows 原生键盘步骤 pending，无失败。上一轮与本轮均为已验证等待。
+- Unresolved: 继续原 run，核实 Windows 原生输入实际执行及同提交三平台完整 jobs/原始日志/产物；M5 总审计未完成。
+
+### 2026-09-10 — Windows 原生测试布局初始化修复
+
+- Command/platform: run 34444978927 / 14583b8 Windows job 102767710485 failure；check-runs/annotations 与完整日志 /tmp/sunmao-run34444978927-windows.log 已读取。Windows target check session 28402 exit 0；完整 locked 回归 session 60143 exit 0（含 doc-tests），metadata/fmt/diff 均 exit 0。
+- Change: 原生 harness 改为建窗、SetFocus 与初始消息泵完成后再 ActivateKeyboardLayout；每次按键前后验证 GetKeyboardLayout，保留德语 z/ü/Ü/é 全部断言。
+- Result: shell 修复已使测试真实执行，旧日志在 windows_keyboard.rs:127 断言实际为 Character(";")、预期 Character("ü")，与美式布局翻译相同 VK 一致；先前仅在建窗前确认布局不足以证明输入时布局正确。新初始化顺序与布局断言已通过本地 gate，但仍须 Windows hosted 实测。首次 target check 发现 WindowHandle 无 focus 方法，已改用 Win32 SetFocus/GetFocus 并复查通过。
+- Unresolved: 提交/push 后监控新 run，核实 Windows 原生输入及同提交三平台完整 jobs/日志/产物；M5 总审计未完成。上一轮为已验证等待，本轮有实际失败证据与修复进展。
