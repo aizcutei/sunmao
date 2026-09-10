@@ -69,6 +69,7 @@ pub struct WidgetsPlugin {
     spectrum_consumer: Mutex<Option<VizConsumer<SpectrumFrame>>>,
     /// Per-band tone shaping for the `Crush`/`Warm`/`Bright` modes.
     tone: OnePole,
+    meter: Meter,
     sample_rate: f64,
 }
 
@@ -81,6 +82,7 @@ impl Default for WidgetsPlugin {
             spectrum: publisher,
             spectrum_consumer: Mutex::new(Some(consumer)),
             tone: OnePole::new(OnePoleKind::Lowpass),
+            meter: Meter::new(),
             sample_rate: 48_000.0,
         }
     }
@@ -137,6 +139,7 @@ impl SunmaoPlugin for WidgetsPlugin {
 
     fn initialize(&mut self, sample_rate: f64, _max_block_size: u32) {
         self.sample_rate = sample_rate;
+        self.meter.set_sample_rate(sample_rate);
         self.configure_analysis();
         self.tone.set_cutoff(
             Self::mode_cutoff(self.params.mode.get(), sample_rate),
@@ -149,6 +152,7 @@ impl SunmaoPlugin for WidgetsPlugin {
             filter.reset();
         }
         self.tone.reset();
+        self.meter.reset();
         self.spectrum.publish([0.0; SPECTRUM_BANDS]);
     }
 
@@ -205,6 +209,9 @@ impl SunmaoPlugin for WidgetsPlugin {
         // One publish per block: a display wants the newest frame, and the
         // triple buffer makes this a store plus a swap with no allocation.
         self.spectrum.publish(band_peaks);
+        if channels > 0 {
+            self.meter.process_block(buffer.output(0));
+        }
 
         ProcessStatus::Normal
     }
@@ -222,9 +229,10 @@ impl SunmaoPlugin for WidgetsPlugin {
         // first call gets the consumer, and a second editor shows a static
         // display rather than racing the first for frames.
         let slot = Arc::new(Mutex::new(self.take_spectrum()));
+        let meter = self.meter.handle();
         let view = BaseviewView::new(config, move |context| {
             let consumer = slot.lock().ok().and_then(|mut slot| slot.take());
-            WidgetsViewState::new(context, consumer, 420.0, 260.0)
+            WidgetsViewState::new(context, consumer, meter.clone(), 420.0, 260.0)
         });
         Some(Box::new(view))
     }
@@ -278,6 +286,7 @@ struct WidgetsViewState {
     controls: Stack,
     binder: ParamBinder,
     spectrum: SpectrumAnalyzer,
+    level: SpectrumAnalyzer,
     theme: Theme,
 }
 
@@ -285,6 +294,7 @@ impl WidgetsViewState {
     fn new(
         context: Arc<dyn ViewContext>,
         consumer: Option<VizConsumer<SpectrumFrame>>,
+        meter: MeterHandle,
         width: f32,
         height: f32,
     ) -> Self {
@@ -309,6 +319,9 @@ impl WidgetsViewState {
             controls,
             binder: ParamBinder::new(ViewContextHost::shared(context)),
             spectrum: SpectrumAnalyzer::new(Box::new(ChannelSource(consumer))).with_theme(theme),
+            level: SpectrumAnalyzer::new(Box::new(MeterSource::new(meter)))
+                .with_falloff(1.0)
+                .with_theme(theme),
             theme,
         };
         state.relayout(width, height);
@@ -317,10 +330,8 @@ impl WidgetsViewState {
 
     /// Describe the editor to assistive technology.
     ///
-    /// A platform bridge (UI Automation, NSAccessibility, AT-SPI) calls this
-    /// and walks the result; none is implemented yet, so today this is what
-    /// proves the description is correct for a real editor rather than a
-    /// synthetic one.
+    /// The optional AccessKit platform bridge publishes this control tree
+    /// through UI Automation, NSAccessibility, or AT-SPI.
     fn accessibility(&mut self) -> AccessibleNode {
         accessibility_tree(&mut self.controls, WidgetsPlugin::NAME)
     }
@@ -334,8 +345,14 @@ impl WidgetsViewState {
         self.spectrum.set_bounds(Rect::new(
             16.0,
             top,
-            (width - 32.0).max(0.0),
+            (width - 152.0).max(0.0),
             (height - top - 16.0).max(0.0),
+        ));
+        self.level.set_bounds(Rect::new(
+            (width - 128.0).max(0.0),
+            top + 24.0,
+            112.0_f32.min(width.max(0.0)),
+            (height - top - 52.0).max(0.0),
         ));
     }
 }
@@ -350,6 +367,17 @@ impl ViewState for WidgetsViewState {
         // Spectrum first, so an open dropdown paints over it.
         self.spectrum.refresh();
         self.spectrum.draw(ctx);
+        self.level.refresh();
+        self.level.draw(ctx);
+        let bounds = self.level.bounds();
+        for (text, x, y) in [
+            ("Output 1", bounds.x, bounds.y - 22.0),
+            ("Peak", bounds.x, bounds.y - 11.0),
+            ("RMS", bounds.x + bounds.width * 0.5, bounds.y - 11.0),
+            ("-60..0 dBFS", bounds.x, bounds.y + bounds.height + 2.0),
+        ] {
+            ctx.draw_text(text, x, y, 10.0, self.theme.foreground, TextAlign::Left);
+        }
 
         self.controls.draw(ctx);
     }
@@ -471,6 +499,32 @@ mod tests {
     }
 
     #[test]
+    fn output_peak_and_rms_reach_the_gui_without_allocating() {
+        let mut plugin = WidgetsPlugin::default();
+        plugin.initialize(48_000.0, 512);
+        plugin.params.gain.set(2.0);
+        let mut display = SpectrumAnalyzer::new(Box::new(MeterSource::new(plugin.meter.handle())))
+            .with_falloff(1.0);
+        // Allow the DSP RMS ballistics to settle, measuring post-gain output.
+        for _ in 0..100 {
+            let output = render(&mut plugin, &[0.25; 512]);
+            assert!((output[511] - 0.5).abs() < 1e-6);
+        }
+        let (_, calls) = count_allocator_calls(|| display.refresh());
+        assert_eq!(calls, 0, "GUI meter reads must not allocate");
+        assert_eq!(display.bars().len(), 2);
+        for bar in display.bars() {
+            assert!(
+                (*bar - 0.89965665).abs() < 0.001,
+                "expected -6.02 dBFS, got {bar}"
+            );
+        }
+        plugin.reset();
+        display.refresh();
+        assert_eq!(display.bars(), &[0.0, 0.0]);
+    }
+
+    #[test]
     fn gain_scales_the_output() {
         let mut plugin = WidgetsPlugin::default();
         plugin.initialize(48_000.0, 512);
@@ -583,6 +637,7 @@ mod tests {
         let mut state = WidgetsViewState::new(
             Arc::new(StubContext) as Arc<dyn ViewContext>,
             Some(consumer),
+            Meter::new().handle(),
             420.0,
             260.0,
         );
@@ -637,6 +692,7 @@ mod tests {
         let mut state = WidgetsViewState::new(
             Arc::new(StubContext) as Arc<dyn ViewContext>,
             Some(consumer),
+            Meter::new().handle(),
             420.0,
             260.0,
         );

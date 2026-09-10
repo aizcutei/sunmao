@@ -1871,3 +1871,171 @@
 - Change: 原生 harness 改为建窗、SetFocus 与初始消息泵完成后再 ActivateKeyboardLayout；每次按键前后验证 GetKeyboardLayout，保留德语 z/ü/Ü/é 全部断言。
 - Result: shell 修复已使测试真实执行，旧日志在 windows_keyboard.rs:127 断言实际为 Character(";")、预期 Character("ü")，与美式布局翻译相同 VK 一致；先前仅在建窗前确认布局不足以证明输入时布局正确。新初始化顺序与布局断言已通过本地 gate，但仍须 Windows hosted 实测。首次 target check 发现 WindowHandle 无 focus 方法，已改用 Win32 SetFocus/GetFocus 并复查通过。
 - Unresolved: 提交/push 后监控新 run，核实 Windows 原生输入及同提交三平台完整 jobs/日志/产物；M5 总审计未完成。上一轮为已验证等待，本轮有实际失败证据与修复进展。
+
+### 2026-09-10 — Windows 布局初始化修复已启动 hosted
+
+- Command/platform: HTTPS push session 32727 exit 0；Actions API exit 0；HEAD d533e543fd9db72f3d9165aad491f0fb6b465074。
+- Change: 推送原生测试布局初始化与布局稳定性断言到 phase4/gui-component-library。
+- Result: run 34446209752 in_progress，https://github.com/aizcutei/sunmao/actions/runs/34446209752；旧 run 34444978927 completed failure。本地完整 gate 已通过，尚无新提交 Windows 运行时结论。
+- Unresolved: 监控原 run 34446209752，核实 Windows 原生日志、同提交三平台完整 jobs 与 artifacts 下载校验；M5 总审计未完成。
+
+### 2026-09-10 — Windows 布局初始化修复三平台 hosted 运行中
+
+- Command/platform: 间隔 40 秒轮询原 run 34446209752，API session 55704/99718 均 exit 0；HEAD d533e54。
+- Change: 仅监控记录，没有重启 CI 或修改实现。
+- Result: Windows job 102771447070、macOS 102771447425、Linux 102771447508 均 in_progress，当前执行 format adapters and host；Windows 原生键盘步骤 pending，无失败。上一轮修复/push 属进展，本轮为已验证等待。
+- Unresolved: 继续原 run，核实 Windows 布局断言与原生输入实际执行及同提交三平台完整 jobs/原始日志/产物；M5 总审计未完成。
+
+### 2026-09-10 — Windows 布局初始化修复 hosted 持续推进
+
+- Command/platform: 间隔 40 秒轮询原 run 34446209752，API session 32409/73049 均 exit 0；HEAD d533e54。
+- Change: 仅监控记录，没有重启 CI 或修改实现。
+- Result: macOS 已推进到 standalone runtime/facade/reference examples，Linux 推进到 facade renderer contracts，Windows 在 format adapters and host；三平台 jobs in_progress，Windows 原生键盘仍 pending，无失败。上一轮与本轮均为已验证等待。
+- Unresolved: 继续原 run，核实 Windows 布局断言及原生输入实际执行与同提交三平台完整 jobs/原始日志/产物；M5 总审计未完成。
+
+### 2026-09-10 — Windows 布局初始化修复 hosted 进入 runtime
+
+- Command/platform: 间隔 40 秒轮询原 run 34446209752，API session 45926/58468 均 exit 0；HEAD d533e54。
+- Change: 仅监控记录，没有重启 CI 或修改实现。
+- Result: Windows 已进入 standalone runtime/facade/reference examples；Linux 在 Phase 4 fixtures；macOS 在 system-capture linkage。三平台 jobs in_progress，Windows 原生键盘仍 pending，无失败。上一轮与本轮均为已验证等待。
+- Unresolved: 继续原 run，核实 Windows 布局断言及原生输入实际执行与同提交三平台完整 jobs/原始日志/产物；M5 总审计未完成。
+
+### 2026-09-10 — 布局修复 hosted macOS/X11 原生输入通过
+
+- Command/platform: 间隔 40 秒轮询原 run 34446209752，API session 50534/79014 均 exit 0；HEAD d533e54。
+- Change: 仅监控记录，没有重启 CI 或修改实现。
+- Result: macOS 原生国际键盘 success，已进入 native GUI 打包；Linux Wayland 四项与 X11 原生国际键盘均 success，当前检查 baseview features；Windows 推进到 Phase 3 fixtures。三平台 jobs in_progress，Windows 原生键盘 pending，无失败。上一轮与本轮均为已验证等待。
+- Unresolved: 继续原 run，核实 Windows 布局断言及原生输入实际执行与同提交三平台完整 jobs/原始日志/产物；M5 总审计未完成。
+
+### 2026-09-10 — Windows 原生国际键盘 hosted 步骤通过
+
+- Command/platform: 间隔 40 秒轮询原 run 34446209752，API session 9709/99534 均 exit 0，HEAD d533e54。
+- Change: 仅监控记录，没有重启 CI 或修改实现。
+- Result: Windows 原生国际键盘步骤 completed success，当前检查 baseview feature combinations；macOS/X11 原生输入与 Wayland 专项均已 success。macOS 在 native GUI 打包，Linux 在 realtime allocation matrix，三平台完整 jobs 仍 in_progress。上一轮与本轮均为已验证等待，本轮获得 Windows 步骤成功新证据，但尚未构成完整正式验收。
+- Unresolved: 等待同提交三平台完整 jobs 成功，下载 Windows 原始日志核实 KEYBOARD VERIFIED，完整下载三份 artifacts 并校验 SHA-256/ZIP CRC，再关闭 M3 输入项；M5 总审计未完成。
+
+### 2026-09-10 — Windows 输入通过后 hosted 打包继续推进
+
+- Command/platform: 间隔 40 秒轮询原 run 34446209752，API session 34705/95145 均 exit 0；HEAD d533e54。
+- Change: 仅监控记录，没有重启 CI 或修改实现。
+- Result: 三平台原生国际键盘步骤均 success；Windows 进入 standalone reference applications 构建，macOS 进入 repository packaging helper，Linux 进入 native GUI 打包验收。三平台完整 jobs 仍 in_progress，无失败。上一轮与本轮均为已验证等待。
+- Unresolved: 等待同提交三平台完整 jobs 成功，下载 Windows 原始日志核实 KEYBOARD VERIFIED 与三份 artifacts SHA-256/ZIP CRC，再关闭 M3 输入项；M5 总审计未完成。
+
+### 2026-09-10 — Windows 输入修复 macOS 完整 hosted 成功
+
+- Command/platform: 间隔 40 秒轮询原 run 34446209752，API session 11226/47930 均 exit 0；HEAD d533e54。
+- Change: 仅监控记录，没有重启 CI 或修改实现。
+- Result: macOS job 102771447425 completed success；Windows 在 native GUI 打包验收，Linux 已推进至 repository packaging helper，两者完整 jobs in_progress。三平台原生国际键盘步骤均 success，无失败。上一轮与本轮均为已验证等待。
+- Unresolved: 等待 Windows/Linux 完整 jobs 成功，下载 Windows 原始日志核实 KEYBOARD VERIFIED 与三份 artifacts SHA-256/ZIP CRC，再关闭 M3 输入项；M5 总审计未完成。
+
+### 2026-09-10 — Windows 输入修复 Linux 已进入产物上传
+
+- Command/platform: 间隔 40 秒轮询原 run 34446209752，API session 9629/56407 均 exit 0；HEAD d533e54。
+- Change: 仅监控记录，没有重启 CI 或修改实现。
+- Result: macOS 完整 job success；Windows 已从 native GUI 打包推进到 repository packaging helper；Linux 已进入 Upload packaged Phase 1 artifacts。Windows/Linux jobs 仍 in_progress，原生输入均 success，无失败。上一轮与本轮均为已验证等待。
+- Unresolved: 等待 Windows/Linux 完整 jobs 成功，下载 Windows 原始日志核实 KEYBOARD VERIFIED 与三份 artifacts SHA-256/ZIP CRC，再关闭 M3 输入项；M5 总审计未完成。
+
+### 2026-09-10 — Windows 输入三平台 hosted 全绿与原始成功日志确认
+
+- Command/platform: run 34446209752 / d533e543fd9db72f3d9165aad491f0fb6b465074；API session 17139 exit 0；三平台步骤审计各 34 steps，零非成功/非 skipped。Windows 日志首次 session 26167 因 curl 18 提前关闭终止，重新下载 session 65763 exit 0。
+- Change: 下载并审计实际证据；三份产物通过原 sequential download session 70417 依次下载，未启动重复产物写入。
+- Result: 三平台完整 jobs completed success。完整 Windows 日志 /tmp/sunmao-run34446209752-windows.log 第 2878 行实际输出 WINDOWS KEYBOARD VERIFIED: physical keys, German layout, Shift and native dead-key composition through the window message hook。Windows 产物 78352601 bytes / 370 entries 已 SHA-256 与 ZIP CRC 校验通过；session 70417 仍在下载后续产物。上一轮为已验证等待，本轮取得完整 hosted 与原生日志/首份产物校验新证据。
+- Unresolved: 继续原下载 session 70417，完成另外两份产物校验后正式关闭 M3 Windows 输入项；M5 总审计未完成。
+
+### 2026-09-10 — Windows 输入验收产物下载继续
+
+- Command/platform: 间隔 40 秒轮询原 sequential download session 70417，两次均确认仍活跃；核对 HEAD d533e54 与工作区。
+- Change: 仅监控记录，未启动重复下载或修改实现。
+- Result: Windows 产物既有 SHA-256/CRC 校验通过；Linux ZIP 当前 279199744 bytes，原 session 70417 仍在下载，后续 macOS 产物尚未处理。上一轮为证据进展，本轮为已验证等待。
+- Unresolved: 继续原 session 70417，完成 Linux/macOS 产物 SHA-256/ZIP CRC 后正式关闭 M3 Windows 输入项；M5 总审计未完成。
+
+### 2026-09-10 — macOS 产物校验通过，Linux 断点续传
+
+- Command/platform: 原下载 session 70417 已 exit 1，curl 18 提前关闭；新恢复 session 6788 经 40 秒轮询仍活跃，run 34446209752 / d533e54 三平台完整 success。
+- Change: 原进程终止后，先完成 macOS 单产物下载校验，再以 curl -C - 从 Linux 现有文件续传，没有重复并发写入。
+- Result: macOS ZIP /tmp/sunmao-mac-evidence/34446209752-phase1-macOS-ARM64.zip，53678397 bytes，SHA-256 6f9c73b82e8d150091c6f70734a9a7479981990334e6936b2aaf421d487c0ac5 与 ZIP CRC 通过；Windows 产物已通过。Linux 从 309084160 / 996747185 bytes 继续下载，session 6788 仍活跃。上一轮为已验证等待，本轮取得第二份产物校验证据并恢复实际失败下载。
+- Unresolved: 继续原 session 6788 完成 Linux SHA-256/ZIP CRC 后正式关闭 M3 Windows 输入项；M5 总审计未完成。
+
+### 2026-09-10 — Linux 验收产物续传推进
+
+- Command/platform: 间隔 40 秒轮询原恢复 session 6788，两次均仍活跃；核对 HEAD d533e54 与工作区。
+- Change: 仅监控记录，没有启动重复下载或修改实现。
+- Result: Linux ZIP 已增长到 407306240 / 996747185 bytes；Windows/macOS 产物既有 SHA-256/CRC 通过，Linux 完整性尚未验证。上一轮为证据进展，本轮为已验证等待。
+- Unresolved: 继续原 session 6788 完成 Linux SHA-256/ZIP CRC 后正式关闭 M3 Windows 输入项；M5 总审计未完成。
+
+### 2026-09-10 — Linux 验收产物续传超过六成
+
+- Command/platform: 间隔 40 秒轮询原 session 6788，两次均确认仍活跃。
+- Change: 仅监控记录，没有启动重复下载或修改实现。
+- Result: Linux ZIP 已增长到 611745792 / 996747185 bytes，Windows/macOS SHA-256/CRC 既有校验通过；Linux 仍未完整校验。上一轮与本轮均为已验证等待。
+- Unresolved: 继续原 session 6788 完成 Linux SHA-256/ZIP CRC 后正式关闭 M3 Windows 输入项；M5 总审计未完成。
+
+### 2026-09-10 — Linux 验收产物续传接近八成
+
+- Command/platform: 间隔 40 秒轮询原 session 6788，两次确认仍活跃。
+- Change: 仅监控记录，没有启动重复下载或修改实现。
+- Result: Linux ZIP 已增长到 789413888 / 996747185 bytes；Windows/macOS 既有 SHA-256/CRC 通过，Linux 完整校验尚未返回。上一轮与本轮均为已验证等待。
+- Unresolved: 继续原 session 6788 完成 Linux SHA-256/ZIP CRC 后正式关闭 M3 Windows 输入项；M5 总审计未完成。
+
+### 2026-09-10 — M3 Windows 原生输入正式验收完成
+
+- Command/platform: 原续传 session 6788 exit 0；run 34446209752 / d533e543fd9db72f3d9165aad491f0fb6b465074 三平台完整 success，每平台 34 steps 零失败/取消；Windows 完整原始日志第 2878 行实际成功标记。
+- Change: 更新 phase4/status.md 的 M3 与 Windows 输入状态，以及 phase2/semantics.md 的实际证据与边界。
+- Result: Linux ZIP 996747185 bytes，SHA-256 5ce0ea2a4a1773c40741dbc18cb7b118ca4e9fee3ee3185d4a282e5663181d69，ZIP CRC 通过。加上已校验的 Windows 78352601 bytes 与 macOS 53678397 bytes，三份产物校验齐备。Windows 德语 z/ü、Shift Ü、系统 dead-key é 验收完成，M3 三平台国际输入收口；不宣称硬件输入或完整 CJK IME。上一轮为已验证等待，本轮完成正式验收并更新矩阵。
+- Unresolved: M5 仍需按原始目标逐项审计 GUI API/prelude/doc-tests、兼容策略、可视化/meter、floating 契约与文档现状，补齐缺口后完成最终同提交三平台验收；Phase 4 不得提前标记完成。
+
+### 2026-09-10 — M5 总审计发现 M4 两项未实现要求
+
+- Command/platform: 核对原始目标、clap_rs/src/ext/gui.rs、sunmao/backend_clap/src/lib.rs 的 GuiHandler、gui/widgets/spectrum.rs、widgets fixture 与 facade prelude。
+- Change: 新增 docs/phase4/audit.md，重新打开 M4 的 transient 与 Phase 3 level meter 两项；保留既有验收证据。
+- Result: gui_set_transient 只有默认 false，backend 未 override；SpectrumAnalyzer/fixture 未消费 Phase 3 MeterHandle，不能以通用柱图替代原始 metering 要求。GUI compatibility 文档存在但仍需逐条核对，现状文档还有历史矛盾。上一轮完成 M3 验收，本轮取得改变下一行动的审计证据。
+- Unresolved: 下一瓶颈先补实际消费 Phase 3 metering 的 GUI level meter、公开 API/doc-test/属性与 fixture 证据并独立三平台验收；随后 transient 与余下 M5 总审计。Phase 4 未完成。
+
+### 2026-09-10 — Phase 3 metering 接入 GUI 电平显示
+
+- Command/platform: 核对 DSP Meter/MeterHandle 与 SpectrumSource；定向 facade 测试 session 87850、widgets fixture session 64992；fmt/diff 检查通过。
+- Change: 新增 facade meter::MeterSource 并导入 prelude，按 -60..0 dBFS 输出 peak/RMS，有限/越界处理与单元/属性测试、doc-test；widgets fixture 新建 Meter，在音频回调测量输出第一声道，reset 发布静音，GUI 消费相同 handle，以两个电平条显示。
+- Result: 实现已接线，定向测试仍运行，未提交/push。不添加 GUI→audio 锁，MeterHandle 独立原子读取不承诺 peak/RMS 一致快照。
+- Unresolved: 保留并继续 session 87850/64992，补 fixture 对输出电平/reset 的端到端断言与公开 doc-test验证；完成完整 locked 回归及打包 gate 后提交/push，三平台实际日志与产物验收后才关闭该缺口。transient 与 M5 总审计仍待完成。
+
+### 2026-09-10 — GUI 电平端到端与零分配断言通过
+
+- Command/platform: 原 facade 定向 session 87850 exit 0、原 fixture suite session 64992 exit 0；新增 e2e session 63552 与 doc-test session 78715 仍在运行。日志 /tmp/sunmao-meter-e2e.log、/tmp/sunmao-meter-doc.log。
+- Change: 新增 output_peak_and_rms_reach_the_gui_without_allocating，真实 plugin.process 测量增益后第一声道，经 MeterHandle/MeterSource/SpectrumAnalyzer 读取 peak/RMS，检查 -6.02 dBFS、读取零分配及 reset 归零。
+- Result: 新端到端断言已实际输出 ok（1 passed），原 fixture 全套通过；doc-test 已完成编译并开始执行。fmt 已通过，尚未推送。
+- Unresolved: 继续 session 63552/78715 取得退出结果，完成完整 locked 回归、metadata/fmt/diff 与打包 gate，再提交/push 并完成三平台日志/产物验收；UI 电平标识与 docs 需核对。transient 与 M5 总审计仍未完成。
+
+### 2026-09-10 — 电平显示标识与完整本地 gate
+
+- Command/platform: 确认公开 MeterSource doc-test session 78715 exit 0（1 passed），e2e session 63552 exit 0；当前 GitHub 最新 run 34446209752 对应 HEAD d533e54，completed success。
+- Change: 显示 Output 1、Peak/RMS 与 -60..0 dBFS 标识，补充 GUI 兼容 API 表，纠正 fixture 平台 accessibility 桥接过期注释。
+- Result: metadata/fmt/diff 检查通过；完整 locked regression session 43126（/tmp/sunmao-meter-full.log）与打包 session 62865（/tmp/sunmao-meter-package.log）已启动。电平改动仍未提交，无新的 hosted run。
+- Unresolved: 收齐完整本地 gates 后提交/push，核验三平台实际测试日志和产物；MeterSource 尚未正式验收，transient 与 M5 总审计仍待完成。
+
+### 2026-09-10 — 电平表打包 gate 完整通过
+
+- Command/platform: 继续原 regression session 43126 与 package session 62865；后者 exit 0，日志 /tmp/sunmao-meter-package.log。
+- Change: 收齐打包证据，未重启构建或改动实现。
+- Result: 本地打包 32 套件、640 断言通过、0 failed；完整 locked regression 原 session 43126 多次轮询确认仍活跃，已完成 39 套件/128 测试，无失败。上一轮为实现/CI 检查补充进展，本轮取得打包 gate 最终成功证据。
+- Unresolved: 保留 session 43126，待完整回归 exit 0 后提交/push 电平表改动；之后同提交三平台 hosted、实际日志和三份产物校验。M4 transient 与 M5 最终审计尚未完成。
+
+### 2026-09-10 — 电平表完整回归继续推进
+
+- Command/platform: 间隔 40 秒继续轮询原 session 43126，多次确认仍活跃；HEAD d533e54，工作区电平改动未提交。
+- Change: 仅监控记录，没有重启回归或修改实现。
+- Result: 已完成 54 套件/302 测试，无失败；新 meter::tests 的发布/reset 与数值属性测试均实际输出 ok，当前推进至 OS Distortion fixture。打包既有 32 套件/640 断言通过。上一轮为打包 gate 进展，本轮为已验证等待。
+- Unresolved: 继续原 session 43126 收齐完整回归最终退出结果后提交/push；同提交三平台 hosted、实际日志与产物验收，以及 transient/M5 总审计尚未完成。
+
+### 2026-09-10 — 完整回归端到端电平断言通过，进入 doc-tests
+
+- Command/platform: 持续间隔 40 秒轮询原 session 43126，最后一次仍确认活跃；日志 /tmp/sunmao-meter-full.log。
+- Change: 仅监控记录，未重启回归、未更改实现。
+- Result: output_peak_and_rms_reach_the_gui_without_allocating 在完整回归第 696 行实际输出 ok；回归已进入 doc-tests，累计 97 个成功套件/633 测试，无失败。打包既有 32 套件/640 断言通过。上一轮与本轮均为已验证等待，本轮另取得完整回归中的端到端电平证据。
+- Unresolved: 继续 session 43126 直到最终退出，再完成提交/push 与三平台 hosted 实际日志/产物验收；transient 与 M5 总审计仍未完成。
+
+### 2026-09-10 — 电平表完整本地 gate 通过，准备提交
+
+- Command/platform: 原完整 regression session 43126 exit 0；env RUSTFLAGS=-Awarnings cargo test --locked，日志 /tmp/sunmao-meter-full.log。package session 62865 既有 exit 0。
+- Change: 新增 MeterSource 公开适配、peak/RMS 输出显示和标识、prelude/doc-test、数值属性/零分配端到端证据；CI Phase 4 步骤明确运行 facade meter 测试和 doc-test。一并保存 M3 Windows 最终验收与 M4 重新打开缺口的审计记录。
+- Result: 完整回归 135 套件/668 passed、0 failed、4 ignored；打包 32 套件/640 断言通过。metadata/fmt/diff gates 通过。未触原生平台实现或导出契约，无 Windows target/新增 AU 符号检查需求。上一轮为已验证等待，本轮取得完整本地 gate 最终成功证据。
+- Unresolved: 提交/push 后按同提交三平台 hosted 实际测试日志和三份产物校验验收 MeterSource；CLAP transient 与 M5 总审计仍待完成，Phase 4 不标记完成。

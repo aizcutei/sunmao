@@ -94,6 +94,8 @@ pub use sunmao_gui as gui;
 #[cfg(feature = "gui")]
 mod binding;
 #[cfg(feature = "gui")]
+pub mod meter;
+#[cfg(feature = "gui")]
 pub use binding::ViewContextHost;
 
 /// Baseview-backed editor views. Enable one of `gui-gl`, `gui-wgpu`, or
@@ -138,6 +140,8 @@ pub mod prelude {
 
     #[cfg(feature = "gui")]
     pub use crate::binding::ViewContextHost;
+    #[cfg(feature = "gui")]
+    pub use crate::meter::MeterSource;
     pub use sunmao_core::viz::{viz_channel, VizConsumer, VizFrame, VizPublisher};
     #[cfg(feature = "accessibility")]
     pub use sunmao_gui::accesskit_update;

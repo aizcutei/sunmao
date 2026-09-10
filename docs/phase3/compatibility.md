@@ -168,7 +168,7 @@ GUI 有一条别的轴没有的性质：**它的"行为"一部分不由 SunMao �
 
 | 面 | 说明 |
 |---|---|
-| `sunmao::prelude` 中的 GUI 名字 | `Widget`/`ParameterWidget` trait 的既有方法签名；`Knob`/`Slider`/`Toggle`/`Dropdown`/`Button`/`Label`/`SpectrumAnalyzer` 的构造与 builder 方法；`Column`/`Row`/`Stack` 的布局方法；`Theme` 的字段名与角色语义；`accessibility_tree`/`AccessibleNode`/`AccessibleRole`；`viz_channel`/`VizPublisher`/`VizConsumer` |
+| `sunmao::prelude` 中的 GUI 名字 | `Widget`/`ParameterWidget` trait 的既有方法签名；`Knob`/`Slider`/`Toggle`/`Dropdown`/`Button`/`Label`/`SpectrumAnalyzer` 的构造与 builder 方法；`Column`/`Row`/`Stack` 的布局方法；`Theme` 的字段名与角色语义；`accessibility_tree`/`AccessibleNode`/`AccessibleRole`；`viz_channel`/`VizPublisher`/`VizConsumer`；`MeterSource::new(MeterHandle)`（peak/RMS 顺序，-60..0 dBFS 归一化，独立原子读取） |
 | `Widget` / `ParameterWidget` 的扩展方式 | 与 `SunmaoPlugin` 同规则：**只允许新增带默认实现的方法**（`as_parameter`、`set_from_text`、`accessible_role` 都是按此规则加入的）。新增无默认实现的方法会打断每一个自定义控件，属破坏性。 |
 | `ViewHandle` 的构造与钩子 | `ViewHandle::builder()` 的既有开关（`resizable`/`scalable`/`keyboard`）语义不变；新增开关必须有默认值。 |
 
