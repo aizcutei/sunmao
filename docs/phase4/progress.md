@@ -1780,3 +1780,45 @@
 - Change: 完成 Windows TranslateMessage 钩子修复、主线程原生消息队列 harness 与 blocking CI 步骤的提交准备，保留 macOS 验收文档。
 - Result: 本地完整回归通过，没有用非 Windows 空入口冒充 Windows 原生执行。harness 使用系统德语布局与 TranslateMessage 生成 z/ü/Ü/é，实际结果需下一次 Windows hosted 运行证明。
 - Unresolved: 提交/push 后核实同提交三平台完整 jobs、Windows 原生日志和三份 artifacts；M5 总审计尚未完成。
+
+### 2026-09-10 — Windows 输入修复已推送并启动 hosted
+
+- Command/platform: commit 4c4107dcb669e234db0e6c37fc15d572360b1b4f；HTTPS push session 40756 exit 0；Actions API session 78676 exit 0。
+- Change: 推送 Windows 原生键盘翻译修复、验收 harness 与 blocking CI 步骤到 phase4/gui-component-library。
+- Result: run 34443897665 已确认 in_progress，https://github.com/aizcutei/sunmao/actions/runs/34443897665；完整本地 gate 通过，尚无本提交 hosted 完成证据。
+- Unresolved: 监控原 run 34443897665，失败读取实际日志修复，成功后核验 Windows KEYBOARD VERIFIED 与同提交三平台完整 jobs/产物；M5 总审计仍未完成。
+
+### 2026-09-10 — Windows 输入修复三平台 hosted 运行中
+
+- Command/platform: 两次间隔查询原 run 34443897665，API session 20235/35542 均 exit 0，HEAD 4c4107d。
+- Change: 仅监控与记录，监控助手增加国际键盘步骤显示，未修改项目实现或重启 CI。
+- Result: Windows job 102764416201、macOS 102764416351、Linux 102764416354 均 in_progress；Linux 已从安装依赖推进到 Test format adapters and host，三平台当前都在该步骤。Windows 原生国际键盘验收仍 pending，无失败结果。上一轮提交/启动 CI 属进展，本轮为已验证等待。
+- Unresolved: 继续原 run，等待 Windows KEYBOARD VERIFIED 实际执行及同提交完整三平台 jobs/日志/产物验收；M5 总审计未完成。
+
+### 2026-09-10 — Windows 输入修复 hosted 持续推进
+
+- Command/platform: 间隔 40 秒查询原 run 34443897665，API session 15296/2411 均 exit 0。
+- Change: 仅监控记录，没有重启 CI 或修改实现。
+- Result: 三平台 jobs 均 in_progress；macOS 已推进到 standalone runtime/facade/reference examples，Linux 在 facade renderer contracts，Windows 在 format adapters and host。Windows 原生国际键盘步骤仍 pending，暂无失败。上一轮与本轮均为已验证等待。
+- Unresolved: 继续监控原 run，核实 Windows KEYBOARD VERIFIED 实际执行与同提交完整三平台 jobs/日志/产物；M5 总审计未完成。
+
+### 2026-09-10 — hosted macOS 原生键盘步骤再次通过
+
+- Command/platform: 间隔查询原 run 34443897665，API session 11394/23593 均 exit 0。
+- Change: 仅监控记录，没有重启 CI 或修改实现。
+- Result: macOS 原生国际键盘步骤 completed success，当前执行 realtime callback allocation matrix；Windows 已进入 standalone runtime/facade/reference examples，Linux 在 accessibility。三平台完整 jobs 仍 in_progress，Windows 原生键盘步骤 pending，无失败。上一轮与本轮均为已验证等待，macOS 步骤成功不等于本提交完整验收。
+- Unresolved: 继续原 run，核实 Windows KEYBOARD VERIFIED 实际执行及同提交完整三平台 jobs/日志/产物；M5 总审计未完成。
+
+### 2026-09-10 — Windows hosted 键盘步骤 shell 修复
+
+- Command/platform: run 34443897665 / commit 4c4107d；Windows job 102764416201 已 failure，check-runs/annotations 与完整日志 /tmp/sunmao-run34443897665-windows.log 已读取。
+- Change: Windows 原生键盘步骤显式指定 shell: bash，修复默认 PowerShell 无法执行 set -euo pipefail；键盘实现与断言保持原样。
+- Result: 失败发生于脚本首行，错误为参数 euo 不存在，cargo 与原生键盘 harness 尚未运行。macOS/X11 原生输入步骤 success，完整 macOS/Linux jobs 仍运行中。本地 metadata/fmt/diff 已通过，完整 locked 回归 session 74599 正在执行。
+- Unresolved: 等待原回归通过后提交/push shell 修复，再核验 Windows 实际输入及同提交三平台完整 jobs/日志/产物；M5 总审计未完成。
+
+### 2026-09-10 — Windows shell 修复提交前 gate 通过
+
+- Command/platform: 完整 locked 回归 session 74599 exit 0，日志 /tmp/sunmao-windows-shell-full-tests.log；metadata/fmt/diff 各 exit 0。
+- Change: 仅 CI shell 配置与进度日志，本轮不涉及平台实现或打包/示例变更。
+- Result: 全部本地 gate 通过，含 doc-tests；准备提交 shell 修复并推送当前 Phase 4 分支。
+- Unresolved: 后续同提交三平台 hosted 及 Windows 原生输入必须实际通过，下载日志/产物校验后方可验收；M5 总审计未完成。

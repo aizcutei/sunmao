@@ -501,6 +501,7 @@ jobs:
 
       - name: Verify native Windows international keyboard input
         if: runner.os == 'Windows'
+        shell: bash
         run: |
           set -euo pipefail
           SUNMAO_WINDOWS_KEYBOARD_TEST=1 cargo test --locked -p baseview --test windows_keyboard 2>&1 | tee /tmp/windows-keyboard.log
