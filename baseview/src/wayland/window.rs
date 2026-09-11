@@ -583,7 +583,7 @@ impl<'a> Window<'a> {
                     }
                     WindowCommand::Title(title, reply) => {
                         toplevel.set_title(title);
-                        let _ = reply.send(connection.flush().is_ok());
+                        let _ = reply.send(inner.connection.flush().is_ok());
                     }
                 }
             }
