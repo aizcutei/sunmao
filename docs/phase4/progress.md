@@ -2172,3 +2172,10 @@
 - Change: 新增公开 FloatingViewOptions（owner/title，core/facade prelude 与 doc-test），SunmaoView 默认兼容 supports_transient/open_floating_with_options，ViewHandle/Builder 增加 transient/title 操作。CLAP 保留 owner 自身 API，拒绝非本平台/空/非浮动调用；show 传入参数，打开后路由更新，拒绝 owner 更新保留前值，destroy/create 清除旧 owner/title。新增完整生命周期测试与标题 NUL 不入原生回调属性测试。
 - Result: floating_owner_and_title_survive_show_but_not_destroy 实际通过，覆盖 show 前不建窗、不同 create/owner API、重复 show、打开后更新/拒绝、destroy/recreate 及 embedded 拒绝。既有 backend 38 测试与 core 42 测试通过，完整 doc-tests 尚在原 session 75232 中。fmt 通过，未提交；原生 adapters 尚未实现，默认如实不支持 transient。
 - Unresolved: 继续 session 75232/16366 收齐定向结果，再贯通 baseview/facade 原生 owner/title（必须创建时生效并支持打开后更新），补 native/host 实际断言与语义降级。完整本地 gates、Windows target 与同提交三平台 hosted 验收尚待执行，Phase 4 未完成。
+
+### 2026-09-11 — floating owner/title 三平台验收
+
+- Command/platform: GitHub Actions run 34590881685 / commit `324b266`；三平台 job success。
+- Change: 修复 Wayland worker 中 `connection` 与 `toplevel` 移动后的借用错误；原生 floating owner/title 接线覆盖 X11、Wayland 降级、macOS child window、Windows owner。
+- Result: Linux/macOS/Windows 三平台 Phase 4 fixtures、Wayland/X11、国际键盘与全部 blocking steps success；macOS/Windows/Linux artifacts 可由 Actions 下载并校验。M4 transient 缺口关闭，进入最终文档审计。
+- Unresolved: 完成规则要求的最终文档矩阵与 artifact 证据归档。
