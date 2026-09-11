@@ -36,7 +36,7 @@ use sunmao_core::{
     AudioBuffer, Event as SunmaoEvent, EventQueue, ParamChange, ParamDescriptor, Params,
     SunmaoPlugin,
 };
-use sunmao_core::{ParentWindow, SunmaoView, ViewHandle};
+use sunmao_core::{FloatingViewOptions, ParentWindow, SunmaoView, ViewHandle};
 
 pub use clap_rs::{export_clap_plugin, export_clap_plugin_with_gui, PluginInfo};
 
@@ -561,6 +561,7 @@ pub struct SunmaoClapWrapper<P: SunmaoPlugin> {
     view_handle: Option<MainThreadViewHandle>,
     /// Title the host suggested for a floating editor, if it asked.
     suggested_title: Option<String>,
+    transient_parent: Option<ParentWindow>,
     /// Whether the host asked for a floating editor rather than an embedded one.
     gui_floating: bool,
     gui_api: Option<GuiApi>,
@@ -669,6 +670,7 @@ impl<P: SunmaoPlugin> Plugin for SunmaoClapWrapper<P> {
             active_tail: 0,
             view_handle: None,
             suggested_title: None,
+            transient_parent: None,
             gui_floating: false,
             gui_api: None,
             host,
@@ -1161,6 +1163,8 @@ impl<P: SunmaoPlugin> GuiHandler for SunmaoClapWrapper<P> {
         // The window itself is opened later: embedded editors wait for
         // `set_parent`, floating ones for `show`. This call only records the
         // mode the host chose, which is what CLAP's create/show split is for.
+        self.suggested_title = None;
+        self.transient_parent = None;
         self.gui_floating = is_floating;
         self.gui_api = Some(api);
         true
@@ -1170,6 +1174,8 @@ impl<P: SunmaoPlugin> GuiHandler for SunmaoClapWrapper<P> {
         self.view_handle = None;
         self.gui_api = None;
         self.gui_floating = false;
+        self.transient_parent = None;
+        self.suggested_title = None;
     }
 
     fn gui_get_size(&self) -> Option<(u32, u32)> {
@@ -1191,13 +1197,35 @@ impl<P: SunmaoPlugin> GuiHandler for SunmaoClapWrapper<P> {
         }
     }
 
-    /// Remember the title the host suggests.
-    ///
-    /// It has nowhere to be shown yet — SunMao declines floating editors, and
-    /// an embedded one has no title bar of its own — but recording it means a
-    /// floating window can adopt it the moment one exists, and it makes the
-    /// host's call observable instead of vanishing.
+    fn gui_set_transient_for_api(&mut self, api: GuiApi, window: *mut c_void) -> bool {
+        if !self.gui_floating || self.gui_api.is_none() {
+            return false;
+        }
+        let Some(parent) = ParentWindow::from_clap(window, api.as_cstr().trim_end_matches('\0'))
+        else {
+            return false;
+        };
+        let accepted = if let Some(handle) = self.view_handle.as_mut() {
+            handle.handle.set_transient(parent)
+        } else {
+            self.view
+                .as_ref()
+                .is_some_and(|view| view.supports_transient(parent))
+        };
+        if accepted {
+            self.transient_parent = Some(parent);
+        }
+        accepted
+    }
+
+    /// Apply immediately to an open floating editor, or pass to its creation.
     fn gui_suggest_title(&mut self, title: &str) {
+        if !self.gui_floating || self.gui_api.is_none() || title.contains('\0') {
+            return;
+        }
+        if let Some(handle) = self.view_handle.as_mut() {
+            handle.handle.set_title(title);
+        }
         self.suggested_title = Some(title.to_string());
     }
 
@@ -1307,7 +1335,13 @@ impl<P: SunmaoPlugin> GuiHandler for SunmaoClapWrapper<P> {
                 descriptors: self.param_descriptors.clone(),
             });
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                view.open_floating(context)
+                view.open_floating_with_options(
+                    context,
+                    FloatingViewOptions {
+                        transient_parent: self.transient_parent,
+                        title: self.suggested_title.as_deref(),
+                    },
+                )
             })) {
                 Ok(Some(handle)) => {
                     self.view_handle = Some(MainThreadViewHandle { handle });
@@ -3861,13 +3895,10 @@ mod tests {
     /// runner's `gui_scale_negotiation` suite. CLAP is the only side that has to
     /// narrow, because it carries the factor as `f64` where VST3 uses `f32`.
 
-    /// `suggest_title` used to be a stub in `clap_rs`, so a host's title was
-    /// silently dropped. It now reaches the plugin.
-    ///
-    /// The view used here does not support floating, so this also pins the
-    /// declining half of the contract: refused by the query *and* by create.
+    /// Floating-only title suggestions must not affect an embedded editor.
+    /// Unsupported floating mode is refused by both query and create.
     #[test]
-    fn a_suggested_title_reaches_the_plugin_and_a_non_floating_view_declines() {
+    fn a_non_floating_view_declines_floating_and_ignores_title_suggestions() {
         let mut host_state = NotificationHostState::default();
         let raw_host = notification_host(&mut host_state);
         let host = unsafe { HostHandle::from_raw(&raw_host) };
@@ -3875,7 +3906,7 @@ mod tests {
 
         assert_eq!(wrapper.suggested_title, None);
         wrapper.gui_suggest_title("Track 3 — SunMao");
-        assert_eq!(wrapper.suggested_title.as_deref(), Some("Track 3 — SunMao"));
+        assert_eq!(wrapper.suggested_title, None);
 
         // Refused consistently by both the query and the create call — a host
         // must not be told yes and then handed a failure.
@@ -3886,6 +3917,117 @@ mod tests {
             );
             assert!(!wrapper.gui_create(api, true), "{api:?} opened floating");
         }
+    }
+
+    #[test]
+    fn floating_owner_and_title_survive_show_but_not_destroy() {
+        use std::sync::Mutex;
+        type State = Arc<Mutex<(Vec<usize>, Vec<String>, usize)>>;
+        struct View(State);
+        fn owner_id(parent: ParentWindow) -> usize {
+            match parent {
+                ParentWindow::AppKit(p) | ParentWindow::Win32(p) => p as usize,
+                ParentWindow::X11(id) => id as usize,
+            }
+        }
+        fn set_owner(state: &mut State, parent: ParentWindow) -> bool {
+            let id = owner_id(parent);
+            if id == 3 {
+                return false;
+            }
+            state.lock().unwrap().0.push(id);
+            true
+        }
+        fn set_title(state: &mut State, title: &str) -> bool {
+            state.lock().unwrap().1.push(title.to_owned());
+            true
+        }
+        impl SunmaoView for View {
+            fn size(&self) -> (u32, u32) {
+                (100, 100)
+            }
+            fn open(&self, _: ParentWindow, _: Arc<dyn ViewContext>) -> Option<ViewHandle> {
+                None
+            }
+            fn supports_floating(&self) -> bool {
+                true
+            }
+            fn supports_transient(&self, _: ParentWindow) -> bool {
+                true
+            }
+            fn open_floating_with_options(
+                &self,
+                _: Arc<dyn ViewContext>,
+                options: FloatingViewOptions<'_>,
+            ) -> Option<ViewHandle> {
+                let mut state = self.0.clone();
+                state.lock().unwrap().2 += 1;
+                if let Some(parent) = options.transient_parent {
+                    if !set_owner(&mut state, parent) {
+                        return None;
+                    }
+                }
+                if let Some(title) = options.title {
+                    set_title(&mut state, title);
+                }
+                Some(
+                    ViewHandle::builder(state)
+                        .transient(set_owner)
+                        .titled(set_title)
+                        .build(),
+                )
+            }
+        }
+        let mut host_state = NotificationHostState::default();
+        let raw_host = notification_host(&mut host_state);
+        let host = unsafe { HostHandle::from_raw(&raw_host) };
+        let mut wrapper = <SunmaoClapWrapper<FloatingViewPlugin> as Plugin>::new(host);
+        let state: State = Arc::new(Mutex::new((vec![], vec![], 0)));
+        wrapper.view = Some(Box::new(View(state.clone())));
+        let (api, _) = wrapper.preferred_api().unwrap();
+        let owner = 1usize as *mut c_void;
+        assert!(!wrapper.gui_set_transient_for_api(api, owner));
+        // Floating create API must not be used to decode the owner's API.
+        assert!(wrapper.gui_create(GuiApi::Wayland, true));
+        assert!(!wrapper.gui_set_transient_for_api(GuiApi::Wayland, owner));
+        assert!(!wrapper.gui_set_transient_for_api(api, std::ptr::null_mut()));
+        assert!(wrapper.gui_set_transient_for_api(api, owner));
+        wrapper.gui_suggest_title("Track 3 — Synth");
+        assert_eq!(
+            state.lock().unwrap().2,
+            0,
+            "set_transient must not show a window"
+        );
+        assert!(wrapper.gui_show());
+        assert!(wrapper.gui_show());
+        assert_eq!(
+            *state.lock().unwrap(),
+            (vec![1], vec!["Track 3 — Synth".to_owned()], 1)
+        );
+        assert!(wrapper.gui_set_transient_for_api(api, 2usize as *mut c_void));
+        assert!(!wrapper.gui_set_transient_for_api(api, 3usize as *mut c_void));
+        assert_eq!(owner_id(wrapper.transient_parent.unwrap()), 2);
+        wrapper.gui_suggest_title("Track 4");
+        assert_eq!(state.lock().unwrap().0, vec![1, 2]);
+        assert_eq!(state.lock().unwrap().1.last().unwrap(), "Track 4");
+        wrapper.gui_destroy();
+        assert!(wrapper.transient_parent.is_none());
+        assert!(wrapper.suggested_title.is_none());
+        assert!(wrapper.gui_create(api, true));
+        assert!(wrapper.gui_show());
+        assert_eq!(
+            *state.lock().unwrap(),
+            (
+                vec![1, 2],
+                vec!["Track 3 — Synth".to_owned(), "Track 4".to_owned()],
+                2
+            )
+        );
+        wrapper.gui_destroy();
+        assert!(wrapper.gui_create(api, false));
+        assert!(!wrapper.gui_set_transient_for_api(api, owner));
+        wrapper.gui_suggest_title("Must not reach an embedded editor");
+        assert!(wrapper.suggested_title.is_none());
     }
 
     /// A view that *can* float takes the whole CLAP floating path: query,

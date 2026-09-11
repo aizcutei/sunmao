@@ -108,7 +108,58 @@ pub struct WindowHandle {
     is_open: Rc<Cell<bool>>,
 }
 
+unsafe fn valid_owner(window: HWND, parent: crate::TransientParent) -> Option<HWND> {
+    use winapi::um::winuser::{GetWindow, IsWindow, GWL_STYLE, GW_OWNER};
+    let crate::TransientParent::Win32(owner) = parent else {
+        return None;
+    };
+    let owner = owner as HWND;
+    if IsWindow(owner) == 0 || GetWindowLongPtrW(owner, GWL_STYLE) & WS_CHILD as isize != 0 {
+        return None;
+    }
+    let mut ancestor = owner;
+    while !ancestor.is_null() {
+        if ancestor == window {
+            return None;
+        }
+        ancestor = GetWindow(ancestor, GW_OWNER);
+    }
+    Some(owner)
+}
+
 impl WindowHandle {
+    pub fn set_transient(&mut self, parent: crate::TransientParent) -> bool {
+        use winapi::um::{
+            errhandlingapi::{GetLastError, SetLastError},
+            winuser::{GWLP_HWNDPARENT, GWL_STYLE},
+        };
+        let Some(hwnd) = self.hwnd else {
+            return false;
+        };
+        unsafe {
+            if GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CHILD as isize != 0 {
+                return false;
+            }
+            let Some(owner) = valid_owner(hwnd, parent) else {
+                return false;
+            };
+            SetLastError(0);
+            SetWindowLongPtrW(hwnd, GWLP_HWNDPARENT, owner as isize) != 0 || GetLastError() == 0
+        }
+    }
+
+    pub fn set_title(&mut self, title: &str) -> bool {
+        use winapi::um::winuser::{SetWindowTextW, GWL_STYLE};
+        let Some(hwnd) = self.hwnd else {
+            return false;
+        };
+        let title: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
+        unsafe {
+            GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CHILD as isize == 0
+                && SetWindowTextW(hwnd, title.as_ptr()) != 0
+        }
+    }
+
     pub fn close(&mut self) {
         if let Some(hwnd) = self.hwnd.take() {
             unsafe {
@@ -848,7 +899,19 @@ impl Window<'_> {
         // `parented = false` gives the top-level frame (caption, sizebox,
         // minimize/maximize) that `open_blocking` uses; the only thing we skip
         // is the pump it runs afterwards.
-        let (window_handle, _) = Self::open(false, null_mut(), options, build);
+        let owner = match options.transient_parent {
+            Some(parent) => match unsafe { valid_owner(null_mut(), parent) } {
+                Some(owner) => owner,
+                None => {
+                    return WindowHandle {
+                        hwnd: None,
+                        is_open: Rc::new(Cell::new(false)),
+                    }
+                }
+            },
+            None => null_mut(),
+        };
+        let (window_handle, _) = Self::open(false, owner, options, build);
         window_handle
     }
 

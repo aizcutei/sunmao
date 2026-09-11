@@ -67,7 +67,7 @@ pub(super) struct EventLoop {
     accesskit: Option<(accesskit_unix::Adapter, PublishedTree)>,
     window: WindowInner,
     parent_handle: Option<ParentHandle>,
-    resize_receiver: Option<Receiver<Size>>,
+    resize_receiver: Option<Receiver<super::window::WindowCommand>>,
     blocking_stop_requested: Option<Arc<AtomicBool>>,
 
     new_physical_size: Option<PhySize>,
@@ -104,7 +104,7 @@ impl EventLoop {
         keyboard: Keyboard,
         handler: impl WindowHandler + 'static,
         parent_handle: Option<ParentHandle>,
-        resize_receiver: Option<Receiver<Size>>,
+        resize_receiver: Option<Receiver<super::window::WindowCommand>>,
         blocking_stop_requested: Option<Arc<AtomicBool>>,
     ) -> Self {
         Self {
@@ -172,15 +172,22 @@ impl EventLoop {
                 break;
             }
 
-            if let Some(size) = self
-                .resize_receiver
-                .as_ref()
-                .and_then(|receiver| receiver.try_iter().last())
-            {
-                Window {
-                    inner: &self.window,
+            if let Some(receiver) = &self.resize_receiver {
+                for command in receiver.try_iter() {
+                    use super::window::WindowCommand;
+                    match command {
+                        WindowCommand::Resize(size) => Window {
+                            inner: &self.window,
+                        }
+                        .resize(size),
+                        WindowCommand::Transient(parent, reply) => {
+                            let _ = reply.send(self.window.set_transient(parent));
+                        }
+                        WindowCommand::Title(title, reply) => {
+                            let _ = reply.send(self.window.set_title(&title));
+                        }
+                    }
                 }
-                .resize(size);
             }
 
             // We'll try to keep a consistent frame pace. If the last frame couldn't be processed in

@@ -148,7 +148,54 @@ pub fn request_event_loop_stop() {
     }
 }
 
+// AppKit calls are confined to the host main thread. Walk the owner chain
+// before modifying it so rejection preserves the previous association.
+unsafe fn set_native_transient(window: id, parent: crate::TransientParent) -> bool {
+    let crate::TransientParent::AppKit(view) = parent else {
+        return false;
+    };
+    if view == 0 {
+        return false;
+    }
+    let owner: id = msg_send![view as id, window];
+    if owner == nil {
+        return false;
+    }
+    let mut ancestor = owner;
+    while ancestor != nil {
+        if ancestor == window {
+            return false;
+        }
+        ancestor = msg_send![ancestor, parentWindow];
+    }
+    let old: id = msg_send![window, parentWindow];
+    if old != nil {
+        let (): () = msg_send![old, removeChildWindow:window];
+    }
+    let (): () = msg_send![owner, addChildWindow:window ordered:1isize];
+    true
+}
+
 impl WindowHandle {
+    pub fn set_transient(&mut self, parent: crate::TransientParent) -> bool {
+        let Some(window) = self.state.window_inner.ns_window.get() else {
+            return false;
+        };
+        unsafe { set_native_transient(window, parent) }
+    }
+
+    pub fn set_title(&mut self, title: &str) -> bool {
+        let Some(window) = self.state.window_inner.ns_window.get() else {
+            return false;
+        };
+        unsafe {
+            let title = NSString::alloc(nil).init_str(title);
+            window.setTitle_(title);
+            let (): () = msg_send![title, release];
+        }
+        true
+    }
+
     pub fn close(&mut self) {
         self.state.window_inner.close();
     }
@@ -297,6 +344,10 @@ impl WindowInner {
 
         // Close the window if in non-parented mode.
         if let Some(ns_window) = self.ns_window.take() {
+            let parent: id = msg_send![ns_window, parentWindow];
+            if parent != nil {
+                let (): () = msg_send![parent, removeChildWindow:ns_window];
+            }
             ns_window.close();
         }
 
@@ -469,11 +520,6 @@ impl<'a> Window<'a> {
             let title = NSString::alloc(nil).init_str(&options.title).autorelease();
             ns_window.setTitle_(title);
 
-            // Order front without stealing focus from the host: a plugin
-            // editor appearing must not yank the user out of what they were
-            // doing. `makeKeyAndOrderFront_` would.
-            ns_window.orderFront_(nil);
-
             ns_window
         };
 
@@ -520,9 +566,21 @@ impl<'a> Window<'a> {
             }
         }
 
-        let window_handle = Self::finish(window_state, build);
+        let mut window_handle = Self::finish(window_state, build);
         initialization_guard.disarm();
-
+        if window_handle.is_open() {
+            if options
+                .transient_parent
+                .is_some_and(|parent| !window_handle.set_transient(parent))
+            {
+                window_handle.close();
+            } else {
+                // Apply ownership and title before making the editor visible.
+                unsafe {
+                    ns_window.orderFront_(nil);
+                }
+            }
+        }
         unsafe {
             let () = msg_send![pool, drain];
         }

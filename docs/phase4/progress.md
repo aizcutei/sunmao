@@ -2039,3 +2039,136 @@
 - Change: 新增 MeterSource 公开适配、peak/RMS 输出显示和标识、prelude/doc-test、数值属性/零分配端到端证据；CI Phase 4 步骤明确运行 facade meter 测试和 doc-test。一并保存 M3 Windows 最终验收与 M4 重新打开缺口的审计记录。
 - Result: 完整回归 135 套件/668 passed、0 failed、4 ignored；打包 32 套件/640 断言通过。metadata/fmt/diff gates 通过。未触原生平台实现或导出契约，无 Windows target/新增 AU 符号检查需求。上一轮为已验证等待，本轮取得完整本地 gate 最终成功证据。
 - Unresolved: 提交/push 后按同提交三平台 hosted 实际测试日志和三份产物校验验收 MeterSource；CLAP transient 与 M5 总审计仍待完成，Phase 4 不标记完成。
+
+### 2026-09-10 — 电平表提交已推送，hosted CI 排队
+
+- Command/platform: commit 89b0d1859f3f3ffc9c2313a01db7402ef337e39d；HTTPS push session 10989 exit 0；GitHub 状态 session 65030 exit 0。
+- Change: 提交 Display DSP peak and RMS levels in the widgets editor，正常推送到 phase4/gui-component-library。
+- Result: GitHub 创建 run 34451013385，head_sha 与提交一致，当前 queued；https://github.com/aizcutei/sunmao/actions/runs/34451013385。本地完整回归 135 套件/668 passed/4 ignored 与打包 32 套件/640 断言全部通过。
+- Unresolved: 继续原 run 34451013385，核对三平台实际 meter/property/doc-test/e2e 日志与完整 jobs 成功，再下载校验三份产物；MeterSource 未正式验收，transient 与 M5 总审计仍待完成。
+
+### 2026-09-10 — 电平表 hosted 三平台已启动
+
+- Command/platform: 间隔 40 秒轮询原 run 34451013385 / 89b0d18，API session 23370/95683 均 exit 0。
+- Change: 仅监控记录，没有重启 CI 或修改实现。
+- Result: 三平台 jobs 均 in_progress；Windows 102786526472 与 macOS 102786526479 正在 Test format adapters and host，Linux 102786526337 正在安装 GUI 依赖，无失败。新增 Phase 4 电平测试尚未执行。上一轮为提交/push 进展，本轮为已验证等待。
+- Unresolved: 继续原 run 34451013385，等待同提交三平台完整成功，核实 meter/property/doc-test/e2e 实际日志并校验三份产物；transient 与 M5 最终审计仍未完成。
+
+### 2026-09-10 — 电平表 hosted macOS 进入 renderer 契约检查
+
+- Command/platform: 原 run 34451013385 / 89b0d18；状态查询 session 85221 经原 handle 继续等待后 exit 0。
+- Change: 仅监控记录，没有重启 CI 或修改实现。
+- Result: macOS 已推进至 Check facade renderer contracts independently；Windows 在 Test format adapters and host；Linux 在安装 GUI 依赖。三平台 jobs 仍 in_progress，无失败，Phase 4 电平步骤未执行。上一轮与本轮均为已验证等待。
+- Unresolved: 继续原 run 34451013385，收齐三平台完整 jobs、meter/property/doc-test/e2e 实际日志与产物校验；transient 与 M5 总审计仍待完成。
+
+### 2026-09-10 — macOS 开始执行电平表 hosted 验收
+
+- Command/platform: 间隔 40 秒轮询原 run 34451013385 / 89b0d18，API session 48231/18969 均 exit 0。
+- Change: 仅监控记录，没有重启 CI 或修改实现。
+- Result: macOS 已进入 Test Phase 4 acceptance fixtures；Windows 进入 Check facade renderer contracts independently；Linux 仍在安装 GUI 依赖。三平台完整 jobs 均 in_progress，无失败。上一轮与本轮均为已验证等待，尚无电平表步骤最终成功证据。
+- Unresolved: 继续原 run 34451013385，取得三平台完整 jobs 成功、实际 meter/property/doc-test/e2e 日志及产物校验后正式验收；transient 与 M5 总审计仍待完成。
+
+### 2026-09-10 — macOS 电平表 hosted 步骤明确成功
+
+- Command/platform: 原 run 34451013385 / 89b0d18；API session 98754/47062 exit 0。audit-steps session 26854 exit 1 是因 helper 要求 job 已 success、当前仍 in_progress 的前置断言，不是 CI 失败。
+- Change: 本地状态 helper 加入 Phase 4 步骤的明确结果输出，未修改仓库实现或重启 CI。
+- Result: macOS Test Phase 4 acceptance fixtures completed success；原生 macOS 键盘亦 success，目前在 baseview feature combinations。Windows 进入 Phase 2 fixtures，Linux 在安装依赖，Phase 4 均 pending；三平台 jobs in_progress，无失败。上一轮为已验证等待，本轮取得 macOS 电平表步骤成功证据。
+- Unresolved: 继续原 run 34451013385，待三平台完整成功后下载实际 meter/property/doc-test/e2e 日志及三份产物校验；仅步骤成功不构成完整验收。transient 与 M5 总审计仍待完成。
+
+### 2026-09-10 — Windows 电平表 hosted 步骤成功
+
+- Command/platform: 间隔 40 秒轮询原 run 34451013385 / 89b0d18，API session 67968/45392 均 exit 0。
+- Change: 仅监控记录，没有重启 CI 或修改实现。
+- Result: Windows 与 macOS Test Phase 4 acceptance fixtures 均 completed success；Windows 当前原生国际键盘 in_progress，macOS 已进入 Package and exercise native GUI backends；Linux 仍在安装 GUI 依赖，Phase 4 pending。三平台完整 jobs 仍 in_progress，无失败。上一轮取得 macOS 步骤成功，本轮新增 Windows 步骤成功证据。
+- Unresolved: 继续原 run 34451013385，收齐 Linux 电平步骤和三平台完整成功，下载实际 meter/property/doc-test/e2e 日志及三份产物校验；transient 与 M5 最终审计未完成。
+
+### 2026-09-10 — 电平表 hosted Windows 推进到示例构建
+
+- Command/platform: 间隔 40 秒轮询原 run 34451013385 / 89b0d18，API session 53310/93335 均 exit 0。
+- Change: 仅监控记录，没有重启 CI 或修改实现。
+- Result: Windows 原生键盘 success，实时分配矩阵后进入 Build cross-platform examples and tools；macOS 在原生 GUI 打包；Linux 在安装 GUI 依赖。Windows/macOS 电平步骤既有 success，Linux pending；三平台完整 jobs 均 in_progress，无失败。上一轮有 Windows 步骤成功进展，本轮为已验证等待。
+- Unresolved: 继续原 run 34451013385，收齐三平台完整成功、实际电平测试日志及三份产物校验；transient 与 M5 总审计仍未完成。
+
+### 2026-09-10 — Linux 依赖安装完成，开始 hosted 测试
+
+- Command/platform: 间隔 40 秒轮询原 run 34451013385 / 89b0d18，API session 16657/55671 均 exit 0。
+- Change: 仅监控记录，没有重启 CI 或修改实现。
+- Result: Linux 已从 GUI 依赖安装推进至 Test format adapters and host；Windows/macOS 均在 Package and exercise native GUI backends，电平步骤既有 success。Linux 电平 pending，三平台完整 jobs 均 in_progress，无失败。上一轮与本轮均为已验证等待。
+- Unresolved: 继续原 run 34451013385，等待三平台完整成功并下载实际电平测试日志与校验三份产物；transient 与 M5 总审计仍未完成。
+
+### 2026-09-10 — macOS 完整 hosted 成功与电平实际日志确认
+
+- Command/platform: run 34451013385 / 89b0d1859f3f3ffc9c2313a01db7402ef337e39d；状态 session 89342 exit 0；macOS 日志下载 session 63598 exit 0。
+- Change: 下载并核实已完成 macOS 原始日志，未重启 CI 或修改实现。
+- Result: macOS job 102786526479 completed success。/tmp/sunmao-run34451013385-macos.log 第 2710/2711 行为 meter 发布/reset 与数值属性测试 ok，第 2737 行为 MeterSource doc-test ok，第 2761/2766 行为 audio 零分配与 output_peak_and_rms_reach_the_gui_without_allocating ok，accessibility feature 下第 3031/3036 行亦通过。Windows 仍在 GUI 打包，Linux 已进入 renderer 契约检查。上一轮为已验证等待，本轮取得完整 macOS hosted 与实际电平日志新证据。
+- Unresolved: 继续原 run 34451013385，收齐 Windows/Linux 完整成功与实际日志，再校验三份产物；MeterSource 尚未正式验收，transient 与 M5 总审计仍未完成。
+
+### 2026-09-10 — Windows 完整成功与实际日志确认，Linux 电平步骤通过
+
+- Command/platform: 原 run 34451013385 / 89b0d18；状态 session 67441/91293 exit 0；Windows 日志下载 session 15828 exit 0。
+- Change: 下载核实 Windows 原始日志，未重启 CI 或改动实现。
+- Result: Windows job 102786526472 completed success；Linux Test Phase 4 acceptance fixtures completed success，目前进入 headless Wayland compositor probe。Windows 日志 /tmp/sunmao-run34451013385-windows.log 第 2534/2535 行 meter 发布/reset 与数值属性 ok，第 2561 行 MeterSource doc-test ok，第 2583/2588 行 audio 零分配及电平 e2e ok，accessibility 下第 2862/2867 行同样通过。macOS 完整成功与实际日志既有确认。上一轮取得 macOS 完整证据，本轮取得 Windows 完整及 Linux 专项成功证据。
+- Unresolved: 继续原 run 34451013385 等 Linux 完整成功，下载实际日志并完成同提交三份产物校验后正式验收 MeterSource；transient 与 M5 总审计仍未完成。
+
+### 2026-09-10 — macOS 电平表产物校验通过
+
+- Command/platform: 原 run 34451013385 / 89b0d18；macOS 产物 session 93789 exit 0；Windows 产物原 session 41913 轮询确认仍活跃（helper 同时传两 flags 仅选择 Windows，macOS 因此单独下载，未重复写同一文件）。
+- Change: 下载校验已成功平台产物，未重启 CI 或修改实现。
+- Result: /tmp/sunmao-mac-evidence/34451013385-phase1-macOS-ARM64.zip，53678373 bytes，SHA-256 88d7daf3a3aa16678a78acc19ff724c4679a67d3ee1324ce5ee29e6eb3835b09，与 API digest 一致且 ZIP CRC 通过。Linux Wayland 全部专项及 X11 原生国际键盘 success，已进入示例/工具构建，完整 job 仍 in_progress。Windows/macOS 完整 job 既有 success。上一轮取得 Windows 完整日志，本轮取得 macOS 产物校验证据。
+- Unresolved: 继续 Windows 下载 session 41913；继续原 run 34451013385 等 Linux 完整成功并下载实际电平日志/产物；全部证据齐备后验收 MeterSource，transient/M5 总审计尚未完成。
+
+### 2026-09-10 — Windows 电平表产物校验通过
+
+- Command/platform: 原 Windows 下载 session 41913 exit 0；原 run 34451013385 / 89b0d18 状态 session 71602/71668 均 exit 0。
+- Change: 收齐 Windows 产物校验证据，未重启 CI 或修改实现。
+- Result: /tmp/sunmao-mac-evidence/34451013385-phase1-Windows-X64.zip，78349512 bytes，SHA-256 2ed87e82f43da08d5417d9b7b3cfc22fb4902ca882dc14960dfc2457458be9d9，与 API digest 一致且 ZIP CRC 通过；macOS 产物既有通过。Linux 正在 Package and exercise native GUI backends，电平及 Wayland/X11 步骤 success，完整 job in_progress，无失败。上一轮取得 macOS 产物证据，本轮取得 Windows 产物校验证据。
+- Unresolved: 继续原 run 34451013385 等 Linux 完整成功，下载实际电平日志并校验 Linux 产物；transient 与 M5 总审计仍未完成。
+
+### 2026-09-10 — Linux 打包通过，产物上传进行中
+
+- Command/platform: 原 run 34451013385 / 89b0d18；状态 session 79183/83568 exit 0；session 74354 查询确认 Linux 仍上传，audit-steps 因要求 job success 提前退出 1，并非 CI 失败，未下载尚不可用的 Linux 日志。
+- Change: 仅监控记录，未重启 CI 或修改实现。
+- Result: Linux 已通过 repository packaging helper，进入 Upload packaged Phase 1 artifacts，完整 job 仍 in_progress；Windows/macOS 完整 jobs、原始电平日志及两份产物校验既有通过。上一轮取得 Windows 产物证据，本轮为已验证等待。
+- Unresolved: 继续原 run 34451013385 等上传/完整 job 完成后再执行 audit-steps 与 Linux 日志下载，随后下载校验 Linux 产物；transient 与 M5 总审计仍未完成。
+
+### 2026-09-10 — 电平表三平台完整 CI 与实际日志全部通过
+
+- Command/platform: run 34451013385 / 89b0d1859f3f3ffc9c2313a01db7402ef337e39d；状态 session 18532 exit 0；步骤审计及 Linux 日志 session 73664 exit 0；Linux 产物 session 99755 已启动并轮询确认活跃。
+- Change: 审计三平台全部步骤、下载 Linux 原始日志并启动最后一份产物下载；未重启 CI 或改动实现。
+- Result: 同提交三平台完整 jobs completed success，各 34 steps，0 non-success/non-skipped。Linux 原始日志 /tmp/sunmao-run34451013385-linux.log 第 4490/4491 行 meter 发布/reset 与属性测试 ok，第 4517 行 MeterSource doc-test ok，第 4540/4545 行 audio 零分配与电平 e2e ok，accessibility 下第 4920/4925 行亦通过。Windows/macOS 实际日志和产物校验既有通过。Linux ZIP 总 996776590 bytes，经 session 99755 下载中。上一轮为已验证等待，本轮取得完整三平台与全部实际日志新证据。
+- Unresolved: 继续原下载 session 99755，完成 Linux SHA-256/ZIP CRC 后正式验收 MeterSource；transient 与 M5 总审计仍未完成，Phase 4 不标记完成。
+
+### 2026-09-10 — Linux 电平表产物下载推进
+
+- Command/platform: 间隔 40 秒轮询原下载 session 99755，两次均确认仍活跃；HEAD 89b0d18。
+- Change: 仅监控记录，未重启下载或修改实现。
+- Result: Linux ZIP 已从 168148992 增长到 269271040 / 996776590 bytes；三平台完整 CI 与实际电平日志既有通过，Windows/macOS 产物 SHA-256/CRC 已通过。上一轮为完整 CI/日志证据进展，本轮为已验证等待。
+- Unresolved: 继续原 session 99755 完成 Linux SHA-256/ZIP CRC 后正式验收 MeterSource；transient 与 M5 总审计仍未完成。
+
+### 2026-09-10 — Linux 电平表产物下载接近一半
+
+- Command/platform: 间隔 40 秒轮询原 session 99755，两次均确认仍活跃；HEAD 89b0d18。
+- Change: 仅监控记录，未重启下载或修改实现。
+- Result: Linux ZIP 已从 393117696 增长到 482820096 / 996776590 bytes；三平台完整 CI/实际日志与 Windows/macOS 产物校验既有通过，Linux 完整校验尚未返回。上一轮与本轮均为已验证等待。
+- Unresolved: 继续原 session 99755 完成 Linux SHA-256/ZIP CRC 后正式验收 MeterSource；transient 与 M5 总审计仍未完成。
+
+### 2026-09-10 — MeterSource 正式三平台验收完成
+
+- Command/platform: 原 Linux 下载 session 99755 exit 0；run 34451013385 / 89b0d1859f3f3ffc9c2313a01db7402ef337e39d 三平台完整 success，每平台 34 步零失败/取消，三平台实际测试日志既有核实。
+- Change: 更新 status.md/audit.md，正式关闭 Phase 3 MeterHandle 到 GUI peak/RMS 显示缺口；M4 保留 transient 未完成项。
+- Result: Linux ZIP /tmp/sunmao-run34451013385-phase1-Linux-X64.zip，996776590 bytes，SHA-256 7c53f104535a822f98fb23d96b4b32845a983ac7c44bcc18b3a81f97dd1f375c，与 API digest 一致且 ZIP CRC 通过。加上 Windows 78349512 bytes 与 macOS 53678373 bytes 的既有 SHA-256/CRC，三份产物证据齐备。MeterSource 数值属性、公开 doc-test、真实 plugin.process 到显示的零分配/reset 断言已三平台实际执行通过。上一轮为已验证等待，本轮取得最终产物证据并正式验收 meter。
+- Unresolved: 下一瓶颈为 CLAP gui_set_transient，自上游规范到 wrapper/core/native 窗口贯通并补宿主/原生验证；随后 M5 API/兼容/文档总审计及最终同提交三平台验收。Phase 4 仍未完成。
+
+### 2026-09-10 — transient 上游契约审计与格式入口补充
+
+- Command/platform: 核对上游 free-audio/clap/include/clap/ext/gui.h（下载 /tmp/sunmao-clap-upstream-gui.h）第 19–31/183–198 行；检查 clap_rs、backend_clap、core ViewHandle/SunmaoView、baseview 三平台 WindowHandle 与 facade open_with。
+- Change: clap_rs 新增带默认兼容实现的 gui_set_transient_for_api，格式入口解析 owner 自己的 api/union 字段并保留类型，拒绝空句柄、未知 API 与无标准 cross-client parent handle 的 Wayland；新增类型/空输入单测。定向测试 session 27727 exit 0（2 passed），日志 /tmp/sunmao-transient-clap.log。
+- Result: 审计确认 show 前应先设置 transient/title；现有 wrapper 丢掉 owner api，不能据 gui_create 的 API（浮动允许 null）推断 owner 类型。另发现 suggest_title 仅保存字符串，未进入原生窗口，既有测试只断言字段保存，已在 audit.md 重新打开。fmt 通过，尚未提交。
+- Unresolved: 继续 core 浮动创建参数/存活 handle 操作、backend 生命周期、baseview Win32 owner/macOS child window/X11 WM_TRANSIENT_FOR 与标题接线，明确 Wayland/VST3 边界并补原生/宿主证据；全部本地 gates 与独立三平台验收前不标记完成。
+
+### 2026-09-10 — 浮动窗口创建参数与 CLAP 生命周期接线
+
+- Command/platform: core/backend 定向回归 session 75232（/tmp/sunmao-transient-contract.log）仍活跃；生命周期 session 88284 exit 0（1 passed）；属性测试初版 session 36093 因测试 String 移动后复用编译失败，改为借用比较后 session 16366 重跑（/tmp/sunmao-transient-properties.log）。
+- Change: 新增公开 FloatingViewOptions（owner/title，core/facade prelude 与 doc-test），SunmaoView 默认兼容 supports_transient/open_floating_with_options，ViewHandle/Builder 增加 transient/title 操作。CLAP 保留 owner 自身 API，拒绝非本平台/空/非浮动调用；show 传入参数，打开后路由更新，拒绝 owner 更新保留前值，destroy/create 清除旧 owner/title。新增完整生命周期测试与标题 NUL 不入原生回调属性测试。
+- Result: floating_owner_and_title_survive_show_but_not_destroy 实际通过，覆盖 show 前不建窗、不同 create/owner API、重复 show、打开后更新/拒绝、destroy/recreate 及 embedded 拒绝。既有 backend 38 测试与 core 42 测试通过，完整 doc-tests 尚在原 session 75232 中。fmt 通过，未提交；原生 adapters 尚未实现，默认如实不支持 transient。
+- Unresolved: 继续 session 75232/16366 收齐定向结果，再贯通 baseview/facade 原生 owner/title（必须创建时生效并支持打开后更新），补 native/host 实际断言与语义降级。完整本地 gates、Windows target 与同提交三平台 hosted 验收尚待执行，Phase 4 未完成。

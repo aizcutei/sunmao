@@ -125,6 +125,16 @@ pub trait GuiHandler {
         false
     }
 
+    /// Set a floating window's owner using the API supplied with that owner.
+    ///
+    /// This can differ from the API passed to `gui_create` (which may be null
+    /// for floating windows). New implementations should override this method
+    /// to reject foreign window types before interpreting the native handle.
+    /// The default preserves existing implementations of `gui_set_transient`.
+    fn gui_set_transient_for_api(&mut self, _api: GuiApi, window: *mut c_void) -> bool {
+        self.gui_set_transient(window)
+    }
+
     /// The window title the host suggests for a floating editor.
     ///
     /// Hosts call this so a floating window can read "Track 3 — SunMao Reverb"
@@ -353,20 +363,38 @@ pub(crate) unsafe extern "C" fn gui_set_parent<P: Plugin + GuiHandler>(
     })
 }
 
+/// Decode only window handles whose representation is defined by CLAP.
+/// Wayland has no standard cross-client parent handle in `clap_window_t`.
+unsafe fn transient_window(window: *const clap_window_t) -> Option<(GuiApi, *mut c_void)> {
+    let window = unsafe { window.as_ref() }?;
+    if window.api.is_null() {
+        return None;
+    }
+    let api = GuiApi::from_cstr(unsafe { CStr::from_ptr(window.api) })?;
+    let handle = match api {
+        GuiApi::Cocoa => unsafe { window.handle.cocoa },
+        GuiApi::Win32 => unsafe { window.handle.win32 },
+        GuiApi::X11 => unsafe { window.handle.x11 as usize as *mut c_void },
+        GuiApi::Wayland => return None,
+    };
+    (!handle.is_null()).then_some((api, handle))
+}
+
 pub(crate) unsafe extern "C" fn gui_set_transient<P: Plugin + GuiHandler>(
     plugin: *const clap_plugin_t,
     window: *const clap_window_t,
 ) -> bool {
-    if window.is_null() {
+    let Some((api, handle)) = (unsafe { transient_window(window) }) else {
         return false;
-    }
+    };
     let Some(instance_ptr) = (unsafe { instance_ptr::<P>(plugin) }) else {
         return false;
     };
     let instance = unsafe { &*instance_ptr };
-    let handle = unsafe { (*window).handle.ptr };
     ffi_guard(false, || unsafe {
-        instance.controller_mut().gui_set_transient(handle)
+        instance
+            .controller_mut()
+            .gui_set_transient_for_api(api, handle)
     })
 }
 
@@ -431,5 +459,61 @@ pub fn create_gui_ext<P: Plugin + GuiHandler>() -> clap_plugin_gui_t {
         suggest_title: Some(gui_suggest_title::<P>),
         show: Some(gui_show::<P>),
         hide: Some(gui_hide::<P>),
+    }
+}
+
+#[cfg(test)]
+mod transient_tests {
+    use super::*;
+    use clap_sys::ext::gui::clap_window_handle_u;
+
+    #[test]
+    fn transient_owner_keeps_its_own_api_and_native_handle() {
+        for (name, api) in [
+            (c"cocoa", GuiApi::Cocoa),
+            (c"win32", GuiApi::Win32),
+            (c"x11", GuiApi::X11),
+        ] {
+            let window = clap_window_t {
+                api: name.as_ptr(),
+                handle: if api == GuiApi::X11 {
+                    clap_window_handle_u { x11: 0x12345678 }
+                } else {
+                    clap_window_handle_u {
+                        ptr: 0x12345678usize as *mut c_void,
+                    }
+                },
+            };
+            assert_eq!(
+                unsafe { transient_window(&window) },
+                Some((api, 0x12345678usize as *mut c_void))
+            );
+        }
+    }
+
+    #[test]
+    fn undefined_or_empty_transient_handles_are_rejected() {
+        assert!(unsafe { transient_window(std::ptr::null()) }.is_none());
+        for api in [
+            std::ptr::null(),
+            c"".as_ptr(),
+            c"unknown".as_ptr(),
+            c"wayland".as_ptr(),
+        ] {
+            let window = clap_window_t {
+                api,
+                handle: clap_window_handle_u {
+                    ptr: 1usize as *mut c_void,
+                },
+            };
+            assert!(unsafe { transient_window(&window) }.is_none());
+        }
+        let window = clap_window_t {
+            api: c"win32".as_ptr(),
+            handle: clap_window_handle_u {
+                win32: std::ptr::null_mut(),
+            },
+        };
+        assert!(unsafe { transient_window(&window) }.is_none());
     }
 }

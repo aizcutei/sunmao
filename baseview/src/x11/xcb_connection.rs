@@ -23,6 +23,8 @@ static XLIB_THREADS_AVAILABLE: AtomicBool = AtomicBool::new(false);
 x11rb::atom_manager! {
     pub Atoms: AtomsCookie {
         WM_PROTOCOLS,
+        _NET_WM_NAME,
+        UTF8_STRING,
         WM_DELETE_WINDOW,
     }
 }

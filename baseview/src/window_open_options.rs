@@ -12,9 +12,21 @@ pub enum WindowScalePolicy {
     ScaleFactor(f64),
 }
 
+/// A borrowed native owner for a floating window. The host must keep it alive
+/// until the editor closes or is assigned another owner. AppKit uses an NSView.
+#[derive(Debug, Clone, Copy)]
+pub enum TransientParent {
+    AppKit(usize),
+    Win32(isize),
+    X11(u32),
+}
+
 /// The options for opening a new window
 pub struct WindowOpenOptions {
     pub title: String,
+
+    /// Owner applied before a floating window becomes visible.
+    pub transient_parent: Option<TransientParent>,
 
     /// The logical size of the window.
     ///
@@ -44,6 +56,7 @@ impl WindowOpenOptions {
     pub fn new(title: impl Into<String>, size: Size, scale: WindowScalePolicy) -> Self {
         Self {
             title: title.into(),
+            transient_parent: None,
             size,
             scale,
             #[cfg(feature = "opengl")]

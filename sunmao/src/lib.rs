@@ -122,8 +122,8 @@ pub mod prelude {
     };
     pub use sunmao_core::smoothing::{Smoother, SmoothingStyle};
     pub use sunmao_core::view::{
-        ParamsViewContext, ParentWindow, StandaloneViewOptions, StandaloneViewResult, SunmaoView,
-        ViewContext, ViewHandle,
+        FloatingViewOptions, ParamsViewContext, ParentWindow, StandaloneViewOptions,
+        StandaloneViewResult, SunmaoView, ViewContext, ViewHandle,
     };
     pub use sunmao_macros::{sunmao_export, Params};
 

@@ -50,6 +50,16 @@ impl WindowHandle {
         self.window_handle.is_open()
     }
 
+    /// Change the borrowed owner of a floating window.
+    pub fn set_transient(&mut self, parent: crate::TransientParent) -> bool {
+        self.is_open() && self.window_handle.set_transient(parent)
+    }
+
+    /// Change a floating window's title. Embedded windows and NULs are rejected.
+    pub fn set_title(&mut self, title: &str) -> bool {
+        self.is_open() && !title.contains('\0') && self.window_handle.set_title(title)
+    }
+
     /// Resize the native window in logical pixels.
     pub fn resize(&mut self, size: Size) {
         self.window_handle.resize(size);

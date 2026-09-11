@@ -15,10 +15,15 @@ use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_ba
 
 use crate::{Event, MouseCursor, Size, WindowEvent, WindowHandler, WindowInfo, WindowOpenOptions};
 
+enum WindowCommand {
+    Resize(Size),
+    Title(String, mpsc::SyncSender<bool>),
+}
+
 pub struct WindowHandle {
     raw_window_handle: Option<RawWindowHandle>,
     event_loop_handle: Option<JoinHandle<()>>,
-    resize_sender: Option<mpsc::Sender<Size>>,
+    resize_sender: Option<mpsc::Sender<WindowCommand>>,
     close_requested: Arc<AtomicBool>,
     is_open: Arc<AtomicBool>,
 }
@@ -32,6 +37,20 @@ impl Drop for OpenFlag {
 }
 
 impl WindowHandle {
+    pub fn set_title(&mut self, title: &str) -> bool {
+        if !self.is_open() || title.contains('\0') {
+            return false;
+        }
+        let Some(sender) = &self.resize_sender else {
+            return false;
+        };
+        let (reply, result) = mpsc::sync_channel(1);
+        sender
+            .send(WindowCommand::Title(title.into(), reply))
+            .is_ok()
+            && result.recv().unwrap_or(false)
+    }
+
     fn unavailable() -> Self {
         Self {
             raw_window_handle: None,
@@ -57,7 +76,7 @@ impl WindowHandle {
 
     pub fn resize(&mut self, size: Size) {
         if let Some(sender) = &self.resize_sender {
-            let _ = sender.send(size);
+            let _ = sender.send(WindowCommand::Resize(size));
         }
     }
 }
@@ -376,6 +395,9 @@ impl<'a> Window<'a> {
         H: WindowHandler + 'static,
         B: FnOnce(&mut crate::Window) -> H + Send + 'static,
     {
+        if options.transient_parent.is_some() {
+            return WindowHandle::unavailable();
+        }
         let (result_sender, result_receiver) = mpsc::sync_channel::<OpenResult>(1);
         let (resize_sender, resize_receiver) = mpsc::channel();
         let close_requested = Arc::new(AtomicBool::new(false));
@@ -425,7 +447,7 @@ impl<'a> Window<'a> {
         options: WindowOpenOptions,
         build: B,
         result_sender: mpsc::SyncSender<OpenResult>,
-        resize_receiver: mpsc::Receiver<Size>,
+        resize_receiver: mpsc::Receiver<WindowCommand>,
         close_requested: Arc<AtomicBool>,
         is_open: Arc<AtomicBool>,
     ) -> Result<(), String>
@@ -550,12 +572,20 @@ impl<'a> Window<'a> {
                 }
                 handler.on_event(&mut window, event);
             }
-            if let Some(size) = resize_receiver.try_iter().last() {
-                window.resize(size);
-                handler.on_event(
-                    &mut window,
-                    Event::Window(WindowEvent::Resized(inner.window_info.get())),
-                );
+            for command in resize_receiver.try_iter() {
+                match command {
+                    WindowCommand::Resize(size) => {
+                        window.resize(size);
+                        handler.on_event(
+                            &mut window,
+                            Event::Window(WindowEvent::Resized(inner.window_info.get())),
+                        );
+                    }
+                    WindowCommand::Title(title, reply) => {
+                        toplevel.set_title(title);
+                        let _ = reply.send(connection.flush().is_ok());
+                    }
+                }
             }
             if last_frame.elapsed() >= frame_interval {
                 handler.on_frame(&mut window);

@@ -24,7 +24,8 @@ use baseview::{
 use raw_window_handle::{HasWindowHandle, RawWindowHandle, WindowHandle};
 
 use sunmao_core::{
-    ParentWindow, StandaloneViewOptions, StandaloneViewResult, SunmaoView, ViewContext, ViewHandle,
+    FloatingViewOptions, ParentWindow, StandaloneViewOptions, StandaloneViewResult, SunmaoView,
+    ViewContext, ViewHandle,
 };
 use sunmao_gui::{
     Color, Event as GuiEvent, GuiContext, KeyCode as GuiKeyCode, Modifiers,
@@ -43,6 +44,14 @@ static _SUNMAO_DEBUG_READ_FRAME: unsafe extern "C" fn(*mut u32, *mut u32, *mut u
 #[used]
 static _SUNMAO_DEBUG_PIXEL_PROBE_STATUS: extern "C" fn() -> i32 =
     pixel_probe::sunmao_debug_pixel_probe_status;
+
+fn native_transient(parent: ParentWindow) -> baseview::TransientParent {
+    match parent {
+        ParentWindow::AppKit(view) => baseview::TransientParent::AppKit(view as usize),
+        ParentWindow::Win32(hwnd) => baseview::TransientParent::Win32(hwnd as isize),
+        ParentWindow::X11(window) => baseview::TransientParent::X11(window),
+    }
+}
 
 fn resize_baseview_window(handle: &mut baseview::WindowHandle, width: u32, height: u32) -> bool {
     handle.resize(baseview::Size::new(width as f64, height as f64));
@@ -742,6 +751,10 @@ mod gl_backend {
                     .resizable(resize_scalable_window)
                     .scalable(scale_scalable_window)
                     .keyboard(send_key_to_scalable_window)
+                    .transient(|window, parent| {
+                        window.handle.set_transient(native_transient(parent))
+                    })
+                    .titled(|window, title| window.handle.set_title(title))
                     .build(),
                 )
             } else {
@@ -775,7 +788,41 @@ mod gl_backend {
         /// so a bug fixed in one is fixed in both — the only difference is
         /// which baseview entry point creates the window.
         fn open_floating(&self, context: Arc<dyn ViewContext>) -> Option<ViewHandle> {
-            self.open_with(context, Window::open_floating)
+            self.open_floating_with_options(context, FloatingViewOptions::default())
+        }
+
+        fn supports_transient(&self, parent: ParentWindow) -> bool {
+            match parent {
+                ParentWindow::AppKit(view) => cfg!(target_os = "macos") && !view.is_null(),
+                ParentWindow::Win32(hwnd) => cfg!(target_os = "windows") && !hwnd.is_null(),
+                ParentWindow::X11(window) => {
+                    cfg!(target_os = "linux")
+                        && window != 0
+                        && !(cfg!(feature = "wayland")
+                            && std::env::var_os("WAYLAND_DISPLAY").is_some())
+                }
+            }
+        }
+
+        fn open_floating_with_options(
+            &self,
+            context: Arc<dyn ViewContext>,
+            floating: FloatingViewOptions<'_>,
+        ) -> Option<ViewHandle> {
+            if floating
+                .transient_parent
+                .is_some_and(|parent| !self.supports_transient(parent))
+                || floating.title.is_some_and(|title| title.contains('\0'))
+            {
+                return None;
+            }
+            self.open_with(context, |mut options, build| {
+                options.transient_parent = floating.transient_parent.map(native_transient);
+                if let Some(title) = floating.title {
+                    options.title = title.into();
+                }
+                Window::open_floating(options, build)
+            })
         }
 
         fn open_standalone(

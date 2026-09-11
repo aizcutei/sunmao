@@ -21,8 +21,8 @@ pub use params::{
 };
 pub use plugin::{ProcessContext, ProcessStatus, SunmaoPlugin};
 pub use view::{
-    ParamsViewContext, ParentWindow, StandaloneViewOptions, StandaloneViewResult, SunmaoView,
-    ViewContext, ViewHandle, ViewKey, ViewKeyCode,
+    FloatingViewOptions, ParamsViewContext, ParentWindow, StandaloneViewOptions,
+    StandaloneViewResult, SunmaoView, ViewContext, ViewHandle, ViewKey, ViewKeyCode,
 };
 pub use viz::{viz_channel, VizChannel, VizConsumer, VizFrame, VizPublisher};
 
@@ -40,8 +40,8 @@ pub mod prelude {
     };
     pub use crate::smoothing::{Smoother, SmoothingStyle};
     pub use crate::view::{
-        ParamsViewContext, ParentWindow, StandaloneViewOptions, StandaloneViewResult, SunmaoView,
-        ViewContext, ViewHandle,
+        FloatingViewOptions, ParamsViewContext, ParentWindow, StandaloneViewOptions,
+        StandaloneViewResult, SunmaoView, ViewContext, ViewHandle,
     };
     pub use std::sync::Arc;
 }

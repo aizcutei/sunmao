@@ -65,6 +65,23 @@ impl ParentWindow {
     }
 }
 
+/// Host suggestions applied when a floating editor is created.
+///
+/// The host owns `transient_parent` and must keep it valid for the editor's
+/// lifetime. AppKit uses an NSView, Win32 an HWND, and X11 a window ID.
+/// VST3 has no floating-editor protocol; these options are used by CLAP.
+///
+/// ```
+/// use sunmao_core::prelude::FloatingViewOptions;
+/// let options = FloatingViewOptions { title: Some("Track 3"), ..Default::default() };
+/// assert!(options.transient_parent.is_none());
+/// ```
+#[derive(Debug, Default, Clone, Copy)]
+pub struct FloatingViewOptions<'a> {
+    pub transient_parent: Option<ParentWindow>,
+    pub title: Option<&'a str>,
+}
+
 /// Context provided to the editor for parameter access and host communication.
 pub trait ViewContext: Send + Sync {
     /// Get normalized parameter value by ID
@@ -134,6 +151,8 @@ trait ErasedViewHandle {
     fn is_resizable(&self) -> bool;
     fn set_scale(&mut self, factor: f32) -> bool;
     fn send_key(&mut self, key: ViewKey) -> bool;
+    fn set_transient(&mut self, parent: ParentWindow) -> bool;
+    fn set_title(&mut self, title: &str) -> bool;
 }
 
 struct StoredViewHandle<T> {
@@ -141,9 +160,23 @@ struct StoredViewHandle<T> {
     resize: Option<fn(&mut T, u32, u32) -> bool>,
     set_scale: Option<fn(&mut T, f32) -> bool>,
     send_key: Option<fn(&mut T, ViewKey) -> bool>,
+    set_transient: Option<fn(&mut T, ParentWindow) -> bool>,
+    set_title: Option<fn(&mut T, &str) -> bool>,
 }
 
 impl<T: 'static> ErasedViewHandle for StoredViewHandle<T> {
+    fn set_transient(&mut self, parent: ParentWindow) -> bool {
+        self.set_transient
+            .map(|f| f(&mut self.value, parent))
+            .unwrap_or(false)
+    }
+
+    fn set_title(&mut self, title: &str) -> bool {
+        self.set_title
+            .map(|f| f(&mut self.value, title))
+            .unwrap_or(false)
+    }
+
     fn as_any(&self) -> &dyn Any {
         &self.value
     }
@@ -229,6 +262,17 @@ pub enum StandaloneViewResult {
 }
 
 impl ViewHandle {
+    /// Update a floating editor's owner. The host must keep the owner valid.
+    /// Returns false if the editor or native window API does not support it.
+    pub fn set_transient(&mut self, parent: ParentWindow) -> bool {
+        self.inner.set_transient(parent)
+    }
+
+    /// Apply a floating editor title; false means this handle has no title operation.
+    pub fn set_title(&mut self, title: &str) -> bool {
+        !title.contains('\0') && self.inner.set_title(title)
+    }
+
     /// Wrap an editor resource that does not support host-driven resizing.
     pub fn new<T: 'static>(value: T) -> Self {
         Self {
@@ -237,6 +281,8 @@ impl ViewHandle {
                 resize: None,
                 set_scale: None,
                 send_key: None,
+                set_transient: None,
+                set_title: None,
             }),
         }
     }
@@ -252,6 +298,8 @@ impl ViewHandle {
                 resize: Some(resize),
                 set_scale: None,
                 send_key: None,
+                set_transient: None,
+                set_title: None,
             }),
         }
     }
@@ -273,6 +321,8 @@ impl ViewHandle {
                 resize,
                 set_scale: Some(set_scale),
                 send_key: None,
+                set_transient: None,
+                set_title: None,
             }),
         }
     }
@@ -296,6 +346,8 @@ impl ViewHandle {
             resize: None,
             set_scale: None,
             send_key: None,
+            set_transient: None,
+            set_title: None,
         }
     }
 
@@ -332,9 +384,23 @@ pub struct ViewHandleBuilder<T> {
     resize: Option<fn(&mut T, u32, u32) -> bool>,
     set_scale: Option<fn(&mut T, f32) -> bool>,
     send_key: Option<fn(&mut T, ViewKey) -> bool>,
+    set_transient: Option<fn(&mut T, ParentWindow) -> bool>,
+    set_title: Option<fn(&mut T, &str) -> bool>,
 }
 
 impl<T: 'static> ViewHandleBuilder<T> {
+    /// Add a native owner-update operation for a floating editor.
+    pub fn transient(mut self, set_transient: fn(&mut T, ParentWindow) -> bool) -> Self {
+        self.set_transient = Some(set_transient);
+        self
+    }
+
+    /// Add a native title-update operation for a floating editor.
+    pub fn titled(mut self, set_title: fn(&mut T, &str) -> bool) -> Self {
+        self.set_title = Some(set_title);
+        self
+    }
+
     pub fn resizable(mut self, resize: fn(&mut T, u32, u32) -> bool) -> Self {
         self.resize = Some(resize);
         self
@@ -357,6 +423,8 @@ impl<T: 'static> ViewHandleBuilder<T> {
                 resize: self.resize,
                 set_scale: self.set_scale,
                 send_key: self.send_key,
+                set_transient: self.set_transient,
+                set_title: self.set_title,
             }),
         }
     }
@@ -409,6 +477,30 @@ pub trait SunmaoView: Send + Sync {
     /// Must be called on the host's main thread.
     fn open_floating(&self, _context: Arc<dyn ViewContext>) -> Option<ViewHandle> {
         None
+    }
+
+    /// Whether a floating editor can be associated with this native owner.
+    /// Called before opening; an unsupported owner must not be silently ignored.
+    fn supports_transient(&self, _parent: ParentWindow) -> bool {
+        false
+    }
+
+    /// Create a floating editor with its owner and suggested title.
+    /// Native adapters should apply these before mapping the window.
+    /// Existing adapters retain their unowned floating behavior by default.
+    fn open_floating_with_options(
+        &self,
+        context: Arc<dyn ViewContext>,
+        options: FloatingViewOptions<'_>,
+    ) -> Option<ViewHandle> {
+        if options.transient_parent.is_some() {
+            return None;
+        }
+        let mut handle = self.open_floating(context)?;
+        if let Some(title) = options.title {
+            handle.set_title(title);
+        }
+        Some(handle)
     }
 
     /// Open the editor as an application-owned top-level window.
@@ -596,5 +688,35 @@ mod tests {
                 assert!(ParentWindow::from_clap(truncated, "x11").is_none());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod floating_contract_tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn a_title_with_nul_never_reaches_the_native_callback(title in any::<String>()) {
+            let mut handle = ViewHandle::builder(Vec::<String>::new())
+                .titled(|seen, title| { seen.push(title.to_owned()); true })
+                .build();
+            let accepted = handle.set_title(&title);
+            prop_assert_eq!(accepted, !title.contains('\0'));
+            let seen = handle.downcast_ref::<Vec<String>>().unwrap();
+            if accepted { prop_assert_eq!(seen.first(), Some(&title)); }
+            else { prop_assert!(seen.is_empty()); }
+            // Exercise an embedded NUL on every case, not only if generated.
+            let invalid = format!("before\0{title}");
+            prop_assert!(!handle.set_title(&invalid));
+        }
+    }
+
+    #[test]
+    fn old_handles_report_floating_operations_as_unsupported() {
+        let mut handle = ViewHandle::new(());
+        assert!(!handle.set_title("Track 1"));
+        assert!(!handle.set_transient(ParentWindow::X11(1)));
     }
 }

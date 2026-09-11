@@ -31,10 +31,16 @@ use crate::gl::{platform, GlContext};
 use crate::x11::event_loop::EventLoop;
 use crate::x11::visual_info::WindowVisualConfig;
 
+pub(crate) enum WindowCommand {
+    Resize(Size),
+    Transient(crate::TransientParent, mpsc::SyncSender<bool>),
+    Title(String, mpsc::SyncSender<bool>),
+}
+
 pub struct WindowHandle {
     raw_window_handle: Option<RawWindowHandle>,
     event_loop_handle: Option<JoinHandle<()>>,
-    resize_sender: Option<mpsc::Sender<Size>>,
+    resize_sender: Option<mpsc::Sender<WindowCommand>>,
     close_requested: Arc<AtomicBool>,
     is_open: Arc<AtomicBool>,
 }
@@ -81,6 +87,25 @@ pub fn request_event_loop_stop() {
 }
 
 impl WindowHandle {
+    fn request(&self, command: impl FnOnce(mpsc::SyncSender<bool>) -> WindowCommand) -> bool {
+        if !self.is_open() {
+            return false;
+        }
+        let Some(sender) = &self.resize_sender else {
+            return false;
+        };
+        let (reply, result) = mpsc::sync_channel(1);
+        sender.send(command(reply)).is_ok() && result.recv().unwrap_or(false)
+    }
+
+    pub fn set_transient(&mut self, parent: crate::TransientParent) -> bool {
+        self.request(|reply| WindowCommand::Transient(parent, reply))
+    }
+
+    pub fn set_title(&mut self, title: &str) -> bool {
+        self.request(|reply| WindowCommand::Title(title.into(), reply))
+    }
+
     fn unavailable() -> Self {
         Self {
             raw_window_handle: None,
@@ -106,7 +131,7 @@ impl WindowHandle {
 
     pub fn resize(&mut self, size: Size) {
         if let Some(sender) = &self.resize_sender {
-            let _ = sender.send(size);
+            let _ = sender.send(WindowCommand::Resize(size));
         }
     }
 }
@@ -129,7 +154,7 @@ pub(crate) struct ParentHandle {
 }
 
 impl ParentHandle {
-    pub fn new() -> (Self, WindowHandle, mpsc::Receiver<Size>) {
+    pub fn new() -> (Self, WindowHandle, mpsc::Receiver<WindowCommand>) {
         let close_requested = Arc::new(AtomicBool::new(false));
         let is_open = Arc::new(AtomicBool::new(true));
         let (resize_sender, resize_receiver) = mpsc::channel();
@@ -169,11 +194,101 @@ pub(crate) struct WindowInner {
 
     pub(crate) xcb_connection: XcbConnection,
     window_id: XWindow,
+    embedded: bool,
     pub(crate) window_info: WindowInfo,
     visual_id: Visualid,
     mouse_cursor: Cell<MouseCursor>,
 
     pub(crate) close_requested: Cell<bool>,
+}
+
+fn set_native_title(
+    connection: &XcbConnection,
+    window: XWindow,
+    title: &str,
+) -> Result<(), Box<dyn Error>> {
+    if title.contains('\0') {
+        return Err("window title contains NUL".into());
+    }
+    connection
+        .conn
+        .change_property8(
+            PropMode::REPLACE,
+            window,
+            AtomEnum::WM_NAME,
+            AtomEnum::STRING,
+            title.as_bytes(),
+        )?
+        .check()?;
+    connection
+        .conn
+        .change_property8(
+            PropMode::REPLACE,
+            window,
+            connection.atoms._NET_WM_NAME,
+            connection.atoms.UTF8_STRING,
+            title.as_bytes(),
+        )?
+        .check()?;
+    connection.conn.flush()?;
+    Ok(())
+}
+
+fn set_native_transient(
+    connection: &XcbConnection,
+    window: XWindow,
+    parent: crate::TransientParent,
+) -> Result<(), Box<dyn Error>> {
+    let crate::TransientParent::X11(owner) = parent else {
+        return Err("owner is not X11".into());
+    };
+    if owner == 0 {
+        return Err("empty owner".into());
+    }
+    let mut ancestor = owner;
+    let mut seen = std::collections::HashSet::new();
+    while ancestor != 0 {
+        if ancestor == window || !seen.insert(ancestor) {
+            return Err("cyclic owner".into());
+        }
+        connection.conn.get_window_attributes(ancestor)?.reply()?;
+        let property = connection
+            .conn
+            .get_property(
+                false,
+                ancestor,
+                AtomEnum::WM_TRANSIENT_FOR,
+                AtomEnum::WINDOW,
+                0,
+                1,
+            )?
+            .reply()?;
+        ancestor = property
+            .value32()
+            .and_then(|mut values| values.next())
+            .unwrap_or(0);
+    }
+    connection
+        .conn
+        .change_property32(
+            PropMode::REPLACE,
+            window,
+            AtomEnum::WM_TRANSIENT_FOR,
+            AtomEnum::WINDOW,
+            &[owner],
+        )?
+        .check()?;
+    connection.conn.flush()?;
+    Ok(())
+}
+
+impl WindowInner {
+    pub(crate) fn set_transient(&self, parent: crate::TransientParent) -> bool {
+        !self.embedded && set_native_transient(&self.xcb_connection, self.window_id, parent).is_ok()
+    }
+    pub(crate) fn set_title(&self, title: &str) -> bool {
+        !self.embedded && set_native_title(&self.xcb_connection, self.window_id, title).is_ok()
+    }
 }
 
 pub struct Window<'a> {
@@ -399,7 +514,7 @@ impl<'a> Window<'a> {
         build: B,
         tx: mpsc::SyncSender<WindowOpenResult>,
         parent_handle: Option<ParentHandle>,
-        resize_receiver: Option<mpsc::Receiver<Size>>,
+        resize_receiver: Option<mpsc::Receiver<WindowCommand>>,
         blocking_stop_requested: Option<Arc<AtomicBool>>,
         initialization_finished: Arc<AtomicBool>,
     ) -> Result<(), Box<dyn Error>>
@@ -462,20 +577,14 @@ impl<'a> Window<'a> {
                     .border_pixel(0),
             )?
             .check()?;
-        xcb_connection.conn.map_window(window_id)?.check()?;
-
-        // Change window title
-        let title = options.title;
-        xcb_connection
-            .conn
-            .change_property8(
-                PropMode::REPLACE,
-                window_id,
-                AtomEnum::WM_NAME,
-                AtomEnum::STRING,
-                title.as_bytes(),
-            )?
-            .check()?;
+        // ICCCM properties must exist before the window manager sees MapRequest.
+        set_native_title(&xcb_connection, window_id, &options.title)?;
+        if let Some(owner) = options.transient_parent {
+            if parent.is_some() {
+                return Err("embedded window cannot have a transient owner".into());
+            }
+            set_native_transient(&xcb_connection, window_id, owner)?;
+        }
 
         xcb_connection
             .conn
@@ -488,6 +597,7 @@ impl<'a> Window<'a> {
             )?
             .check()?;
 
+        xcb_connection.conn.map_window(window_id)?.check()?;
         xcb_connection.conn.flush()?;
 
         #[cfg(feature = "opengl")]
@@ -508,6 +618,7 @@ impl<'a> Window<'a> {
         let mut inner = WindowInner {
             xcb_connection,
             window_id,
+            embedded: parent.is_some(),
             window_info,
             visual_id: visual_info.visual_id,
             mouse_cursor: Cell::new(MouseCursor::default()),

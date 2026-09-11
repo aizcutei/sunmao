@@ -11,6 +11,22 @@ pub enum WindowHandle {
 }
 
 impl WindowHandle {
+    pub fn set_transient(&mut self, parent: crate::TransientParent) -> bool {
+        match self {
+            Self::X11(handle) => handle.set_transient(parent),
+            #[cfg(feature = "wayland")]
+            Self::Wayland(_) => false,
+        }
+    }
+
+    pub fn set_title(&mut self, title: &str) -> bool {
+        match self {
+            Self::X11(handle) => handle.set_title(title),
+            #[cfg(feature = "wayland")]
+            Self::Wayland(handle) => handle.set_title(title),
+        }
+    }
+
     pub fn close(&mut self) {
         match self {
             Self::X11(handle) => handle.close(),

@@ -95,3 +95,7 @@ harness = false
 [[test]]
 name = "windows_keyboard"
 harness = false
+
+[[test]]
+name = "floating"
+harness = false
