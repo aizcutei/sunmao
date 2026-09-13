@@ -35,6 +35,11 @@ tools/             打包器与测试宿主 runner
 
 唯一标准是**同一 commit 在三平台（macOS ARM64 / Windows x86_64 / Ubuntu x86_64）hosted native jobs 全绿且 artifacts 可下载**。本地结果只作开发证据，不能替代。
 
+**但 job 全绿不等于断言跑过。** 本仓已两次踩到"三平台全绿而目标断言 0 次执行"（run #82 的
+`GUI key verified`、run #86 的跨线程 viz 测试当时是 flaky 的）。因此验收必须下载原始日志、
+grep 到实际断言行；**新写的守卫还要反向验证它真的会变红**（Phase 4 的 `compile_fail`
+doc-test 就是临时摘掉属性、确认变红、再还原才算数）。
+
 本地 gate（push 前全过）：
 
 ```bash
@@ -45,7 +50,10 @@ RUSTFLAGS=-Awarnings cargo test --locked      # 别用管道，会吞掉 cargo �
 tools/package_examples.sh --debug --test      # 触打包/示例时
 ```
 
-基线：124 套件 / 527 测试；打包 30 套件 / 600 断言。纯重构应当与基线逐位相同。
+基线：`cargo test` **135 套件 / 676 passed / 0 failed**（2026-09-13 本地实测两次）；
+打包 **32 套件 / 640 断言**（最后一次实测见 `docs/phase4/progress.md`，本轮未重跑）。
+纯重构应当与基线逐位相同。CI 上的数字更高且三平台各不相同（144 / 142 / 162 套件），因为
+hosted job 另跑 feature 组合与平台专项，不要拿它和本地数字对比。
 
 ## 进展记录
 
@@ -55,7 +63,13 @@ tools/package_examples.sh --debug --test      # 触打包/示例时
 
 Phase 1（run #25 / `c8401e6`）、Phase 2 核心（run #38 / `77f788c`）、Phase 3（run #69 / `b45efea`）、Phase 4（run 34746764198 / `28cba05`）均已三平台验收。下一阶段是 **Phase 5：完整测试宿主与外部兼容**。
 
-`docs/design/target_syntax.md` 描述的是**目标语法，多数尚未实现**——该文件开头有逐项核对的现状对照表，照抄未实现的名字会编译失败。
+Phase 5 的 goal prompt 见 `docs/phase5/loop_prompt.md`；历史各 phase 同名文件保留。
+
+`docs/design/target_syntax.md` 描述的是**目标语法，部分仍未实现**——该文件开头有逐项核对的现状对照表，照抄未实现的名字会编译失败。
+
+已知遗留（各自单独立项，逐条见 `docs/phase4/audit.md`）：`Stack::focus_next` 会把 Tab 停在
+非交互控件；`vst3_rs` 两个控制器包装 25 函数 / 260 行重复；Windows WGPU 收尾 exit 139
+**不改判为已修复**；`main` 仍落后于 Phase 3/4 工作，合并需仓库所有者决定。
 
 ## 环境注意
 

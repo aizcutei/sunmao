@@ -6,20 +6,29 @@ SunMao is a Rust audio plug-in framework. A plug-in author implements one
 `SunmaoPlugin` (audio/MIDI logic plus optional view) and can export the same
 implementation as VST3, CLAP, and a standalone application.
 
-The current Phase 1 target is a usable cross-platform foundation for:
+Phases 1 through 4 are accepted on all three platforms. What works today:
 
 - macOS (ARM64), Windows (x86_64), and Linux (x86_64)
 - VST3 and CLAP plug-ins plus standalone applications
 - effect and instrument processing, MIDI, Float/Int/Bool parameters,
   sample-offset automation, reset, and parameter state round-trips
-- native GL, WGPU, and WebView editor lifecycles on Cocoa, Win32, and X11
+- polyphonic modulation, note expression, parameter groups, bus/latency
+  contracts, and versioned state migration
+- allocation-free DSP components (filters, envelopes, oscillators, delays,
+  metering) in [`sunmao/dsp`](sunmao/dsp)
+- a declarative widget library — `Column`/`Row` layout, six controls, themes,
+  two-way parameter binding, text rendering, clipboard, international
+  keyboards, and a lock-free audio-to-GUI channel
+- native GL, WGPU, and WebView editor lifecycles on Cocoa, Win32, X11, and
+  native Wayland (floating CLAP editors, GL only)
+- screen-reader support through AccessKit on all three platforms, read-only
 - target-aware packaging, device-free standalone smoke modes, and a CLI
   plug-in host/GUI test runner
 
 Audio Unit support is retained as an explicit macOS experiment. It is not part
-of the Phase 1 build, test, packaging, or completion gate. Advanced bus/latency
-contracts, signing, installers, and universal binaries are also outside that
-gate; see the [roadmap](docs/roadmap.md).
+of the build, test, packaging, or completion gate. Signing, installers, and
+universal binaries are also outside that gate; see the
+[roadmap](docs/roadmap.md).
 
 ## Project Layout
 
@@ -29,6 +38,8 @@ gate; see the [roadmap](docs/roadmap.md).
 | [`sunmao/macros`](sunmao/macros) | `#[derive(Params)]` and export helpers |
 | [`sunmao/backend_vst3`](sunmao/backend_vst3) | SunMao to VST3 adapter |
 | [`sunmao/backend_clap`](sunmao/backend_clap) | SunMao to CLAP adapter |
+| [`sunmao/dsp`](sunmao/dsp) | Allocation-free DSP building blocks with documented numeric contracts |
+| [`sunmao/gui`](sunmao/gui) | Renderer-independent widgets, layout, theming, and the accessibility tree |
 | [`sunmao/runtime`](sunmao/runtime) | Cross-platform standalone audio/MIDI runtime and smoke harness |
 | [`vst3_rs`](vst3_rs), [`clap_rs`](clap_rs) | Safe-ish Rust wrappers around the raw format bindings |
 | [`baseview`](baseview), [`sunmao/gui*`](sunmao) | Native window and renderer layers |
@@ -131,6 +142,14 @@ Enable `gui-wayland` for native Linux Wayland floating editors. It includes
 editors keep using X11/XWayland. This feature does not enable native Wayland
 for the WGPU or WebView adapters. It is off by default.
 
+Enable `accessibility` to bridge the widget tree to screen readers through
+AccessKit — UI Automation on Windows, NSAccessibility on macOS, AT-SPI on
+Linux. Assistive technology can read the controls but not operate them: no
+action handler is wired, which the tree reports honestly rather than failing
+silently. This feature is off by default because AccessKit is a real
+dependency surface (D-Bus on Linux); the description tree itself does not
+need it.
+
 ## Build And Verify
 
 From the repository root:
@@ -161,17 +180,24 @@ top-level GUI lifecycles. For direct inspection, build
 `sunmao_packager` and `sunmao_unittest_runner` with Cargo; their command
 reference is in [`tools/sunmao_packager/README.md`](tools/sunmao_packager/README.md).
 
-Phase 1 is complete. Hosted run
-[#25](https://github.com/aizcutei/sunmao/actions/runs/33152642714) on commit
-`c8401e6` passed the full expanded gate — VST3, CLAP, and standalone, including
-raw and packaged standalone DSP/MIDI and GUI smoke — on macOS ARM64, Windows
-x86_64, and Ubuntu x86_64, and uploaded the `phase1-*` bundles, logs, and
-reports from all three jobs. The earlier run
-[#21](https://github.com/aizcutei/sunmao/actions/runs/31771576307) (commit
-`885d2a5`) remains the historical VST3/CLAP-only baseline.
+Every phase is accepted the same way: one commit, green hosted native jobs on
+macOS ARM64, Windows x86_64, and Ubuntu x86_64, with downloadable artifacts.
+Local results are development evidence only, and a green job is not by itself
+evidence that the assertion under judgement ran — acceptance requires finding
+the assertion in the raw logs.
 
-Current scope and deferred work are tracked in
-[`docs/phase1/status.md`](docs/phase1/status.md), [`docs/phase1/progress.md`](docs/phase1/progress.md), and [`docs/roadmap.md`](docs/roadmap.md).
+| Phase | Scope | Accepted |
+| --- | --- | --- |
+| 1 | Cross-platform foundation | [run #25](https://github.com/aizcutei/sunmao/actions/runs/33152642714) (`c8401e6`) |
+| 2 | Advanced plug-in contract | [run #38](https://github.com/aizcutei/sunmao/actions/runs/33164763166) (`77f788c`) |
+| 3 | Construction API and `sunmao/dsp` | [run #69](https://github.com/aizcutei/sunmao/actions/runs/33940874765) (`b45efea`) |
+| 4 | GUI component library and platform work | [run 34746764198](https://github.com/aizcutei/sunmao/actions/runs/34746764198) (`28cba05`) |
+
+Phase 5 (full test host and external compatibility) is next. Scope, evidence,
+and deferred work per phase live in `docs/phase<N>/status.md` and
+`progress.md`; [`docs/phase4/audit.md`](docs/phase4/audit.md) carries the
+current list of known gaps, and [`docs/roadmap.md`](docs/roadmap.md) the
+direction.
 
 ### Compatibility policy
 
