@@ -231,3 +231,17 @@
   （同一根因，但两格式都不算错，宿主的 `expect` 以显式容差应对）、
   **VST3 class 串跨平台不一致（须由仓库所有者拍板，会变更所有既有插件身份）**。
   Phase 4 继承的四条遗留未动。下一步 **M3：性能与泄漏检测**。
+### 2026-09-14 — 离散参数回读修复的三平台验收
+
+- Command/platform: [run 34769367466](https://github.com/aizcutei/sunmao/actions/runs/34769367466) / `74588d0`；
+  三平台 job 全部 success，每平台 37 步零非成功。三份 job 原始日志已下载。
+  （M2 的验收记录提交 `919239f` 亦已由 run 34767143238 三平台 success。）
+- Result: 修复验收通过。剔除 GitHub 回显的脚本正文后，三平台**逐条一致**：
+  `wrapper::tests::a_discrete_parameter_reads_back_the_value_the_plugin_applied ... ok`、
+  `tests::a_discrete_parameter_reads_back_the_value_it_snapped_to ... ok`，
+  以及升级后的跨格式断言 `cross-format traces identical in every record but the format line` 各 1 次。
+  也就是说"两格式除 `format` 一行外逐行相同"这句话，是三平台各自在真硬件上验过的，不是我从本地推断的。
+- Evidence/artifact: 同上 run 的三平台 job 日志。goldens 的两行 diff 已随修复提交入库，
+  `tools/regression_goldens/README.md` 记下修复前后的对照，好让后来者知道这两份文件为什么值得入库。
+- Unresolved: 进入 **M3：性能与泄漏检测**。仍未修两项：连续参数的 f32/f64 精度差（两格式都不算错，
+  宿主以显式容差应对）、**VST3 class 串跨平台不一致（须由仓库所有者拍板）**。Phase 4 继承的四条遗留未动。

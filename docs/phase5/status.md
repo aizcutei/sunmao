@@ -207,6 +207,8 @@ CI 的跨格式断言因此从"`block` 行相同"升级成了"除 `format` 外�
 
 两个新测试都做过**反向验证**：把 `get_param` 改回读 bridge，两者立刻变红（`left: 0.8, right: 1.0`），还原后转绿。
 
+**已三平台验收**：[run 34769367466](https://github.com/aizcutei/sunmao/actions/runs/34769367466)（commit `74588d0`）三 job success、每 job 37 步零非成功。三平台原始日志剔除脚本回显后核实，两条新测试各 `... ok`、且升级后的跨格式断言 `cross-format traces identical in every record but the format line` 三平台各实际输出一次。
+
 ## 从 Phase 4 继承的已知遗留
 
 各自单独立项、各自单独取三平台绿（逐条见 `docs/phase4/audit.md`）：
