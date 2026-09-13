@@ -104,3 +104,29 @@
   grep 到 `HOST COMMAND SURFACE VERIFIED` 与 10 条 `rejected as it must be`，才算 M1 完成。
   两件独立立项：VST3/CLAP 参数回读精度不一致；`class_id_from_str` 的跨平台 class 串不一致。
   Phase 4 继承的四条遗留未动。
+### 2026-09-13 — M1 三平台验收完成
+
+- Command/platform: [run 34763956140](https://github.com/aizcutei/sunmao/actions/runs/34763956140) / `ac41dff`；
+  三平台 job 全部 success，每平台 **35 步零非成功**，新步骤 "Drive the interactive host over VST3 + CLAP"
+  三平台各 success。三份 job 原始日志已下载（macOS 787,289 / Windows 770,621 / Linux 1,890,744 bytes）。
+- Result: M1 标记完成。**计数时先把 GitHub 回显的脚本正文剔除**——它带 ANSI `36;1m` 前缀，
+  不剔除的话 `grep -c` 会把"脚本里写着这句话"算成"这句话被打印过"，正是本仓踩过两次的那类错觉。
+  剔除后三平台数字完全一致：`HOST COMMAND SURFACE VERIFIED` 各 **1** 次，
+  `rejected as it must be` 各 **10** 次，`HOST SESSION VERIFIED` 各 **4** 次
+  （两格式各一段 18 命令会话 + 两格式各一段 5 命令编辑器会话），`editor opened`/`editor closed` 各 **4** 次。
+  **十个反向用例是在 CI 里真的失败给看的**，不是本地跑过一次就算数：每个都必须非零退出，
+  否则步骤自己 exit 1 并打印 "the guard cannot fail"。
+- Evidence/artifact: 三份 artifacts 均可下载（Linux 1,000,635,643 / Windows 78,737,182 /
+  macOS 54,191,174 bytes）；macOS 一份已实际下载，`unzip -t` 报 `No errors detected`，
+  SHA-256 `2c01b112…1fa10`。**两项新发现在三平台硬件上各自取得直接证据**：
+  (1) 同一个 `SunMao Gain` 的 VST3 class 串在 macOS/Linux 是 `53756E4D616F46784761696E21212121`
+  （即 ASCII `SunMaoFxGain!!!!`）而在 Windows 是 `4D6E75536F6178464761696E21212121`——
+  这正是上游 `COM_COMPATIBLE` 分支把前 8 字节当 `GuidStruct` 重排的结果，**预测与实测逐字符吻合**，
+  也反过来证明 `preset::fuid_to_string` 的两条分支都照着上游写对了；
+  (2) 写 0.9 读回的差值三平台**逐位相同**（VST3 差 0、CLAP 差 0.00000002384185793236071），
+  是确定性的 f64/f32 差异而非噪声。两项都写进 `status.md` 的"M1 抓到的两项新发现"，各自独立立项。
+- Unresolved: **`host-session` 目录没有进成功 artifact**（upload 步骤是显式路径清单），
+  所以 preset 文件与会话日志目前只能从 job 日志看，不能下载下来直接检查——下一个功能提交一并补上，
+  因为那正是 class 串问题的可检查证据。两项新发现未修：VST3 class 串跨平台不一致（改动会变更所有
+  既有插件身份，须想清楚 Windows 既有安装的迁移）、VST3/CLAP 参数回读精度不一致。
+  Phase 4 继承的四条遗留未动。下一步 **M2：批量 regression host**。

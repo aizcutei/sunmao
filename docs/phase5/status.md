@@ -122,11 +122,50 @@ backends" 两个 blocking 步骤里被当作宿主调用。
 | Milestone | 范围 | 当前判断 | 权威证据 | 下一步 |
 |---|---|---|---|---|
 | M0 脚手架与基线 | 建 `docs/phase5/{status,progress}.md`；清点 runner 能力与缺口；记录本地 gate 基线 | **完成**（三平台 hosted 全绿）：文档、能力清单与两条实测基线落地 | [run 34761153409](https://github.com/aizcutei/sunmao/actions/runs/34761153409)（commit `9cce371`）三 job success，每 job **34 步零非成功**（跳过项分别为 5/9/11，均为平台不适用者），三份 artifacts 可下载（Linux 1,000,635,181 / Windows 78,735,698 / macOS 54,190,684 bytes；macOS 一份已下载，`unzip -t` 报 No errors detected）。**该 commit 是纯文档提交，没有新增断言**，故 CI 对它能提供的证据仅限“Phase 1–4 既有 34 步仍 blocking 且绿” | — （M0 完成；进入 M1）|
-| M1 交互式 standalone host | 加载已打包 `.vst3`/`.clap`、枚举参数与 bus、改参数、存取 state/preset、开关编辑器；既有非交互 CI 用法原样不变 | **本地完成，待三平台验收**：新增 `host` 子命令（行式命令语言，人可交互、管道可脚本化），`preset.rs` 按上游转录实现 `.vstpreset` 容器，`HostPlugin::class_id` 补上 VST3 class ID，CLAP 宿主不再对未知参数 ID 报成功。既有六个子命令未改行为（四处重复的扫描分派抽成 `scan_plugin_path`，分支逐字相同） | 本地：runner 单测 **44 → 70**（macOS 实跑，+26），全仓 676 → **702 passed / 0 failed**，逐套件比对确认**只有 runner 一套变化**、其余与 M0 基线逐位相同；两格式各一次 18 命令会话 `HOST SESSION VERIFIED`；CI 步骤本体在本机以真实打包产物跑通，10 个反向用例逐个必须非零退出 | 取三平台绿；日志须 grep 到 `HOST COMMAND SURFACE VERIFIED` 与 10 条 `rejected as it must be` |
+| M1 交互式 standalone host | 加载已打包 `.vst3`/`.clap`、枚举参数与 bus、改参数、存取 state/preset、开关编辑器；既有非交互 CI 用法原样不变 | **完成**（三平台 hosted 全绿）：新增 `host` 子命令（行式命令语言，人可交互、管道可脚本化），`preset.rs` 按上游转录实现 `.vstpreset` 容器，`HostPlugin::class_id` 补上 VST3 class ID，CLAP 宿主不再对未知参数 ID 报成功。既有六个子命令未改行为（四处重复的扫描分派抽成 `scan_plugin_path`，分支逐字相同） | [run 34763956140](https://github.com/aizcutei/sunmao/actions/runs/34763956140)（commit `ac41dff`）三 job success，每 job **35 步零非成功**（新步骤 "Drive the interactive host over VST3 + CLAP" 三平台各 success），三份 artifacts 可下载（Linux 1,000,635,643 / Windows 78,737,182 / macOS 54,191,174 bytes；macOS 一份已下载，`unzip -t` 报 No errors detected，SHA-256 `2c01b112…1fa10`）。**三平台原始日志已下载并逐条 grep，且把 GitHub 回显的脚本正文（ANSI `36;1m` 前缀）剔除后计数**：每平台真实输出 `HOST COMMAND SURFACE VERIFIED` **1** 次、`rejected as it must be` **10** 次（十个反向用例逐个非零退出）、`HOST SESSION VERIFIED` **4** 次（两格式各一段 18 命令会话 + 两格式各一段 5 命令编辑器会话）、`editor opened`/`editor closed` 各 **4** 次 | — （M1 完成；两项新发现各自独立立项，见下）|
 | M2 批量 regression host | 确定性批跑（固定种子/buffer/块划分）、音频与参数轨迹、golden 对拍 + 显式浮点容差、有界 fuzz 进 CI | 未开始 | — | — |
 | M3 性能与泄漏检测 | RT 安全检测扩到 GUI 线程与宿主回调；泄漏检测；基准与阈值写入本文件 | 未开始 | — | — |
 | M4 外部 validator | `clap-validator` + Steinberg VST3 validator 三平台 blocking；失败项逐条归因 | 未开始 | — | — |
 | M5 DAW smoke 与兼容性报告 | 可脚本化 DAW 三平台加载/处理/存工程/重开；机器可读兼容性报告 artifact | 未开始 | — | — |
+
+## M1 抓到的两项新发现（各自独立立项）
+
+两项都由"把宿主真正驱动一遍"暴露出来，都已在三平台 hosted 日志里取得硬件证据，
+都**没有在本轮顺手改掉**——两者的修法都会动到已三平台验收过的路径。
+
+### 1. VST3 class ID 的字符串形式跨平台不一致 —— **已由 CI 实证**
+
+`.vstpreset` 与宿主工程记录的都是 class ID 的**字符串**，而上游 `FUID::toString`
+（`funknown.cpp`）在 `COM_COMPATIBLE` 下把前 8 字节当 `GuidStruct` 重排；`fplatform.h`
+只在 `defined (_WIN32)` 下置 `COM_COMPATIBLE 1`。上游 `INLINE_UID` 存**不同的字节**正是
+为了抵消这一点，让字符串在所有平台一致——`vst3_sys::base::types::make_tuid` 已照此实现。
+**但插件自己的 class ID 走的不是这条路**：它是一组与平台无关的固定字节。
+
+run 34763956140 的三平台日志给出了直接证据，同一个 `SunMao Gain`：
+
+```
+macOS / Linux : class     53756E4D616F46784761696E21212121 (native UID layout)
+Windows       : class     4D6E75536F6178464761696E21212121 (COM UID layout)
+```
+
+（前者就是 ASCII `SunMaoFxGain!!!!`；后者是同一组字节按 COM `GuidStruct` 重排的结果。）
+
+**后果**：macOS 上保存的工程/preset 记录的 class 串，Windows 宿主算出来的对不上，
+插件会"找不到"。这不是本轮引入的，是一直存在的条件。**本轮不改**，因为改 class ID 的
+生成方式会改变所有既有插件的身份、使已发布的工程与 preset 失效，须单独立项、单独取三平台绿，
+并想清楚 Windows 既有安装的迁移。当前宿主的行为是自洽的：读写都用本平台的 `toString`，
+同平台往返正确，跨平台不匹配被 class 串比较**明确拒绝**而不是悄悄载入错的 state。
+已钉成断言：`preset::tests::the_same_bytes_yield_different_class_strings_on_windows_and_elsewhere`、
+`both_uid_layouts_print_the_same_canonical_string`。
+
+### 2. VST3 与 CLAP 的参数回读精度不一致
+
+写 0.9 再读回：VST3 差 0，CLAP 差 2.38e-8。根因是 `vst3_rs::ParameterBridge` 存
+`AtomicU64`（f64）副本，而 `sunmao_core` 的参数真身是 `AtomicU32`（f32）。
+**这意味着 VST3 侧的回读并不能证明插件内部的值。** 三平台日志里该差值**逐位相同**，
+是确定性差异而非噪声。本轮的应对是让宿主的 `expect` **显式定义容差**
+（`DEFAULT_EXPECT_TOLERANCE = 1e-6`，位于 f32 误差之上）而不是比相等；统一精度属独立立项，
+不动已三平台验收的 VST3 路径。
 
 ## 从 Phase 4 继承的已知遗留
 
@@ -143,4 +182,4 @@ backends" 两个 blocking 步骤里被当作宿主调用。
 Phase 5 完成的唯一判定：同一 commit 三平台 hosted native jobs 全绿 + artifacts 可下载
 + 本文件 Milestone 矩阵 M0–M5 全部标记完成。本地结果任何情况下都不构成完成证据。
 
-### 当前判定：**Phase 5 进行中（M0 完成，M1 待三平台验收）**
+### 当前判定：**Phase 5 进行中（M0、M1 完成，下一步 M2）**
