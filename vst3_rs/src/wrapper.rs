@@ -1990,14 +1990,23 @@ impl<P: Plugin> ControllerWrapper<P> {
             // This controller holds no plugin instance, so there is nothing to
             // migrate; the processor side runs the hook.
             let mut loaded_version = None;
-            load_parameter_state::<P>(
+            let result = load_parameter_state::<P>(
                 state,
                 &(*obj).params,
                 |id, value| {
                     (*obj).parameter_bridge.set(id, value);
                 },
                 &mut loaded_version,
-            )
+            );
+            if result == kResultOk {
+                // Every parameter just moved at once, without any of the
+                // begin/perform/end traffic a gesture produces. The host is
+                // displaying and automating what it last knew, so it has to be
+                // told to re-read. CLAP requires the same thing through
+                // `clap_host_params::rescan`.
+                (*obj).host.restart_parameter_values();
+            }
+            result
         })
     }
     unsafe extern "system" fn set_state(this: *mut c_void, state: *mut c_void) -> tresult {
@@ -2952,6 +2961,8 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
                 &mut loaded_version,
             );
             if result == kResultOk {
+                // See the note in `ControllerWrapper::set_component_state`.
+                (*obj).host.restart_parameter_values();
                 if let Some(version) = loaded_version {
                     if version < P::STATE_VERSION {
                         if let Some(plugin) = (*obj).plugin.as_mut() {

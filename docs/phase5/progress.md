@@ -325,3 +325,37 @@
   不代表 Linux 编辑器无泄漏。** 归因需要真 GPU 或 valgrind/heaptrack，单独立项。
 - Unresolved: 新增独立立项：Linux 编辑器差分 ~146 KiB/iteration 未归因。
   M3 仍只覆盖 RT 安全三项里的「分配」。此前三项独立立项未变。下一步 **M4：外部 validator**。
+### 2026-09-14 — M4（CLAP 半）：clap-validator 接入，抓到并修掉两个真缺陷
+
+- Command/platform: 本地 macOS ARM64。`cargo metadata --locked`、`cargo fmt --all -- --check`、
+  `git diff --check`、`RUSTFLAGS=-Awarnings cargo test --locked` 全部 exit 0（748 passed / 0 failed）；
+  `tools/package_examples.sh --debug --test` exit 0（32 套件 / 640 断言，与基线一致）。
+- Result: 接入 `clap-validator` 0.4.1（三平台各取官方预编译包），对**全部 16 个**打包 `.clap` 逐个验证。
+  **第一次跑就有失败，逐条归因后两项是我们的缺陷、一项是 validator 自己的问题。**
+  **(1) state 加载后从不通知宿主** —— 三条 `state-reproducibility-*` 同一根因。
+  **我最初判断错了**：看到「parameter values changed」以为 state 往返坏了，去查跨进程往返却是好的；
+  读了 validator 源码才看懂重点在后半句 `without a rescan request`——值加载是对的，
+  **少的是加载后调用 `clap_host_params::rescan(CLAP_PARAM_RESCAN_VALUES)`**。
+  `clap_sys` 早有绑定，`clap_rs` 全仓只在测试桩里出现过 `rescan: None`，从没调用。
+  真实后果：宿主打开工程后自动化轨道/通用 UI 上仍是旧值。
+  **按「host-facing 能力两格式同时落地」的硬性要求同时补了 VST3**：
+  `IComponentHandler::restartComponent(kParamValuesChanged)` 同样从未调用过。
+  VST3 侧挂在**控制器**而非 processor——component handler 在控制器上，
+  我先写在 processor 上时编译直接报 `no field host`，正好指出了该挂哪里。
+  **(2) `SunMao OS Distortion` 输出次正规数**（3e-45）。`sunmao/dsp` 本就有 `flush_denormal`
+  且文档写明危害，但这个示例没在输出上用它——过采样滤波器衰减到零的尾巴正好落在次正规区间。已补。
+  **(3) `param-fuzz-bounds` 报 crashed，报错原文写着 "This is a bug in the validator"**：
+  它要建的临时文件已存在，是第 2 项失败留下残留文件的连锁反应；修掉第 2 项后自动消失。
+  不是我们的缺陷，没有为它改任何代码。
+  修完后 **16/16 全部 0 failed**（每个 44 tests run）。
+- Evidence/artifact: 新 blocking 步骤 "Validate CLAP plugins with clap-validator"：
+  逐个插件断言 `, 0 failed,`，并要求日志里真的出现 `N tests run`（跑了 0 个测试不算通过）；
+  另有反向用例——拿一个不是插件的文件喂给 validator，**必须**非零退出，否则步骤自己 exit 1。
+  **一处如实说明**：第 2 项（次正规数）**没有单元测试守卫**。我写过一个「输出不得有次正规数」的测试，
+  **反向验证时它不会变红**（去掉 flush 仍通过）——正弦爆发后静音、trim 打到下限都试过，
+  复现不了 validator 用 50 组随机参数排列撞到的那个组合。**与其留一个实测证明不会失败的装饰，
+  不如删掉并写明**；这一条的守卫就是 CI 里的 validator 步骤本身。
+- Unresolved: **M4 未完成**——Steinberg VST3 validator 尚未接入。它没有预编译产物，
+  需要在 CI 上用 CMake 构建 VST3 SDK（含子模块）才能拿到 `validator`，三平台各一份，留作下一轮。
+  在它接入并取绿之前 M4 不标记完成。本轮 CLAP 半须先取同 commit 三平台绿。
+  此前各项独立立项未变。

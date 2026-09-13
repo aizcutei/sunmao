@@ -63,6 +63,10 @@ unsafe fn state_load_unchecked<P: Plugin>(
         unsafe { load_parameter_state(instance.controller_mut(), &instance.params_cache, stream) };
     if loaded {
         unsafe { instance.refresh_tail_cache() };
+        // Every parameter just moved at once, with none of the
+        // begin/perform/end traffic a gesture produces. Until the host is told
+        // to re-read them it keeps showing and automating what it last knew.
+        instance.host.rescan_parameter_values();
     }
     loaded
 }

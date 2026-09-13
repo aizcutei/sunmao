@@ -125,7 +125,7 @@ backends" 两个 blocking 步骤里被当作宿主调用。
 | M1 交互式 standalone host | 加载已打包 `.vst3`/`.clap`、枚举参数与 bus、改参数、存取 state/preset、开关编辑器；既有非交互 CI 用法原样不变 | **完成**（三平台 hosted 全绿）：新增 `host` 子命令（行式命令语言，人可交互、管道可脚本化），`preset.rs` 按上游转录实现 `.vstpreset` 容器，`HostPlugin::class_id` 补上 VST3 class ID，CLAP 宿主不再对未知参数 ID 报成功。既有六个子命令未改行为（四处重复的扫描分派抽成 `scan_plugin_path`，分支逐字相同） | [run 34763956140](https://github.com/aizcutei/sunmao/actions/runs/34763956140)（commit `ac41dff`）三 job success，每 job **35 步零非成功**（新步骤 "Drive the interactive host over VST3 + CLAP" 三平台各 success），三份 artifacts 可下载（Linux 1,000,635,643 / Windows 78,737,182 / macOS 54,191,174 bytes；macOS 一份已下载，`unzip -t` 报 No errors detected，SHA-256 `2c01b112…1fa10`）。**三平台原始日志已下载并逐条 grep，且把 GitHub 回显的脚本正文（ANSI `36;1m` 前缀）剔除后计数**：每平台真实输出 `HOST COMMAND SURFACE VERIFIED` **1** 次、`rejected as it must be` **10** 次（十个反向用例逐个非零退出）、`HOST SESSION VERIFIED` **4** 次（两格式各一段 18 命令会话 + 两格式各一段 5 命令编辑器会话）、`editor opened`/`editor closed` 各 **4** 次 | — （M1 完成；两项新发现各自独立立项，见下）|
 | M2 批量 regression host | 确定性批跑（固定种子/buffer/块划分）、音频与参数轨迹、golden 对拍 + 显式浮点容差、有界 fuzz 进 CI | **完成**（三平台 hosted 全绿）：`regress` 子命令与 `regress.rs`；goldens 入库 `tools/regression_goldens/`；两个新 blocking 步骤（golden 对拍、有界 fuzz）。块划分刻意不均匀且首尾钉死在 max/1 | [run 34766022434](https://github.com/aizcutei/sunmao/actions/runs/34766022434)（commit `c059e41`）三 job success，每 job **37 步零非成功**。三平台原始日志剔除脚本回显后逐条核实，**三平台数字完全一致**：`REGRESSION MATCHED GOLDEN` 各 2 次（两格式，各 147 项比对），**worst deviation 三平台均为 `0e0`**，`cross-format audio identical across all block records`、`REGRESSION GOLDENS VERIFIED`、`STATE DECODE FUZZ VERIFIED: 200000 cases` 各 1 次，`perturbed golden rejected`／`future-version trace rejected` 各 1 次。三份 artifacts 可下载（Linux 1,000,654,355 / Windows 78,753,789 / macOS 54,209,946 bytes；Windows 一份已下载，`unzip -t` 通过，SHA-256 `f36237e604a24860…`），且新增的 `host-session`/`regression`/fuzz 日志确已在包内 | — （M2 完成；进入 M3）|
 | M3 性能与泄漏检测 | RT 安全检测扩到 GUI 线程与宿主回调；泄漏检测；基准与阈值写入本文件 | **完成**（三平台 hosted 全绿）：`stress` 子命令 + `rss.rs` + `stress.rs`；`clap.params.flush` 音频线程零分配断言。**只覆盖 RT 安全三项里的「分配」**，加锁与系统调用如实未做 | [run 34773295928](https://github.com/aizcutei/sunmao/actions/runs/34773295928)（commit `1d40eef`）三 job success，每 job **38 步零非成功**。三平台日志剔除脚本回显后核实：`injected leak detected as it must be` 与 `injected editor leak detected as it must be` **各平台各 1 次**（两条守卫都在真硬件上真的变红过），`STRESS LIFECYCLES VERIFIED` 各 1 次 | — （M3 完成；进入 M4）。**但 Linux 的编辑器差分留了一个未归因的数字，见下** |
-| M4 外部 validator | `clap-validator` + Steinberg VST3 validator 三平台 blocking；失败项逐条归因 | 未开始 | — | — |
+| M4 外部 validator | `clap-validator` + Steinberg VST3 validator 三平台 blocking；失败项逐条归因 | **CLAP 侧本地完成，待三平台验收；VST3 validator 未接入**：新增 blocking 步骤 "Validate CLAP plugins with clap-validator"（0.4.1，三平台各取官方预编译包），对**全部 16 个**打包 `.clap` 逐个验证 | 本地：接入前 3 个失败，归因后修掉 2 个真缺陷，现 **16/16 全部 0 failed**（每个 44 tests run） | 取三平台绿；日志须 grep 到 `CLAP VALIDATOR VERIFIED` 与每个插件的 `, 0 failed,` |
 | M5 DAW smoke 与兼容性报告 | 可脚本化 DAW 三平台加载/处理/存工程/重开；机器可读兼容性报告 artifact | 未开始 | — | — |
 
 ## M1 抓到的两项新发现（各自独立立项）
@@ -297,6 +297,55 @@ M3 的原始范围写的是「分配/加锁/系统调用」。本轮只做了**�
 
 写在这里而不是含糊带过，是因为 status.md 的 M3 行若只说「完成」，下一个人会以为
 audio 线程的加锁和系统调用已经有守卫了。
+
+## M4：clap-validator 抓到的三项，逐条归因
+
+接入 clap-validator 0.4.1 后，第一次运行就有失败。**逐条归因是 M4 的要求，不是可选项**——
+下面三项里两项是我们的缺陷、一项是 validator 自己的问题。
+
+### 1. `state-reproducibility-{basic,binary,buffered}` —— **我们的缺陷，已修**
+
+三条测试同一个根因。**我最初的判断是错的**：看到「After reloading the state, these parameter
+values changed」以为是 state 往返坏了，还去查了跨进程往返——结果是好的。
+读了 validator 的源码才明白，它比较的是 `before_load` 与 `after_load`，
+而报错的重点在后半句：**`without a rescan request`**。
+
+值确实正确加载了（0.056 就是它随机出来的那个值）。**问题是加载之后没有通知宿主。**
+CLAP 要求插件在 state 加载后调用 `clap_host_params::rescan(CLAP_PARAM_RESCAN_VALUES)`；
+`clap_sys` 早就有这个绑定，但 `clap_rs` 全仓只在测试桩里出现过 `rescan: None`——**从来没调用过**。
+后果是真实可见的：宿主打开工程后，自动化轨道与通用 UI 上仍是旧值，直到别的事情触发一次 rescan。
+
+**两格式同时落地**（host-facing 能力的硬性要求）：VST3 的对应物是
+`IComponentHandler::restartComponent(kParamValuesChanged)`，同样**从未调用过**。
+已在 `clap_rs::HostHandle::rescan_parameter_values()` 与
+`vst3_rs::HostHandle::restart_parameter_values()` 各加一个方法，并在两边 state 加载成功后调用
+（VST3 挂在**控制器**侧——component handler 在控制器上，processor 根本没有 host 字段，
+第一次写在 processor 上编译就失败了，正好说明了该挂哪里）。
+
+### 2. `param-fuzz-basic` / `param-fuzz-sample-accurate`（`SunMao OS Distortion`）—— **我们的缺陷，已修**
+
+输出里出现**次正规数**（3e-45）。次正规数的算术在部分硬件上慢得惊人，把它交给宿主等于
+把停顿传染给下游。`sunmao/dsp` 本来就有 `flush_denormal`，文档里写的正是这个危害，
+但过采样失真这个示例**没有在输出上用它**——过采样器的滤波器衰减到零的尾巴正好落在次正规区间。
+已在每个通道处理完后 flush。
+
+**但这一条没有单元测试守卫，如实说明**：我写了一个「输出不得有次正规数」的测试，
+**反向验证时它并不会变红**（把 flush 去掉仍然通过）——我试了正弦爆发后静音、又试了 trim 打到下限，
+都没能复现 validator 用 50 组随机参数排列才撞到的那个组合。
+**与其留一个看起来像守卫、实测证明不会失败的装饰，不如删掉它并写明这件事。**
+这一条的守卫就是 CI 里的 clap-validator 步骤——它确实抓到过，现在确实是绿的。
+
+### 3. `param-fuzz-bounds` 报 crashed —— **validator 自己的问题**
+
+报错原文就写着 "This is a bug in the validator"：它想创建的临时文件已经存在。
+这是前一条测试失败后留下的残留文件导致的连锁反应；把第 2 项修掉之后，这一条自动消失。
+**不是我们的缺陷，也不需要为它改任何代码。**
+
+### 未接入：Steinberg VST3 validator
+
+M4 的范围包含它，本轮**没做**。它不像 clap-validator 那样提供预编译产物，需要在 CI 上
+用 CMake 构建 VST3 SDK（含子模块）后才能拿到 `validator` 可执行文件，三平台各一份。
+这是下一轮的工作，**在它接入之前 M4 不能标记完成**。
 
 ## 从 Phase 4 继承的已知遗留
 

@@ -959,6 +959,73 @@ jobs:
 
           echo "REGRESSION GOLDENS VERIFIED: VST3 + CLAP matched, cross-format runs identical"
 
+      - name: Validate CLAP plugins with clap-validator
+        shell: bash
+        env:
+          CLAP_VALIDATOR_VERSION: "0.4.1-127-g152b982"
+        run: |
+          set -euo pipefail
+          work="target/phase1-artifacts/clap-validator"
+          mkdir -p "$work"
+          case "${{ runner.os }}" in
+            macOS)   asset="clap-validator-${CLAP_VALIDATOR_VERSION}-macos-15-aarch64.zip" ;;
+            Linux)   asset="clap-validator-${CLAP_VALIDATOR_VERSION}-ubuntu-22.04.zip" ;;
+            Windows) asset="clap-validator-${CLAP_VALIDATOR_VERSION}-windows.zip" ;;
+            *) echo "unsupported runner OS: ${{ runner.os }}" >&2; exit 1 ;;
+          esac
+          url="https://github.com/free-audio/clap-validator/releases/download/0.4.1/$asset"
+          curl -sSfL "$url" -o "$work/validator.zip"
+          # The release zips contain a tarball on Unix and the binary on Windows.
+          (cd "$work" && unzip -qo validator.zip && \
+            for archive in *.tar.gz; do [ -e "$archive" ] && tar xzf "$archive"; done; true)
+          validator="$work/clap-validator${{ matrix.executable-suffix }}"
+          test -x "$validator" || chmod +x "$validator"
+          "$validator" --version
+
+          # Every packaged CLAP bundle, not a representative one: these tests
+          # are cheap and the per-plugin differences are exactly what a
+          # validator is for.
+          failed=0
+          for plugin in target/phase1-artifacts/*.clap; do
+            name="$(basename "$plugin")"
+            log="$work/${name}.log"
+            set +e
+            "$validator" validate "$plugin" > "$log" 2>&1
+            status=$?
+            set -e
+            tail -1 "$log"
+            if [ "$status" -ne 0 ]; then
+              echo "::error title=clap-validator failed::$name" >&2
+              cat "$log" >&2
+              failed=1
+            fi
+            # A run that tested nothing must not read as a pass.
+            grep -qE "[0-9]+ tests run" "$log"
+            if ! grep -qE ", 0 failed," "$log"; then
+              echo "$name reported failures" >&2
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+
+          # The validator has to be able to fail here, or this step is a
+          # decoration. A file that is not a CLAP plugin must be rejected.
+          printf 'not a plugin' > "$work/bogus.clap"
+          set +e
+          "$validator" validate "$work/bogus.clap" > "$work/bogus.log" 2>&1
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "clap-validator accepted a file that is not a plugin" >&2
+            cat "$work/bogus.log" >&2
+            exit 1
+          fi
+          echo "clap-validator rejected a non-plugin as it must"
+
+          echo "CLAP VALIDATOR VERIFIED: every packaged .clap passed with 0 failures"
+
       - name: Detect leaks over repeated plugin and editor lifecycles
         shell: bash
         run: |
@@ -1319,6 +1386,7 @@ jobs:
             target/phase1-artifacts/regression
             target/phase1-artifacts/fuzz-state-decode.log
             target/phase1-artifacts/stress
+            target/phase1-artifacts/clap-validator
             target/phase1-artifacts/*.test.log
             target/phase1-artifacts/*.gui-test.log
             target/phase1-artifacts/*.validation.txt

@@ -384,6 +384,29 @@ impl HostHandle {
             && unsafe { ((*vtbl).perform_edit)(handler, id, value.clamp(0.0, 1.0)) == kResultOk }
     }
 
+    /// Tell the host that parameter values changed underneath it.
+    ///
+    /// `IComponentHandler::restartComponent(kParamValuesChanged)`. Loading a
+    /// preset or a project moves every parameter at once without any of the
+    /// begin/perform/end traffic a gesture produces, so without this the host
+    /// keeps displaying and automating the values it last knew about. CLAP has
+    /// the same requirement through `clap_host_params::rescan`, and
+    /// clap-validator fails a plugin that omits it.
+    pub fn restart_parameter_values(&self) -> bool {
+        let handler = self.inner.component_handler.load(Ordering::Acquire);
+        if handler.is_null() {
+            return false;
+        }
+        let vtbl = unsafe { *(handler as *const *const IComponentHandlerVtbl) };
+        !vtbl.is_null()
+            && unsafe {
+                ((*vtbl).restart_component)(
+                    handler,
+                    vst3_sys::vst::ieditcontroller::RestartFlags::kParamValuesChanged,
+                ) == kResultOk
+            }
+    }
+
     /// Notify the host that a GUI parameter gesture has ended.
     pub fn end_edit(&self, id: u32) -> bool {
         let handler = self.inner.component_handler.load(Ordering::Acquire);

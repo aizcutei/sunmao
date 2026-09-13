@@ -417,6 +417,36 @@ impl HostHandle {
             .queue_parameter_event(HostParameterEvent::End { id })
     }
 
+    /// Tell the host that parameter values changed underneath it.
+    ///
+    /// `clap_host_params::rescan(CLAP_PARAM_RESCAN_VALUES)`. Loading a preset
+    /// or a project moves every parameter at once without any of the
+    /// begin/perform/end traffic a gesture produces, so without this the host
+    /// keeps showing and automating the values it last knew about.
+    /// clap-validator's `state-reproducibility-*` tests fail a plugin that
+    /// omits it, which is how this was found. VST3 has the same requirement
+    /// through `IComponentHandler::restartComponent(kParamValuesChanged)`.
+    pub fn rescan_parameter_values(&self) -> bool {
+        unsafe {
+            let Some(params) = self
+                .inner
+                .extension::<clap_sys::ext::params::clap_host_params_t>(
+                    clap_sys::ext::params::CLAP_EXT_PARAMS,
+                )
+            else {
+                return false;
+            };
+            let Some(rescan) = (*params).rescan else {
+                return false;
+            };
+            rescan(
+                self.inner.raw,
+                clap_sys::ext::params::CLAP_PARAM_RESCAN_VALUES,
+            );
+            true
+        }
+    }
+
     /// Ask the CLAP host to resize the editor window.
     pub fn request_resize(&self, width: u32, height: u32) -> bool {
         unsafe {

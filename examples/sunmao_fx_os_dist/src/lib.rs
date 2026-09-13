@@ -10,6 +10,7 @@
 //! runner asserts against, on both VST3 and CLAP.
 
 use sunmao::prelude::*;
+use sunmao_dsp::flush_denormal;
 use sunmao_dsp::mixing::{DryWet, MixLaw};
 use sunmao_dsp::oversampling::{Oversampler, OversamplingFactor};
 
@@ -162,6 +163,15 @@ impl SunmaoPlugin for OsDistPlugin {
                         *sample = mixer.mix(dry, shape(dry, drive) * trim);
                     }
                 }
+            }
+            // The oversampler's filters ring down towards zero, and the tail of
+            // that decay is subnormal. Subnormal arithmetic is catastrophically
+            // slow on some hardware -- which is why `flush_denormal` exists --
+            // and handing subnormals to the host spreads the problem into
+            // whatever it feeds next. clap-validator rejects them outright,
+            // which is how this was found.
+            for sample in samples.iter_mut() {
+                *sample = flush_denormal(*sample);
             }
         }
 
