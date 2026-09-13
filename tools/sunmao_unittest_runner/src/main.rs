@@ -1,6 +1,8 @@
 mod gui;
 mod gui_window;
 mod host;
+mod interactive;
+mod preset;
 
 use host::*;
 use std::path::Path;
@@ -97,6 +99,13 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             };
         }
+        "host" => {
+            return if interactive::cmd_host(&args[2..]) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            };
+        }
         "gui-test" => {
             return if cmd_gui_test(&args[2..]) {
                 ExitCode::SUCCESS
@@ -126,6 +135,10 @@ fn print_usage() {
     eprintln!("  sunmao_unittest_runner test <plugin_path>       Run all tests on a plugin");
     eprintln!("  sunmao_unittest_runner process <plugin_path>    Process audio through plugin");
     eprintln!("  sunmao_unittest_runner gui                      Open GUI interface");
+    eprintln!("  sunmao_unittest_runner host [--sample-rate HZ] [--block-size N] <plugin_path>");
+    eprintln!(
+        "                                                 Interactive host; reads commands from stdin"
+    );
     eprintln!(
         "  sunmao_unittest_runner gui-test [--auto-close] [--verify-pixels] [--verify-input [--drag-from X,Y --drag-to X,Y]] <plugin_path>"
     );
@@ -220,6 +233,33 @@ fn cmd_scan(args: &[String]) -> bool {
 
 // ---- Info Command ----
 
+/// Scan one plugin path for the classes it exposes, dispatching on extension.
+///
+/// `None` means the path's extension is not a format this build can host; the
+/// message is printed here so every command reports an unknown format the same
+/// way, which is what the existing CI scripts already grep for.
+pub(crate) fn scan_plugin_path(path: &str) -> Option<Vec<PluginInfo>> {
+    let ext = plugin_extension(Path::new(path));
+    match ext.as_str() {
+        "clap" => Some(scanner::scan_clap(Path::new(path))),
+        "vst3" => Some(scanner::scan_vst3(Path::new(path))),
+        "component" => {
+            #[cfg(all(target_os = "macos", feature = "au"))]
+            {
+                Some(scanner::scan_au(Path::new(path)))
+            }
+            #[cfg(not(all(target_os = "macos", feature = "au")))]
+            {
+                Some(Vec::new())
+            }
+        }
+        _ => {
+            eprintln!("Unknown plugin format: {}", ext);
+            None
+        }
+    }
+}
+
 fn cmd_info(args: &[String]) -> bool {
     if args.is_empty() {
         eprintln!("Usage: sunmao_unittest_runner info <plugin_path>");
@@ -227,25 +267,9 @@ fn cmd_info(args: &[String]) -> bool {
     }
 
     let path = &args[0];
-    let ext = plugin_extension(Path::new(path));
-
-    let plugins = match ext.as_str() {
-        "clap" => scanner::scan_clap(Path::new(path)),
-        "vst3" => scanner::scan_vst3(Path::new(path)),
-        "component" => {
-            #[cfg(all(target_os = "macos", feature = "au"))]
-            {
-                scanner::scan_au(Path::new(path))
-            }
-            #[cfg(not(all(target_os = "macos", feature = "au")))]
-            {
-                Vec::new()
-            }
-        }
-        _ => {
-            eprintln!("Unknown plugin format: {}", ext);
-            return false;
-        }
+    let plugins = match scan_plugin_path(path) {
+        Some(plugins) => plugins,
+        None => return false,
     };
 
     for p in &plugins {
@@ -285,25 +309,9 @@ fn cmd_test(args: &[String]) -> bool {
     }
 
     let path = &args[0];
-    let ext = plugin_extension(Path::new(path));
-
-    let plugins = match ext.as_str() {
-        "clap" => scanner::scan_clap(Path::new(path)),
-        "vst3" => scanner::scan_vst3(Path::new(path)),
-        "component" => {
-            #[cfg(all(target_os = "macos", feature = "au"))]
-            {
-                scanner::scan_au(Path::new(path))
-            }
-            #[cfg(not(all(target_os = "macos", feature = "au")))]
-            {
-                Vec::new()
-            }
-        }
-        _ => {
-            eprintln!("Unknown plugin format: {}", ext);
-            return false;
-        }
+    let plugins = match scan_plugin_path(path) {
+        Some(plugins) => plugins,
+        None => return false,
     };
 
     if plugins.is_empty() {
@@ -1668,25 +1676,9 @@ fn cmd_process(args: &[String]) -> bool {
     }
 
     let path = &args[0];
-    let ext = plugin_extension(Path::new(path));
-
-    let plugins = match ext.as_str() {
-        "clap" => scanner::scan_clap(Path::new(path)),
-        "vst3" => scanner::scan_vst3(Path::new(path)),
-        "component" => {
-            #[cfg(all(target_os = "macos", feature = "au"))]
-            {
-                scanner::scan_au(Path::new(path))
-            }
-            #[cfg(not(all(target_os = "macos", feature = "au")))]
-            {
-                Vec::new()
-            }
-        }
-        _ => {
-            eprintln!("Unknown plugin format: {}", ext);
-            return false;
-        }
+    let plugins = match scan_plugin_path(path) {
+        Some(plugins) => plugins,
+        None => return false,
     };
 
     if plugins.is_empty() {
@@ -2045,25 +2037,9 @@ fn cmd_gui_test(args: &[String]) -> bool {
     }
 
     let path = options.path;
-    let ext = plugin_extension(Path::new(path));
-
-    let plugins = match ext.as_str() {
-        "clap" => scanner::scan_clap(Path::new(path)),
-        "vst3" => scanner::scan_vst3(Path::new(path)),
-        "component" => {
-            #[cfg(all(target_os = "macos", feature = "au"))]
-            {
-                scanner::scan_au(Path::new(path))
-            }
-            #[cfg(not(all(target_os = "macos", feature = "au")))]
-            {
-                Vec::new()
-            }
-        }
-        _ => {
-            eprintln!("Unknown plugin format: {}", ext);
-            return false;
-        }
+    let plugins = match scan_plugin_path(path) {
+        Some(plugins) => plugins,
+        None => return false,
     };
 
     if plugins.is_empty() {
@@ -2455,7 +2431,7 @@ fn cmd_gui_test(args: &[String]) -> bool {
 
 // ---- Plugin Loading ----
 
-fn load_plugin(info: &PluginInfo) -> Result<Box<dyn HostPlugin>, String> {
+pub(crate) fn load_plugin(info: &PluginInfo) -> Result<Box<dyn HostPlugin>, String> {
     match info.format {
         PluginFormat::CLAP => {
             let p = clap_host::ClapHostPlugin::load(&info.path, &info.id)?;

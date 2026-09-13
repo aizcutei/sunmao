@@ -60,7 +60,7 @@ commit `d9bed39`（Phase 4 尖端，工作树干净），macOS ARM64 本地：
 
 代码规模：`main.rs` 2797 行、`gui_window.rs` 3508、`gui.rs` 1062、
 `host/vst3_host.rs` 2318、`host/clap_host.rs` 1538、`host/au_host.rs` 904、
-`host/scanner.rs` 767、`host/mod.rs` 694，合计 **13588 行**；自带 `#[test]` **47 个**。
+`host/scanner.rs` 767、`host/mod.rs` 694，合计 **13588 行**；源码里 `#[test]` **47 处**，其中在 macOS 上实际运行 **44 个**（其余被平台 `cfg` 挡掉）——后一个数才是基线可比的数。
 
 ### 已有：子命令
 
@@ -121,8 +121,8 @@ backends" 两个 blocking 步骤里被当作宿主调用。
 
 | Milestone | 范围 | 当前判断 | 权威证据 | 下一步 |
 |---|---|---|---|---|
-| M0 脚手架与基线 | 建 `docs/phase5/{status,progress}.md`；清点 runner 能力与缺口；记录本地 gate 基线 | **进行中** | 本地 gate（见上表）；能力/缺口清单已逐条附证据 | 取三平台绿后标记完成，进入 M1 |
-| M1 交互式 standalone host | 加载已打包 `.vst3`/`.clap`、枚举参数与 bus、改参数、存取 state/preset、开关编辑器；既有非交互 CI 用法原样不变 | 未开始 | — | — |
+| M0 脚手架与基线 | 建 `docs/phase5/{status,progress}.md`；清点 runner 能力与缺口；记录本地 gate 基线 | **完成**（三平台 hosted 全绿）：文档、能力清单与两条实测基线落地 | [run 34761153409](https://github.com/aizcutei/sunmao/actions/runs/34761153409)（commit `9cce371`）三 job success，每 job **34 步零非成功**（跳过项分别为 5/9/11，均为平台不适用者），三份 artifacts 可下载（Linux 1,000,635,181 / Windows 78,735,698 / macOS 54,190,684 bytes；macOS 一份已下载，`unzip -t` 报 No errors detected）。**该 commit 是纯文档提交，没有新增断言**，故 CI 对它能提供的证据仅限“Phase 1–4 既有 34 步仍 blocking 且绿” | — （M0 完成；进入 M1）|
+| M1 交互式 standalone host | 加载已打包 `.vst3`/`.clap`、枚举参数与 bus、改参数、存取 state/preset、开关编辑器；既有非交互 CI 用法原样不变 | **本地完成，待三平台验收**：新增 `host` 子命令（行式命令语言，人可交互、管道可脚本化），`preset.rs` 按上游转录实现 `.vstpreset` 容器，`HostPlugin::class_id` 补上 VST3 class ID，CLAP 宿主不再对未知参数 ID 报成功。既有六个子命令未改行为（四处重复的扫描分派抽成 `scan_plugin_path`，分支逐字相同） | 本地：runner 单测 **44 → 70**（macOS 实跑，+26），全仓 676 → **702 passed / 0 failed**，逐套件比对确认**只有 runner 一套变化**、其余与 M0 基线逐位相同；两格式各一次 18 命令会话 `HOST SESSION VERIFIED`；CI 步骤本体在本机以真实打包产物跑通，10 个反向用例逐个必须非零退出 | 取三平台绿；日志须 grep 到 `HOST COMMAND SURFACE VERIFIED` 与 10 条 `rejected as it must be` |
 | M2 批量 regression host | 确定性批跑（固定种子/buffer/块划分）、音频与参数轨迹、golden 对拍 + 显式浮点容差、有界 fuzz 进 CI | 未开始 | — | — |
 | M3 性能与泄漏检测 | RT 安全检测扩到 GUI 线程与宿主回调；泄漏检测；基准与阈值写入本文件 | 未开始 | — | — |
 | M4 外部 validator | `clap-validator` + Steinberg VST3 validator 三平台 blocking；失败项逐条归因 | 未开始 | — | — |
@@ -143,4 +143,4 @@ backends" 两个 blocking 步骤里被当作宿主调用。
 Phase 5 完成的唯一判定：同一 commit 三平台 hosted native jobs 全绿 + artifacts 可下载
 + 本文件 Milestone 矩阵 M0–M5 全部标记完成。本地结果任何情况下都不构成完成证据。
 
-### 当前判定：**Phase 5 进行中（M0）**
+### 当前判定：**Phase 5 进行中（M0 完成，M1 待三平台验收）**

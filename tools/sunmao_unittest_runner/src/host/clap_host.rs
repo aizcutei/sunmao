@@ -401,7 +401,20 @@ impl HostPlugin for ClapHostPlugin {
     }
 
     fn param_set(&mut self, id: u32, value: f64) -> Result<(), String> {
-        // Use param flush to set parameter value
+        // Use param flush to set parameter value.
+        //
+        // `clap_plugin_params.flush` returns `void`, so a parameter event
+        // carrying an ID the plugin does not have is dropped without a word.
+        // CLAP puts that responsibility on the host: the IDs it sends are the
+        // ones `params.get_info` gave it. Ask the plugin first, so this host
+        // reports an unknown ID the way the VST3 host already does
+        // (`IEditController::setParamNormalized` answers `kResultFalse`)
+        // instead of reporting success for a write that went nowhere.
+        if self.param_get(id).is_none() {
+            return Err(format!(
+                "plugin has no parameter with id {id}; clap.params flush would have dropped it silently"
+            ));
+        }
         unsafe {
             let plugin = &*self.plugin;
             let ext = plugin.get_extension.ok_or("no get_extension")?;

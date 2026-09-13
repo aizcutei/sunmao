@@ -766,6 +766,123 @@ jobs:
             exit 1
           fi
 
+      - name: Drive the interactive host over VST3 + CLAP
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner="target/debug/sunmao_unittest_runner${{ matrix.executable-suffix }}"
+          gain="target/phase1-artifacts/SunMaoGain"
+          widgets="target/phase1-artifacts/SunMaoWidgetsGL"
+          work="target/phase1-artifacts/host-session"
+          mkdir -p "$work"
+
+          # The editor half needs a display and software GL on Linux, and the
+          # same 180s cap the other Linux GUI work uses so a hung window shows
+          # up as a log tail rather than a 75-minute job.
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            gui_host=(timeout --signal=TERM --kill-after=15 180 xvfb-run -a -- env GDK_BACKEND=x11 WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 "$runner")
+          else
+            gui_host=("$runner")
+          fi
+
+          cat > "$work/session.txt" <<'SESSION'
+          # Enumerate, change, persist through both a state blob and a preset
+          # file, and prove the value that comes back is the one that went in.
+          info
+          params
+          buses
+          set #0 0.25
+          expect #0 0.25
+          state save STATE_PATH
+          preset save PRESET_PATH
+          set #0 0.75
+          expect #0 0.75
+          preset load PRESET_PATH
+          expect #0 0.25
+          set #0 0.9
+          expect #0 0.9
+          state load STATE_PATH
+          expect #0 0.25
+          process 128
+          reset
+          quit
+          SESSION
+
+          for format in vst3 clap; do
+            sed -e "s#STATE_PATH#$work/gain.$format.state#" \
+                -e "s#PRESET_PATH#$work/gain.$format.preset#" \
+                "$work/session.txt" > "$work/session.$format.txt"
+            "$runner" host "$gain.$format" < "$work/session.$format.txt" 2>&1 \
+              | tee "$work/gain.$format.host.log"
+            grep -q "HOST SESSION VERIFIED" "$work/gain.$format.host.log"
+            grep -q "^buses 2" "$work/gain.$format.host.log"
+            grep -q "^parameters 3" "$work/gain.$format.host.log"
+            # Three separate round-trips have to land on the same value.
+            test "$(grep -c "== 0.25 (within" "$work/gain.$format.host.log")" -eq 3
+            test -s "$work/gain.$format.state"
+            test -s "$work/gain.$format.preset"
+          done
+
+          # VST3 presets are a specified container; CLAP presets are the state
+          # stream verbatim. Assert the difference rather than assuming it.
+          head -c 4 "$work/gain.vst3.preset" | grep -q "VST3"
+          cmp "$work/gain.clap.state" "$work/gain.clap.preset"
+          if cmp -s "$work/gain.vst3.state" "$work/gain.vst3.preset"; then
+            echo "VST3 preset is identical to raw state; the container is missing" >&2
+            exit 1
+          fi
+          grep -q "preset saved: VST3 container" "$work/gain.vst3.host.log"
+          grep -q "preset loaded: VST3 container" "$work/gain.vst3.host.log"
+          grep -q "preset saved: CLAP container" "$work/gain.clap.host.log"
+          grep -q "preset loaded: CLAP container" "$work/gain.clap.host.log"
+
+          # Every guard below has to be able to turn this step red. Each of
+          # these sessions MUST fail; a host that shrugs at them would let a
+          # green job assert nothing, which this repository has been bitten by.
+          must_fail() {
+            local label="$1" plugin="$2" script="$3"
+            # Separate declarations on purpose: bash expands every word of a
+            # `local` before assigning any of them, so `log=...$label...` on the
+            # line above would read an unbound variable under `set -u`.
+            local log="$work/negative.$label.log"
+            set +e
+            printf '%s\n' "$script" | "$runner" host "$plugin" > "$log" 2>&1
+            local status=$?
+            set -e
+            if [ "$status" -eq 0 ]; then
+              echo "negative case '$label' was accepted; the guard cannot fail" >&2
+              cat "$log" >&2
+              exit 1
+            fi
+            grep -q "HOST SESSION FAILED" "$log"
+            echo "negative case '$label' rejected as it must be"
+          }
+
+          for format in vst3 clap; do
+            must_fail "unknown-param-$format" "$gain.$format" $'set 0 0.5\nquit'
+            must_fail "out-of-range-index-$format" "$gain.$format" $'set #99 0.5\nquit'
+            must_fail "bad-expectation-$format" "$gain.$format" $'set #0 0.25\nexpect #0 0.75\nquit'
+            must_fail "typo-$format" "$gain.$format" $'paramz\nquit'
+          done
+          # A preset from the other format must be refused, not fed to the plugin.
+          must_fail "vst3-preset-into-clap" "$gain.clap" \
+            "preset load $work/gain.vst3.preset"$'\nquit'
+          head -c 20 "$work/gain.vst3.preset" > "$work/truncated.preset"
+          must_fail "truncated-preset" "$gain.vst3" \
+            "preset load $work/truncated.preset"$'\nquit'
+
+          # Editor lifecycle, on the bundle that actually has one.
+          for format in vst3 clap; do
+            "${gui_host[@]}" host "$widgets.$format" 2>&1 \
+              <<< $'editor open\neditor close\neditor open\neditor close\nquit' \
+              | tee "$work/widgets.$format.editor.log"
+            grep -q "HOST SESSION VERIFIED" "$work/widgets.$format.editor.log"
+            test "$(grep -c "^editor opened" "$work/widgets.$format.editor.log")" -eq 2
+            test "$(grep -c "^editor closed" "$work/widgets.$format.editor.log")" -eq 2
+          done
+
+          echo "HOST COMMAND SURFACE VERIFIED: params, buses, state, preset and editor over VST3 + CLAP"
+
       - name: Package and exercise native GUI backends
         shell: bash
         env:

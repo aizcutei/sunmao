@@ -225,6 +225,18 @@ pub trait HostPlugin: Send {
         None
     }
 
+    /// The plugin's class ID as the format reports it, when the format has
+    /// one that a preset file must carry.
+    ///
+    /// VST3 does: `.vstpreset` stores it so a host can refuse a preset from a
+    /// different plugin. CLAP does not — its preset files are the plugin's own
+    /// business (`clap.preset-discovery`), so this stays `None` there and the
+    /// asymmetry is documented in `docs/phase2/semantics.md` rather than
+    /// papered over with a fabricated ID.
+    fn class_id(&self) -> Option<[i8; 16]> {
+        None
+    }
+
     /// The plugin's audio bus topology as the host sees it
     /// (`getBusCount`/`getBusInfo` / `clap.audio-ports`).
     fn audio_buses(&self) -> Option<Vec<HostBusInfo>> {

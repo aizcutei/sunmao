@@ -95,6 +95,12 @@ impl Vst3HostPlugFrame {
 
 pub struct Vst3HostPlugin {
     info: PluginInfo,
+    /// The class ID exactly as `IPluginFactory::getClassInfo` reported it.
+    ///
+    /// `PluginInfo::id` is a `{:?}` rendering of these bytes for display; a
+    /// `.vstpreset` needs the bytes themselves, so keep them rather than
+    /// parsing the debug string back.
+    class_id: [i8; 16],
     /// Deliberately never unloaded.
     ///
     /// A plugin that has initialized a GPU backend (D3D12 via WGPU, in
@@ -520,6 +526,7 @@ impl Vst3HostPlugin {
 
             Ok(Self {
                 info,
+                class_id: class_info.cid,
                 _lib: ManuallyDrop::new(lib),
                 component: component_ptr,
                 processor,
@@ -1186,6 +1193,10 @@ impl HostPlugin for Vst3HostPlugin {
             return None;
         }
         unsafe { Some(((*self.processor_vtbl).get_tail_samples)(self.processor)) }
+    }
+
+    fn class_id(&self) -> Option<[i8; 16]> {
+        Some(self.class_id)
     }
 
     fn audio_buses(&self) -> Option<Vec<HostBusInfo>> {
