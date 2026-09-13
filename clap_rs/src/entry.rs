@@ -118,12 +118,41 @@ mod tests {
     static TRACKED_ALLOCATION: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
     static TRACKED_ALLOCATION_FREED: AtomicBool = AtomicBool::new(false);
 
+    // Armed per thread, so counting on one thread cannot be disturbed by any
+    // other test running beside it. -1 means "not counting".
+    thread_local! {
+        static ALLOCATOR_CALLS: std::cell::Cell<isize> = const { std::cell::Cell::new(-1) };
+    }
+
+    fn record_allocator_call() {
+        let _ = ALLOCATOR_CALLS.try_with(|calls| {
+            let current = calls.get();
+            if current >= 0 {
+                calls.set(current + 1);
+            }
+        });
+    }
+
+    /// Count allocator traffic on this thread while `callback` runs.
+    fn count_allocator_calls<R>(callback: impl FnOnce() -> R) -> (R, usize) {
+        ALLOCATOR_CALLS.with(|calls| calls.set(0));
+        let result = callback();
+        let calls = ALLOCATOR_CALLS.with(|calls| {
+            let seen = calls.get();
+            calls.set(-1);
+            seen.max(0) as usize
+        });
+        (result, calls)
+    }
+
     unsafe impl GlobalAlloc for TrackingAllocator {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            record_allocator_call();
             unsafe { System.alloc(layout) }
         }
 
         unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            record_allocator_call();
             if TRACKED_ALLOCATION
                 .compare_exchange(ptr, ptr::null_mut(), Ordering::SeqCst, Ordering::SeqCst)
                 .is_ok()
@@ -520,6 +549,80 @@ mod tests {
                 .join()
                 .expect("audio-thread flush");
         });
+    }
+
+    /// `clap.params.flush` is a host callback CLAP explicitly allows on the
+    /// **audio thread** while the plugin is active, so it is bound by the same
+    /// no-allocation rule as `process`.
+    ///
+    /// Phase 4 pinned `process`; nothing pinned this one, and it is the easier
+    /// of the two to regress precisely because it looks like a control-path
+    /// call. Measured on the spawned thread so the count cannot pick up
+    /// allocations the test harness makes on the main thread.
+    #[test]
+    fn params_flush_on_the_audio_thread_does_not_allocate() {
+        let plugin =
+            unsafe { PluginEntry::create_plugin::<RoutingPlugin>(ptr::null(), ptr::null()) };
+        assert!(unsafe { ((*plugin).init.unwrap())(plugin) });
+        let params = unsafe {
+            ((*plugin).get_extension.unwrap())(plugin, CLAP_EXT_PARAMS.as_ptr().cast())
+                as *const clap_plugin_params_t
+        };
+        assert!(!params.is_null());
+        // Active, so `flush` routes to the audio-thread path.
+        assert!(unsafe { ((*plugin).activate.unwrap())(plugin, 48_000.0, 1, 512) });
+
+        let event = clap_event_param_value_t {
+            header: clap_event_header_t {
+                size: std::mem::size_of::<clap_event_param_value_t>() as u32,
+                time: 0,
+                space_id: CLAP_CORE_EVENT_SPACE_ID,
+                type_: CLAP_EVENT_PARAM_VALUE,
+                flags: 0,
+            },
+            param_id: 7,
+            cookie: ptr::null_mut(),
+            note_id: -1,
+            port_index: -1,
+            channel: -1,
+            key: -1,
+            value: 0.5,
+        };
+        let input = clap_input_events_t {
+            ctx: (&event as *const clap_event_param_value_t) as *mut c_void,
+            size: Some(one_event_size),
+            get: Some(one_event_get),
+        };
+
+        let plugin_address = plugin as usize;
+        let params_address = params as usize;
+        let input_address = &input as *const clap_input_events_t as usize;
+        let calls = std::thread::scope(|scope| {
+            scope
+                .spawn(move || {
+                    let plugin = plugin_address as *const clap_plugin_t;
+                    let params = params_address as *const clap_plugin_params_t;
+                    let input = input_address as *const clap_input_events_t;
+                    // Once outside the measurement so any first-call lazy
+                    // initialisation is not charged to the steady state.
+                    unsafe { ((*params).flush.unwrap())(plugin, input, ptr::null()) };
+                    let ((), calls) = count_allocator_calls(|| unsafe {
+                        for _ in 0..16 {
+                            ((*params).flush.unwrap())(plugin, input, ptr::null());
+                        }
+                    });
+                    calls
+                })
+                .join()
+                .expect("audio-thread flush")
+        });
+        assert_eq!(
+            calls, 0,
+            "params.flush allocated {calls} times on the audio thread"
+        );
+
+        unsafe { ((*plugin).deactivate.unwrap())(plugin) };
+        unsafe { ((*plugin).destroy.unwrap())(plugin) };
     }
 
     #[test]

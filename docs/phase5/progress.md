@@ -245,3 +245,37 @@
   `tools/regression_goldens/README.md` 记下修复前后的对照，好让后来者知道这两份文件为什么值得入库。
 - Unresolved: 进入 **M3：性能与泄漏检测**。仍未修两项：连续参数的 f32/f64 精度差（两格式都不算错，
   宿主以显式容差应对）、**VST3 class 串跨平台不一致（须由仓库所有者拍板）**。Phase 4 继承的四条遗留未动。
+### 2026-09-14 — M3 性能与泄漏检测
+
+- Command/platform: 本地 macOS ARM64。`cargo metadata --locked`、`cargo fmt --all -- --check`、
+  `git diff --check`、`RUSTFLAGS=-Awarnings cargo test --locked` 全部 exit 0（/tmp/m3-test.log，
+  **745 passed / 0 failed**）；`tools/package_examples.sh --debug --test` exit 0（32 套件 / 640 断言）。
+  新 CI 步骤脚本体本机跑通。逐套件比对确认只有 `clap_rs`（58→59）与 runner（88→110）两套变化。
+- Result: 新增 `stress` 子命令：`rss.rs` 三平台读常驻内存（Linux `/proc/self/statm`、
+  macOS `task_info` + `MACH_TASK_BASIC_INFO`、Windows `GetProcessMemoryInfo`），
+  `stress.rs` 跑重复生命周期。**判据与读数分开**：`GrowthVerdict` 与 `editor_excess` 都是纯函数、都单测，
+  因为它们才是 CI 变红的依据，也是最容易悄悄写成永远为真的地方。
+  `Unmeasured` 刻意不等于 `Stable`——一个把「读不到内存」当「没泄漏」的步骤，会在查询失效的那天静默停止检测。
+  **macOS 的 `MACH_TASK_BASIC_INFO_COUNT` 第一次写成了 10**（那是旧的 `TASK_BASIC_INFO` 的值），
+  `task_info` 直接拒绝调用、测试当场失败；改成由结构体大小推导并加 `const` 布局断言。
+  另补 `clap_rs` 的 `params_flush_on_the_audio_thread_does_not_allocate`：
+  CLAP 规范允许 `flush` 在插件 active 时跑在**音频线程**上，所以它和 `process` 受同一条零分配约束，
+  而 Phase 4 只钉了 `process`。已反向验证（塞一个 `vec![0u8; 32]` 立即报 `allocated 2 times`）。
+- Evidence/artifact: **本轮最该记的是一次差点写成错误结论的测量。**
+  编辑器开关循环最初报 ~870 KiB/iteration，且在 8/16/32/64 次迭代上**per-iteration 完全线性**
+  （910/866/870/870），看起来是铁证如山的泄漏。但那是仪器的问题，不是插件的：
+  macOS 上紧循环**从不排空 autorelease pool**，Cocoa 的临时对象因此堆着不放（补上后 870 → 484）；
+  **也从不泵事件**，而销毁窗口是请求不是动作，AppKit/X11/Win32 都要在派发事件时才真正完成（补上后反而升到 684）。
+  同一个循环，仪器拿法不同数字差 2.5 倍——**这里没有一个绝对阈值是诚实的**。
+  改用**差分**：同一段窗口生命周期跑两遍，一遍开编辑器一遍不开，相减把窗口系统的代价消掉。
+  结果 `window-open-close 686 KiB/iteration` 对 `editor-open-close 675 KiB/iteration`，
+  **editor-excess = 0 B**。结论从「编辑器每次泄漏 870 KiB」变成「编辑器在窗口生命周期之外没有可测的增长」，
+  后者才是对的。差分算术单测里专门有一条「共享 21 MiB 噪声 + 编辑器多留 4 MiB」，要求**必须**被抓出来。
+  新 blocking 步骤 "Detect leaks over repeated plugin and editor lifecycles"：两格式各跑
+  64 次 instantiate 循环与 24 次编辑器差分循环，外加一个零预算反向用例（必须非零退出）。
+  实测 scan-instantiate-destroy 1.5–3 KiB/iteration（预算 64 KiB）。阈值与来历全部写进 status.md。
+- Unresolved: 须取得同 commit 三平台 hosted 全绿。**M3 只做了 RT 安全三项里的「分配」**，
+  加锁与系统调用如实记为未做（理由见 status.md：前者可仪表的对象目前是空集，后者三平台机制完全不同、
+  不是本轮能连同验收一起交付的量级）——status.md 的 M3 行不写成笼统的「完成」，
+  免得下一个人以为音频线程的加锁/系统调用已经有守卫。
+  三项独立立项未变。下一步 **M4：外部 validator**。

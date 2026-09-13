@@ -124,7 +124,7 @@ backends" 两个 blocking 步骤里被当作宿主调用。
 | M0 脚手架与基线 | 建 `docs/phase5/{status,progress}.md`；清点 runner 能力与缺口；记录本地 gate 基线 | **完成**（三平台 hosted 全绿）：文档、能力清单与两条实测基线落地 | [run 34761153409](https://github.com/aizcutei/sunmao/actions/runs/34761153409)（commit `9cce371`）三 job success，每 job **34 步零非成功**（跳过项分别为 5/9/11，均为平台不适用者），三份 artifacts 可下载（Linux 1,000,635,181 / Windows 78,735,698 / macOS 54,190,684 bytes；macOS 一份已下载，`unzip -t` 报 No errors detected）。**该 commit 是纯文档提交，没有新增断言**，故 CI 对它能提供的证据仅限“Phase 1–4 既有 34 步仍 blocking 且绿” | — （M0 完成；进入 M1）|
 | M1 交互式 standalone host | 加载已打包 `.vst3`/`.clap`、枚举参数与 bus、改参数、存取 state/preset、开关编辑器；既有非交互 CI 用法原样不变 | **完成**（三平台 hosted 全绿）：新增 `host` 子命令（行式命令语言，人可交互、管道可脚本化），`preset.rs` 按上游转录实现 `.vstpreset` 容器，`HostPlugin::class_id` 补上 VST3 class ID，CLAP 宿主不再对未知参数 ID 报成功。既有六个子命令未改行为（四处重复的扫描分派抽成 `scan_plugin_path`，分支逐字相同） | [run 34763956140](https://github.com/aizcutei/sunmao/actions/runs/34763956140)（commit `ac41dff`）三 job success，每 job **35 步零非成功**（新步骤 "Drive the interactive host over VST3 + CLAP" 三平台各 success），三份 artifacts 可下载（Linux 1,000,635,643 / Windows 78,737,182 / macOS 54,191,174 bytes；macOS 一份已下载，`unzip -t` 报 No errors detected，SHA-256 `2c01b112…1fa10`）。**三平台原始日志已下载并逐条 grep，且把 GitHub 回显的脚本正文（ANSI `36;1m` 前缀）剔除后计数**：每平台真实输出 `HOST COMMAND SURFACE VERIFIED` **1** 次、`rejected as it must be` **10** 次（十个反向用例逐个非零退出）、`HOST SESSION VERIFIED` **4** 次（两格式各一段 18 命令会话 + 两格式各一段 5 命令编辑器会话）、`editor opened`/`editor closed` 各 **4** 次 | — （M1 完成；两项新发现各自独立立项，见下）|
 | M2 批量 regression host | 确定性批跑（固定种子/buffer/块划分）、音频与参数轨迹、golden 对拍 + 显式浮点容差、有界 fuzz 进 CI | **完成**（三平台 hosted 全绿）：`regress` 子命令与 `regress.rs`；goldens 入库 `tools/regression_goldens/`；两个新 blocking 步骤（golden 对拍、有界 fuzz）。块划分刻意不均匀且首尾钉死在 max/1 | [run 34766022434](https://github.com/aizcutei/sunmao/actions/runs/34766022434)（commit `c059e41`）三 job success，每 job **37 步零非成功**。三平台原始日志剔除脚本回显后逐条核实，**三平台数字完全一致**：`REGRESSION MATCHED GOLDEN` 各 2 次（两格式，各 147 项比对），**worst deviation 三平台均为 `0e0`**，`cross-format audio identical across all block records`、`REGRESSION GOLDENS VERIFIED`、`STATE DECODE FUZZ VERIFIED: 200000 cases` 各 1 次，`perturbed golden rejected`／`future-version trace rejected` 各 1 次。三份 artifacts 可下载（Linux 1,000,654,355 / Windows 78,753,789 / macOS 54,209,946 bytes；Windows 一份已下载，`unzip -t` 通过，SHA-256 `f36237e604a24860…`），且新增的 `host-session`/`regression`/fuzz 日志确已在包内 | — （M2 完成；进入 M3）|
-| M3 性能与泄漏检测 | RT 安全检测扩到 GUI 线程与宿主回调；泄漏检测；基准与阈值写入本文件 | 未开始 | — | — |
+| M3 性能与泄漏检测 | RT 安全检测扩到 GUI 线程与宿主回调；泄漏检测；基准与阈值写入本文件 | **本地完成，待三平台验收**：新增 `stress` 子命令、`rss.rs`（三平台常驻内存读取）与 `stress.rs`（重复生命周期）；`clap.params.flush` 的音频线程零分配断言补进 `clap_rs`。**RT 安全里的加锁与系统调用两项未做**，见下方说明 | 本地：runner 单测 88 → 116；`clap_rs` +1。实测 scan-instantiate-destroy **1.5–3 KiB/iteration**（预算 64 KiB）、editor-excess **0–32 KiB / 24 iterations**（预算 64 KiB/iteration）；零预算反向用例必然变红 | 取三平台绿；日志须 grep 到 `STRESS LIFECYCLES VERIFIED` 与 `editor-excess:` |
 | M4 外部 validator | `clap-validator` + Steinberg VST3 validator 三平台 blocking；失败项逐条归因 | 未开始 | — | — |
 | M5 DAW smoke 与兼容性报告 | 可脚本化 DAW 三平台加载/处理/存工程/重开；机器可读兼容性报告 artifact | 未开始 | — | — |
 
@@ -208,6 +208,50 @@ CI 的跨格式断言因此从"`block` 行相同"升级成了"除 `format` 外�
 两个新测试都做过**反向验证**：把 `get_param` 改回读 bridge，两者立刻变红（`left: 0.8, right: 1.0`），还原后转绿。
 
 **已三平台验收**：[run 34769367466](https://github.com/aizcutei/sunmao/actions/runs/34769367466)（commit `74588d0`）三 job success、每 job 37 步零非成功。三平台原始日志剔除脚本回显后核实，两条新测试各 `... ok`、且升级后的跨格式断言 `cross-format traces identical in every record but the format line` 三平台各实际输出一次。
+
+## M3 的阈值与它们的来历
+
+阈值不是拍脑袋定的，每条都附实测。三平台实测数字待 CI 回填。
+
+| 检查 | 判据 | 预算 | macOS ARM64 实测 |
+|---|---|---|---|
+| scan-instantiate-destroy | 常驻内存增长 / 迭代 | **64 KiB/iteration** | 1.5–3 KiB/iteration（64 次迭代，8 次预热） |
+| editor-excess | **差分**：开编辑器的循环 减去 只开窗口的循环 | **64 KiB/iteration** | 0–32 KiB / 24 次迭代 |
+| `clap.params.flush`（音频线程） | 分配器调用次数 | **0** | 0（16 次调用） |
+
+### 为什么编辑器用差分而不是绝对预算
+
+**因为绝对预算量的是窗口系统，不是插件。** 本轮实测记录如下，都在 macOS ARM64：
+
+- 只建窗口、不开编辑器的循环：**~277 KiB/iteration**
+- 每次迭代补上 autorelease pool 之后：**~272 KiB/iteration**（编辑器循环则从 ~870 降到 ~484）
+- 再补上事件泵之后：**~684 KiB/iteration**
+
+**同一个循环，仪器拿法不同，数字差 2.5 倍。** 这里没有一个绝对阈值是诚实的。
+但两件事必须做，因为不做就是量错了：**每次迭代 drain 一个 autorelease pool**
+（Cocoa 的 autoreleased 对象本来就要等 pool 排空才释放，紧循环不排空就是把临时对象堆起来当泄漏报），
+以及**每次迭代泵事件**（销毁窗口是请求不是动作，AppKit/X11/Win32 都在派发事件时才真正完成，
+不派发就是把一堆待销毁的排队起来当泄漏报）。
+
+**两个循环都付同样的窗口系统代价，相减就把它消掉了。** 减完剩下的才是编辑器没还回来的东西——
+实测 **0 B**：`window-open-close 686 KiB/iteration` 对 `editor-open-close 675 KiB/iteration`。
+这句话比「编辑器每次泄漏 870 KiB」有用得多，而且它是对的。
+
+差分的算术单独抽成 `stress::editor_excess` 并单测，其中一条专门构造「共享 21 MiB 噪声 +
+编辑器多留 4 MiB」，要求它**必须**被抓出来——否则这个减法可能永远为真。
+
+### 本轮**没有**做的：加锁与系统调用检测
+
+M3 的原始范围写的是「分配/加锁/系统调用」。本轮只做了**分配**那一项，另两项如实记为未做：
+
+- **加锁**：没有可移植的办法拦截任意 `Mutex`/`RwLock`。可行的做法是给框架自己的锁加一层
+  仪表，但 SunMao 的音频路径按设计**根本没有锁**（`ParameterBridge` 的读写是原子的，
+  加锁只出现在 connect/disconnect），所以能仪表的对象目前是空集。
+- **系统调用**：三平台各需一套完全不同的机制（Linux seccomp/ptrace、macOS dtrace、Windows ETW），
+  这不是本轮能连同验收一起交付的量级。
+
+写在这里而不是含糊带过，是因为 status.md 的 M3 行若只说「完成」，下一个人会以为
+audio 线程的加锁和系统调用已经有守卫了。
 
 ## 从 Phase 4 继承的已知遗留
 

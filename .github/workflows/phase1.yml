@@ -959,6 +959,61 @@ jobs:
 
           echo "REGRESSION GOLDENS VERIFIED: VST3 + CLAP matched, cross-format runs identical"
 
+      - name: Detect leaks over repeated plugin and editor lifecycles
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner="target/debug/sunmao_unittest_runner${{ matrix.executable-suffix }}"
+          gain="target/phase1-artifacts/SunMaoGain"
+          gui="target/phase1-artifacts/SunMaoWidgetsGL"
+          work="target/phase1-artifacts/stress"
+          mkdir -p "$work"
+
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            gui_stress=(timeout --signal=TERM --kill-after=15 180 xvfb-run -a -- env GDK_BACKEND=x11 WGPU_BACKEND=gl LIBGL_ALWAYS_SOFTWARE=1 "$runner")
+          else
+            gui_stress=("$runner")
+          fi
+
+          # Scan, instantiate, initialize, process, destroy -- many times. This
+          # loop touches no window system, so its budget can be tight.
+          for format in vst3 clap; do
+            "$runner" stress "$gain.$format" 2>&1 | tee "$work/instance.$format.log"
+            grep -q "STRESS VERIFIED" "$work/instance.$format.log"
+            grep -q "scan-instantiate-destroy: 64 iterations" "$work/instance.$format.log"
+          done
+
+          # The editor loop is judged on a *differential* against the host's own
+          # window lifecycle, because an absolute budget here would be measuring
+          # the window system rather than the plugin. See the constants in
+          # tools/sunmao_unittest_runner/src/stress.rs for the measurements that
+          # forced that design.
+          for format in vst3 clap; do
+            "${gui_stress[@]}" stress --editor --iterations 24 --warmup 8 "$gui.$format" 2>&1 \
+              | tee "$work/editor.$format.log"
+            grep -q "STRESS VERIFIED" "$work/editor.$format.log"
+            grep -q "^window-open-close: 24 iterations" "$work/editor.$format.log"
+            grep -q "^editor-open-close: 24 iterations" "$work/editor.$format.log"
+            grep -q "^editor-excess: " "$work/editor.$format.log"
+          done
+
+          # Both budgets have to be able to fail. A zero budget must turn the
+          # loop that just passed into a reported leak.
+          set +e
+          "$runner" stress --instance-budget 0 --iterations 16 "$gain.vst3" \
+            > "$work/negative.instance.log" 2>&1
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "a zero instance budget was accepted; the leak guard cannot fail" >&2
+            cat "$work/negative.instance.log" >&2
+            exit 1
+          fi
+          grep -q "STRESS LEAK DETECTED: scan-instantiate-destroy" "$work/negative.instance.log"
+          echo "zero instance budget rejected as it must be"
+
+          echo "STRESS LIFECYCLES VERIFIED: instantiate and editor loops within budget on VST3 + CLAP"
+
       - name: Fuzz the state decoders (bounded)
         shell: bash
         run: |
@@ -1240,6 +1295,7 @@ jobs:
             target/phase1-artifacts/host-session
             target/phase1-artifacts/regression
             target/phase1-artifacts/fuzz-state-decode.log
+            target/phase1-artifacts/stress
             target/phase1-artifacts/*.test.log
             target/phase1-artifacts/*.gui-test.log
             target/phase1-artifacts/*.validation.txt

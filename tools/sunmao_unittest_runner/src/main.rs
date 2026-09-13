@@ -4,6 +4,8 @@ mod host;
 mod interactive;
 mod preset;
 mod regress;
+mod rss;
+mod stress;
 
 use host::*;
 use std::path::Path;
@@ -114,6 +116,13 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             };
         }
+        "stress" => {
+            return if stress::cmd_stress(&args[2..]) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            };
+        }
         "gui-test" => {
             return if cmd_gui_test(&args[2..]) {
                 ExitCode::SUCCESS
@@ -152,6 +161,10 @@ fn print_usage() {
     );
     eprintln!(
         "                                                 Deterministic batch run; compares against a golden trace"
+    );
+    eprintln!("  sunmao_unittest_runner stress [--iterations N] [--editor] <plugin_path>");
+    eprintln!(
+        "                                                 Repeated lifecycles; reports resident-memory growth"
     );
     eprintln!(
         "  sunmao_unittest_runner gui-test [--auto-close] [--verify-pixels] [--verify-input [--drag-from X,Y --drag-to X,Y]] <plugin_path>"
