@@ -359,3 +359,21 @@
   需要在 CI 上用 CMake 构建 VST3 SDK（含子模块）才能拿到 `validator`，三平台各一份，留作下一轮。
   在它接入并取绿之前 M4 不标记完成。本轮 CLAP 半须先取同 commit 三平台绿。
   此前各项独立立项未变。
+
+### 2026-09-14 — clap-validator 步骤第一次 CI 变红：断言匹配了带颜色的输出
+
+- Command/platform: [run 34776165478](https://github.com/aizcutei/sunmao/actions/runs/34776165478) / `01ae33d`；
+  三平台**都**在 "Validate CLAP plugins with clap-validator" 失败。
+- Result: **插件全都是过的**——日志里每个都是 `44 tests run, 34 passed, 0 failed`——
+  但我的 `grep -qE ", 0 failed,"` 一个都没匹配上，于是每个插件都被判成 "reported failures"。
+  原因是 clap-validator 的人类可读输出带 ANSI 颜色码，实际字节是 `, \x1b[1;31m0\x1b[0m failed,`，
+  字面量 `, 0 failed,` 根本不存在。**本地我一直在 `sed` 掉颜色码之后再看，CI 里 grep 的是原始日志**，
+  这个差异正是它在本地绿、在 CI 红的全部原因。
+  改为judge `--json` 输出：没有颜色、逐条给出每个 test 的 status，
+  于是可以**数**失败数而不是**匹配**一句话，并顺带断言「执行数 > 0」（跑了 0 个测试不算通过）。
+  JSON 也正好是 M5 要的机器可读形式。
+- Evidence/artifact: 本地重跑该步骤 exit 0，逐插件打印 `N executed, 0 failed`（16 个），
+  反向用例（非插件文件）仍必须非零退出。
+- Unresolved: 修复版须重新取三平台绿。**这次是断言写错方向的好例子**：
+  我断言的是「日志里必须出现这句话」而不是「退出码为 0」，所以它**变红了**而不是默默放行——
+  如果只看退出码，validator 的 0 退出会让这一步一直绿，而我永远不会知道断言从没匹配过。

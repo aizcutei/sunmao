@@ -985,24 +985,50 @@ jobs:
           # Every packaged CLAP bundle, not a representative one: these tests
           # are cheap and the per-plugin differences are exactly what a
           # validator is for.
+          # Judged on --json, not on the pretty output. The human-readable
+          # summary is wrapped in ANSI colour codes, so a grep for
+          # ", 0 failed," never matches even when nothing failed -- which is
+          # exactly what the first CI run of this step did. JSON has no colour
+          # and says per test what happened, so the count can be asserted
+          # instead of pattern-matched.
           failed=0
           for plugin in target/phase1-artifacts/*.clap; do
             name="$(basename "$plugin")"
-            log="$work/${name}.log"
+            log="$work/${name}.json"
             set +e
-            "$validator" validate "$plugin" > "$log" 2>&1
+            "$validator" validate --json "$plugin" > "$log" 2>"$work/${name}.stderr"
             status=$?
             set -e
-            tail -1 "$log"
-            if [ "$status" -ne 0 ]; then
+            if ! python3 - "$log" "$name" <<'PYEOF'
+          import json, sys
+
+          path, name = sys.argv[1], sys.argv[2]
+          with open(path, encoding="utf-8") as handle:
+              report = json.load(handle)
+          results = report.get("results", [])
+          codes = [r.get("status", {}).get("code") for r in results]
+          bad = [
+              (r["test"], r["status"])
+              for r in results
+              if r.get("status", {}).get("code") not in ("success", "skipped")
+          ]
+          ran = sum(1 for c in codes if c != "skipped")
+          # A report with no executed tests is not a pass.
+          if ran == 0:
+              print(f"{name}: no tests were executed", file=sys.stderr)
+              sys.exit(1)
+          for test, status in bad:
+              print(f"{name}: {test} -> {status}", file=sys.stderr)
+          print(f"{name}: {ran} executed, {len(bad)} failed")
+          sys.exit(1 if bad else 0)
+          PYEOF
+            then
               echo "::error title=clap-validator failed::$name" >&2
-              cat "$log" >&2
               failed=1
             fi
-            # A run that tested nothing must not read as a pass.
-            grep -qE "[0-9]+ tests run" "$log"
-            if ! grep -qE ", 0 failed," "$log"; then
-              echo "$name reported failures" >&2
+            if [ "$status" -ne 0 ] && [ "$failed" -eq 0 ]; then
+              echo "::error title=clap-validator exited $status::$name" >&2
+              cat "$work/${name}.stderr" >&2
               failed=1
             fi
           done
