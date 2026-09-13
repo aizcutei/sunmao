@@ -130,3 +130,40 @@
   因为那正是 class 串问题的可检查证据。两项新发现未修：VST3 class 串跨平台不一致（改动会变更所有
   既有插件身份，须想清楚 Windows 既有安装的迁移）、VST3/CLAP 参数回读精度不一致。
   Phase 4 继承的四条遗留未动。下一步 **M2：批量 regression host**。
+### 2026-09-13 — M2 批量 regression host
+
+- Command/platform: 本地 macOS ARM64，分支 `phase5/test-host-compat`。
+  `cargo metadata --locked`、`cargo fmt --all -- --check`、`git diff --check`、
+  `RUSTFLAGS=-Awarnings cargo test --locked` 全部 exit 0（/tmp/p5m2-test.log）。
+  两个新 CI 步骤的脚本体照旧原样抽出来在本机跑通，各 exit 0。
+- Result: 新增 `regress` 子命令与 `regress.rs`。**三件事刻意钉死**：种子、最大块长、
+  以及由种子导出的**不均匀块划分**（首块钉死 max、末块钉死 1——把极端留给随机意味着某些种子永远测不到）。
+  轨迹是文本：每块 peak/RMS + 4 个定点采样，加自动化日程与结束时的全参数回读。
+  goldens 入库 `tools/regression_goldens/`，**比对一律带显式容差**，且容差写在 trace 自己的头里，
+  文件因此自带它被检查的规则；比对**即使全过也打印见到的最大偏差**，否则容差没人能有依据地设。
+  **自己的两个单测抓出自己两个真 bug：**
+  **(1)** `Rng::new` 原本用 `seed | 1` 躲开 xorshift 的零不动点，这会**丢掉最低位**——
+  相邻种子产出逐字节相同的运行。一个"两个不同种子其实是同一次运行"的回归床，比只有一个种子还糟。
+  改用 SplitMix64 finalizer，保留全部 64 位。已把这条钉成 `neighbouring_seeds_produce_different_runs`。
+  **(2)** trace 原本用 `{:.17}` 写浮点，我在文档里写的是"17 位有效数字可无损往返 f64"——
+  **`{:.17}` 是 17 位小数，不是 17 位有效数字**：它把 `f32::MIN_POSITIVE` 渲染成 `0.00000000000000000`。
+  那样的 golden 会把每个小采样记成 0，然后几乎匹配任何东西。改为 `{:.17e}`，并留下测试
+  `the_text_form_preserves_every_bit_of_an_awkward_double` 逐位核对。
+  **另修一处本来就坏的东西**：`fuzz/Cargo.lock` 是陈旧的，`--locked` 直接拒绝它——
+  fuzz 从没进过 CI，所以没人撞到。要把它接成 blocking 步骤就必须先让它的 lock 诚实（少了 4 个已不再需要的传递依赖）。
+  测试：runner **70 → 88**（+18），全仓 702 → **720 passed / 0 failed**。
+- Evidence/artifact: 两个新 blocking 步骤。
+  "Compare deterministic regression runs against goldens"：两格式各 147 项比对全中、
+  worst deviation **0e0**；再 `diff` 两份新产出的 trace 的 `block` 行，断言**跨格式音频逐字节相同**；
+  两个反向用例（扰动某块 peak、把 trace 版本号改成 2）必须非零退出，否则步骤自己 exit 1。
+  "Fuzz the state decoders (bounded)"：`fuzz/` 被排除出 workspace、驱动默认跑到天荒地老，
+  两者都是有意的，也都意味着它不能原样进 gate——**固定迭代数 200000 与固定种子**，
+  并**断言那个具体的数字**而不只是 "no crash"；再加一个 16 次的短跑，要求它**不**满足 20 万次的断言，
+  免得这条断言退化成"任何成功的运行都算数"。`host-session`/`regression`/fuzz 日志已加进成功 artifact。
+  **M2 首次真跑就抓到一个框架缺陷**：VST3 对 stepped 参数的回读返回未量化的值（详见 status.md 第 3 条）。
+  goldens 刻意记录当前行为，好让下一轮的修复以 golden diff 的形式自证。
+- Unresolved: 须取得同 commit 三平台 hosted 全绿，并 grep 到 `REGRESSION GOLDENS VERIFIED`
+  与 `STATE DECODE FUZZ VERIFIED`，M2 才算完成。**goldens 是在 macOS ARM64 上生成的**，
+  另外两平台能否在 1e-6 内对上，要等 CI 给答案——比对会打印 worst deviation，
+  所以万一对不上，一轮就能拿到该设多少的依据。三项独立立项未修：VST3 class 串跨平台不一致、
+  VST3/CLAP 参数回读精度、VST3 离散参数回读未量化。Phase 4 继承的四条遗留未动。

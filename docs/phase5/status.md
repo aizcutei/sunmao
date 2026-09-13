@@ -123,7 +123,7 @@ backends" 两个 blocking 步骤里被当作宿主调用。
 |---|---|---|---|---|
 | M0 脚手架与基线 | 建 `docs/phase5/{status,progress}.md`；清点 runner 能力与缺口；记录本地 gate 基线 | **完成**（三平台 hosted 全绿）：文档、能力清单与两条实测基线落地 | [run 34761153409](https://github.com/aizcutei/sunmao/actions/runs/34761153409)（commit `9cce371`）三 job success，每 job **34 步零非成功**（跳过项分别为 5/9/11，均为平台不适用者），三份 artifacts 可下载（Linux 1,000,635,181 / Windows 78,735,698 / macOS 54,190,684 bytes；macOS 一份已下载，`unzip -t` 报 No errors detected）。**该 commit 是纯文档提交，没有新增断言**，故 CI 对它能提供的证据仅限“Phase 1–4 既有 34 步仍 blocking 且绿” | — （M0 完成；进入 M1）|
 | M1 交互式 standalone host | 加载已打包 `.vst3`/`.clap`、枚举参数与 bus、改参数、存取 state/preset、开关编辑器；既有非交互 CI 用法原样不变 | **完成**（三平台 hosted 全绿）：新增 `host` 子命令（行式命令语言，人可交互、管道可脚本化），`preset.rs` 按上游转录实现 `.vstpreset` 容器，`HostPlugin::class_id` 补上 VST3 class ID，CLAP 宿主不再对未知参数 ID 报成功。既有六个子命令未改行为（四处重复的扫描分派抽成 `scan_plugin_path`，分支逐字相同） | [run 34763956140](https://github.com/aizcutei/sunmao/actions/runs/34763956140)（commit `ac41dff`）三 job success，每 job **35 步零非成功**（新步骤 "Drive the interactive host over VST3 + CLAP" 三平台各 success），三份 artifacts 可下载（Linux 1,000,635,643 / Windows 78,737,182 / macOS 54,191,174 bytes；macOS 一份已下载，`unzip -t` 报 No errors detected，SHA-256 `2c01b112…1fa10`）。**三平台原始日志已下载并逐条 grep，且把 GitHub 回显的脚本正文（ANSI `36;1m` 前缀）剔除后计数**：每平台真实输出 `HOST COMMAND SURFACE VERIFIED` **1** 次、`rejected as it must be` **10** 次（十个反向用例逐个非零退出）、`HOST SESSION VERIFIED` **4** 次（两格式各一段 18 命令会话 + 两格式各一段 5 命令编辑器会话）、`editor opened`/`editor closed` 各 **4** 次 | — （M1 完成；两项新发现各自独立立项，见下）|
-| M2 批量 regression host | 确定性批跑（固定种子/buffer/块划分）、音频与参数轨迹、golden 对拍 + 显式浮点容差、有界 fuzz 进 CI | 未开始 | — | — |
+| M2 批量 regression host | 确定性批跑（固定种子/buffer/块划分）、音频与参数轨迹、golden 对拍 + 显式浮点容差、有界 fuzz 进 CI | **本地完成，待三平台验收**：新增 `regress` 子命令与 `regress.rs`；goldens 入库 `tools/regression_goldens/`；两个新 blocking 步骤（golden 对拍、有界 fuzz）。**块划分刻意不均匀**且首尾钉死在 max/1，因为只见 512 帧块的插件能把块边界的 off-by-one 藏很多年 | 本地：runner 单测 70 → **88**（+18），全仓 702 → **720 passed / 0 failed**；两格式 golden 各 147 项比对、worst deviation **0e0**；跨格式 24 条 `block` 记录逐字节相同；三个反向用例（扰动 golden、未来版本 trace、短跑 fuzz 不满足计数断言）逐个必须失败 | 取三平台绿；日志须 grep 到 `REGRESSION GOLDENS VERIFIED`、`STATE DECODE FUZZ VERIFIED` 与两条 `rejected as it must be` |
 | M3 性能与泄漏检测 | RT 安全检测扩到 GUI 线程与宿主回调；泄漏检测；基准与阈值写入本文件 | 未开始 | — | — |
 | M4 外部 validator | `clap-validator` + Steinberg VST3 validator 三平台 blocking；失败项逐条归因 | 未开始 | — | — |
 | M5 DAW smoke 与兼容性报告 | 可脚本化 DAW 三平台加载/处理/存工程/重开；机器可读兼容性报告 artifact | 未开始 | — | — |
@@ -166,6 +166,28 @@ Windows       : class     4D6E75536F6178464761696E21212121 (COM UID layout)
 是确定性差异而非噪声。本轮的应对是让宿主的 `expect` **显式定义容差**
 （`DEFAULT_EXPECT_TOLERANCE = 1e-6`，位于 f32 误差之上）而不是比相等；统一精度属独立立项，
 不动已三平台验收的 VST3 路径。
+
+### 3. VST3 对**离散参数**的回读返回未量化的值 —— M2 首跑即抓到
+
+M1 记的是精度差（f64 副本 vs f32 真身）。M2 的确定性批跑把同一根因的**更严重**形态暴露出来：
+`SunMaoGain` 的两个 **stepped** 参数（`Polarity`、`Bypass`）在两格式的回读**语义不同**，
+而不只是精度不同——
+
+```
+vst3:  final 2646080969 8.01757812500000000e-1
+clap:  final 2646080969 1.00000000000000000e0
+```
+
+**同一次自动化之后，VST3 报 0.80，CLAP 报 1.0。** 而两份 trace 的 **24 条 `block` 记录逐字节相同**，
+也就是说插件**处理音频时用的是量化后的 1.0**——错的是 VST3 的回读，不是 DSP。
+根因与 M1 同一处：`vst3_rs::ParameterBridge` 存的是宿主写进来的原值，没有过插件自己的量化。
+
+后果比 M1 那条重：宿主问"Bypass 现在是多少"，拿到的是 0.80 而不是"已旁通"。
+连续参数不受影响（`Gain` 两格式完全一致，`6.67968750000000000e-1`）。
+
+**本轮不修**，因为 M2 的瓶颈是回归床本身；但 goldens **刻意记录当前行为**，
+这样下一轮修掉它时，`tools/regression_goldens/*.trace` 的 diff 本身就是修复的证据。
+这也正是回归床存在的理由：它第一次真跑就抓到了这个。
 
 ## 从 Phase 4 继承的已知遗留
 

@@ -883,6 +883,113 @@ jobs:
 
           echo "HOST COMMAND SURFACE VERIFIED: params, buses, state, preset and editor over VST3 + CLAP"
 
+      - name: Compare deterministic regression runs against goldens
+        shell: bash
+        run: |
+          set -euo pipefail
+          runner="target/debug/sunmao_unittest_runner${{ matrix.executable-suffix }}"
+          gain="target/phase1-artifacts/SunMaoGain"
+          goldens="tools/regression_goldens"
+          work="target/phase1-artifacts/regression"
+          mkdir -p "$work"
+
+          # The goldens were produced on one machine. Matching them here is the
+          # cross-platform claim: same seed, same uneven block division, same
+          # audio within the tolerance the trace file states for itself.
+          for format in vst3 clap; do
+            "$runner" regress \
+              --golden "$goldens/SunMaoGain.$format.trace" \
+              --write "$work/SunMaoGain.$format.trace" \
+              "$gain.$format" 2>&1 | tee "$work/SunMaoGain.$format.log"
+            grep -q "REGRESSION MATCHED GOLDEN" "$work/SunMaoGain.$format.log"
+            # The margin has to be visible, not just the verdict.
+            grep -q "worst deviation" "$work/SunMaoGain.$format.log"
+          done
+
+          # The same plugin through two formats must produce the same audio.
+          # Only the `block` lines carry audio; the `final` lines are known to
+          # disagree for stepped parameters (see tools/regression_goldens/README.md).
+          if ! diff <(grep '^block ' "$work/SunMaoGain.vst3.trace") \
+                    <(grep '^block ' "$work/SunMaoGain.clap.trace"); then
+            echo "VST3 and CLAP produced different audio for the same seed" >&2
+            exit 1
+          fi
+          echo "cross-format audio identical across all block records"
+
+          # A golden that cannot fail is decoration. Perturb one block's peak
+          # and require the comparison to notice.
+          sed 's/^block 3 \([0-9]*\) [^ ]*/block 3 \1 9.9e-1/' \
+            "$goldens/SunMaoGain.vst3.trace" > "$work/perturbed.trace"
+          if diff -q "$goldens/SunMaoGain.vst3.trace" "$work/perturbed.trace" >/dev/null; then
+            echo "perturbing the golden changed nothing; the negative case is vacuous" >&2
+            exit 1
+          fi
+          set +e
+          "$runner" regress --golden "$work/perturbed.trace" "$gain.vst3" \
+            > "$work/perturbed.log" 2>&1
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "a perturbed golden was accepted; the regression guard cannot fail" >&2
+            cat "$work/perturbed.log" >&2
+            exit 1
+          fi
+          grep -q "REGRESSION DIFFERS FROM GOLDEN" "$work/perturbed.log"
+          grep -q "DIFF block 3 peak" "$work/perturbed.log"
+          echo "perturbed golden rejected as it must be"
+
+          # A trace from a version this build does not write must be refused
+          # rather than compared under rules it was not written for.
+          sed 's/^sunmao-regression-trace 1$/sunmao-regression-trace 2/' \
+            "$goldens/SunMaoGain.vst3.trace" > "$work/future.trace"
+          set +e
+          "$runner" regress --golden "$work/future.trace" "$gain.vst3" \
+            > "$work/future.log" 2>&1
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "a future-version trace was accepted" >&2
+            exit 1
+          fi
+          grep -q "trace version 2" "$work/future.log"
+          echo "future-version trace rejected as it must be"
+
+          echo "REGRESSION GOLDENS VERIFIED: VST3 + CLAP matched, cross-format audio identical"
+
+      - name: Fuzz the state decoders (bounded)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `fuzz/` is excluded from the workspace and its driver runs forever by
+          # default. Both facts are deliberate, and both mean it cannot be
+          # dropped into the gate as-is: a blocking step has to terminate. Pin
+          # the iteration count and the seed so this is a fixed amount of work
+          # whose failures are reproducible from the log alone.
+          iterations=200000
+          seed=$(( 0x5150 ))
+          log="target/phase1-artifacts/fuzz-state-decode.log"
+          mkdir -p target/phase1-artifacts
+          cargo run --locked --manifest-path fuzz/Cargo.toml -- \
+            --iterations "$iterations" --seed "$seed" 2>&1 | tee "$log"
+          # Assert the count, not just the absence of a crash: a driver that
+          # exited early would otherwise pass by saying nothing.
+          grep -q "sunmao_fuzz: $iterations cases, no crash" "$log"
+
+          # Prove that assertion is sensitive to the count and not just to the
+          # words "no crash": a shorter run must not satisfy it. Costs a few
+          # milliseconds and stops the check above from degrading into a match
+          # on any successful run at all.
+          short="target/phase1-artifacts/fuzz-state-decode-short.log"
+          cargo run --locked --manifest-path fuzz/Cargo.toml -- \
+            --iterations 16 --seed "$seed" > "$short" 2>&1
+          if grep -q "sunmao_fuzz: $iterations cases, no crash" "$short"; then
+            echo "a 16-case run satisfied the ${iterations}-case assertion" >&2
+            exit 1
+          fi
+          grep -q "sunmao_fuzz: 16 cases, no crash" "$short"
+
+          echo "STATE DECODE FUZZ VERIFIED: $iterations cases from seed $seed, no crash"
+
       - name: Package and exercise native GUI backends
         shell: bash
         env:
@@ -1127,6 +1234,9 @@ jobs:
             target/phase1-artifacts/SunMaoDAWInfoGUI.clap
             target/phase1-artifacts/standalone
             target/phase1-artifacts/format-tests.log
+            target/phase1-artifacts/host-session
+            target/phase1-artifacts/regression
+            target/phase1-artifacts/fuzz-state-decode.log
             target/phase1-artifacts/*.test.log
             target/phase1-artifacts/*.gui-test.log
             target/phase1-artifacts/*.validation.txt

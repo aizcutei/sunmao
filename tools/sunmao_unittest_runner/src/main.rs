@@ -3,6 +3,7 @@ mod gui_window;
 mod host;
 mod interactive;
 mod preset;
+mod regress;
 
 use host::*;
 use std::path::Path;
@@ -106,6 +107,13 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             };
         }
+        "regress" => {
+            return if regress::cmd_regress(&args[2..]) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            };
+        }
         "gui-test" => {
             return if cmd_gui_test(&args[2..]) {
                 ExitCode::SUCCESS
@@ -138,6 +146,12 @@ fn print_usage() {
     eprintln!("  sunmao_unittest_runner host [--sample-rate HZ] [--block-size N] <plugin_path>");
     eprintln!(
         "                                                 Interactive host; reads commands from stdin"
+    );
+    eprintln!(
+        "  sunmao_unittest_runner regress [--seed N] [--golden TRACE] [--write TRACE] <plugin_path>"
+    );
+    eprintln!(
+        "                                                 Deterministic batch run; compares against a golden trace"
     );
     eprintln!(
         "  sunmao_unittest_runner gui-test [--auto-close] [--verify-pixels] [--verify-input [--drag-from X,Y --drag-to X,Y]] <plugin_path>"
