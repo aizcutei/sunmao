@@ -6,3 +6,9 @@
 /debug
 /.phase1-run.*
 .DS_Store
+
+# Local CI credentials. The token this guards normally lives outside the tree
+# (~/.sunmao-ci-token), so git never sees it; this is here in case a copy is
+# ever made inside the repo.
+.sunmao-ci-token
+*-ci-token

@@ -27,7 +27,7 @@ API 与 state 的兼容策略见 [`docs/phase3/compatibility.md`](phase3/compati
 验收状态与证据见 `docs/phase3/status.md`。"新插件样板 ≤50 行"已达标（effect 42 行、
 instrument 49 行，由 `sunmao/tests/template_size.rs` 机械强制）。
 
-## Phase 4：GUI 组件库与平台完善（M0–M5 各专项已验收；总审计提交待取三平台绿）
+## Phase 4：GUI 组件库与平台完善（完成，run 34746764198 / `28cba05`）
 
 完善布局、主题、text rendering、accessibility、clipboard、IME/国际键盘、cursor/focus、scale negotiation、floating CLAP editor；明确 renderer 资源和线程归属，在 X11 生命周期稳定后加入 Wayland。
 

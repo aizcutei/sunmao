@@ -2202,3 +2202,24 @@
 - Unresolved: 按完成规则，**本审计提交自身仍需取得同 commit 三平台 hosted 全绿 + artifacts 可下载**，
   在那之前 Phase 4 不标记完成。已知遗留（Tab 停在非交互控件、`vst3_rs` 控制器包装冗余、
   Windows WGPU 收尾段错误、`main` 落后）按 audit.md 所列各自单独立项。
+
+### 2026-09-13 — Phase 4 三平台验收完成
+
+- Command/platform: [run 34746764198](https://github.com/aizcutei/sunmao/actions/runs/34746764198) / `28cba05`；
+  三平台 job 全部 success，每平台 34 步零非成功（跳过项均为平台不适用者）。三份 job 原始日志与三份
+  artifacts 均已下载（读 Actions 日志/产物需 token：无 token 时 logs 回 403、artifact zip 回 401）。
+  **推送这次走的是 SSH**：`ssh -T git@github.com` 认证通过、`git push` 直接成功。
+- Change: 据实际日志与产物校验结果，在 `status.md`/`roadmap.md`/`CLAUDE.md` 标记 Phase 4 完成，
+  `audit.md` 增「最终验收」一节记录证据。`CLAUDE.md` 的环境注意改为 SSH 可用，并写明教训。
+  `.gitignore` 加 CI token 的防御性条目（token 本体在仓库外，git 本来就看不到）。
+- Result: **本轮新加的守卫确认真的执行**——三平台日志里 `AccessibleRole` 的两条 doc-test
+  各跑两次（默认构建 + `accessibility` feature 构建），含那条 `compile fail ... ok`。
+  **整个 phase 的平台标记在这一个 commit 上全部重现**：Linux 的 WAYLAND EGL/TOPLEVEL/EDITOR/
+  POINTER/KEYBOARD/CURSOR/FOCUS/SCALE/FACADE VERIFIED 与 X11 KEYBOARD VERIFIED、Windows 的
+  `UIA VERIFIED: slider + combo box + check box among 11 elements` 与 WINDOWS KEYBOARD VERIFIED、
+  macOS 的 MACOS KEYBOARD VERIFIED；a11y fixture 三平台各两次。三平台 144/142/162 套件、
+  833/811/882 passed、0 failed。三份产物 SHA-256 与 API digest 逐位一致、ZIP CRC 全通过
+  （macOS 54,190,742 / Windows 78,732,961 / Linux 1,000,635,203 bytes）。
+- Unresolved: Phase 4 完成，进入 **Phase 5：完整测试宿主与外部兼容**。遗留项按 `audit.md`
+  各自单独立项：Tab 停在非交互控件、`vst3_rs` 控制器包装冗余（需布局断言）、Windows WGPU
+  收尾段错误（不改判为已修复）、`main` 落后于 Phase 3/4 工作（合并需仓库所有者决定）。

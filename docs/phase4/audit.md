@@ -20,6 +20,41 @@ run #86 的跨线程 viz 测试当时是 flaky 的）。因此下面每一行的
 | 文档与矩阵一致 | 本轮逐处核对并修正：`status.md` fixture 段仍写 skeleton/未进打包（实际该 crate 内**已无 skeleton 实现**，只在模块文档里记着那段历史；打包也已在 `tools/package_examples.sh` 矩阵内，第 108 行）；`status.md` M4 小节标题仍写"平台适配器接线未做"（正文同页已描述三个适配器）；`status.md` Wayland 段仍写"给 baseview 写 Wayland 后端……才谈得上验收"（`baseview/src/wayland/` 已是那份清单）；`semantics.md` accessibility 行仍写"**未做**：把 `TreeUpdate` 交给 `accesskit_*`"；`compatibility.md` §2bis.4 仍写"平台 accessibility 桥接当前三平台都不存在"；`accessibility.rs` 的**模块 rustdoc** 仍写 "per-platform bridging is not implemented yet"（这条对外可见，不只是内部文档） | **完成**：六处全部更正为实现现状，并在原处保留"曾经判断错在哪"而非抹掉 |
 | 其余 M0–M5 要求及跨层不变量 | API/prelude/doc-test 见上行；布局与主题 M2 run #77；文本/剪贴板/焦点 M3 run #84；ownership/DPI M1 run #75（`GUI scale negotiated` 三平台各 18 次，拒绝方式按格式 8/8 分裂）；Wayland 各专项见 `status.md` 完成规则一节；proptest 覆盖 `sunmao/core`、`sunmao/dsp`、`sunmao/gui`（`layout_property` / `accessibility_property` / `accesskit_property`）与 `sunmao/tests/voice_property`；零分配守卫在 `core::viz`、`gui::layout`、`gui::text_ttf`、`gui::widgets::spectrum` 与 fixture 端到端断言 | **完成** |
 
+## 最终验收
+
+**Phase 4 完成：[run 34746764198](https://github.com/aizcutei/sunmao/actions/runs/34746764198)
+（commit `28cba05`）三平台 job 全部 success，每平台 34 步零非成功。**
+
+按本文件开头定下的规矩——证据要指向实际执行过的断言，而不是 job 结论——逐条核实如下。
+
+**本轮新加的守卫真的跑了**（这是最容易自欺的一项：守卫刚写完、CI 又是绿的，很容易默认它
+执行过）。三平台原始日志里，`AccessibleRole` 的两条 doc-test **各实际执行两次**（默认构建
+一次、`accessibility` feature 构建一次）：
+
+```
+test sunmao/gui/src/accessibility.rs - accessibility::AccessibleRole (line 46) - compile fail ... ok
+test sunmao/gui/src/accessibility.rs - accessibility::AccessibleRole (line 29) ... ok
+```
+
+**整个 phase 的平台标记在这一个 commit 上全部重现**，而不是分散在各自的历史 run 里：
+
+| 平台 | 本 run 实际输出的标记 |
+|---|---|
+| Linux | `WAYLAND EGL/TOPLEVEL/EDITOR/POINTER/KEYBOARD/CURSOR/FOCUS/SCALE/FACADE VERIFIED`、`X11 KEYBOARD VERIFIED` |
+| Windows | `UIA VERIFIED: slider + combo box + check box among 11 elements`、`WINDOWS KEYBOARD VERIFIED` |
+| macOS | `MACOS KEYBOARD VERIFIED` |
+
+`the_editor_describes_itself_to_assistive_technology ... ok` 三平台各两次。三平台测试合计
+**144 / 142 / 162 套件、833 / 811 / 882 passed、0 failed**。
+
+**三份 artifacts 已下载并逐位校验**（SHA-256 与 API digest 一致，`unzip -t` 的 ZIP CRC 全部通过）：
+
+| artifact | bytes | SHA-256 |
+|---|---|---|
+| `phase1-macOS-ARM64` | 54,190,742 | `50fc195e3d0db0e5d5400c6cd6bf7d30463bcbf134a4592830a3b3567fd19705` |
+| `phase1-Windows-X64` | 78,732,961 | `77866b92f8392123005c6d3cef555b1681180e95cd792c30fecd3ae83b01db50` |
+| `phase1-Linux-X64` | 1,000,635,203 | `5ea2c7714e65b5a12884c1f0fa3298942b732b202424a5e4462c534b6bae1649` |
+
 ## 仍然成立的降级（不是遗漏，是如实上报）
 
 这些已在 `docs/phase2/semantics.md` 与 `docs/phase3/compatibility.md` §2bis.4 记录：

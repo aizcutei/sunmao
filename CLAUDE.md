@@ -53,12 +53,13 @@ tools/package_examples.sh --debug --test      # 触打包/示例时
 
 ## 当前状态
 
-Phase 1（run #25 / `c8401e6`）、Phase 2 核心（run #38 / `77f788c`）、Phase 3（run #69 / `b45efea`）均已三平台验收。下一阶段是 **Phase 4：GUI 组件库与平台完善**。
+Phase 1（run #25 / `c8401e6`）、Phase 2 核心（run #38 / `77f788c`）、Phase 3（run #69 / `b45efea`）、Phase 4（run 34746764198 / `28cba05`）均已三平台验收。下一阶段是 **Phase 5：完整测试宿主与外部兼容**。
 
 `docs/design/target_syntax.md` 描述的是**目标语法，多数尚未实现**——该文件开头有逐项核对的现状对照表，照抄未实现的名字会编译失败。
 
 ## 环境注意
 
-- 本机 SSH 到 GitHub 不通（出口节点丢弃 SSH 协议，`gitlab.com:22` 同样失败），HTTPS 正常。推送用 HTTPS + token 经环境变量传入，推完清 keychain。本机无 `gh`，CI 用 `curl` 轮询 Actions API。
+- **推送直接 `git push` 走 SSH 即可**（2026-09-13 实测 `ssh -T git@github.com` 认证通过、push 成功）。此处原先写的是"SSH 不通、必须 HTTPS + token"，那条已经过期却被当成事实沿用过一次，导致把"我推不了"当作阻塞上报——**声称某项环境能力不可用之前先实测**。
+- 本机无 `gh`，CI 用 `curl` 轮询 Actions API。**读 Actions 日志与下载 artifact 需要 token**（公开仓库也一样：无 token 时 logs 回 403、artifact zip 回 401），token 由用户放在仓库外的文件里，用 `$(cat …)` 引用以免进入命令文本；仓库 `.gitignore` 另有防御性条目。
 - 可能有其他 agent 会话共用同一工作树。push 前 `git log` 确认 HEAD 未被 amend；**严禁 force-push 已通过 CI 的 commit**。
 - 已知 flake：Windows WGPU GUI 偶发在断言全过、打印 `Done.` 后 exit 139（收尾段错误）。再复现应深入 WGPU/D3D 析构路径，不要盲目重试。

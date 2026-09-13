@@ -65,14 +65,14 @@ M0 建这个 fixture 时它的下拉/开关/频谱是 crate 内 skeleton，计�
 | M2 布局与主题 | `Column`/`Row`/gap/padding、五个控件、参数双向绑定、主题 token | **完成**（三平台 hosted 全绿）：`Theme` 角色化 token（暗/亮，对比度由测试机械断言）、新增 `Toggle`/`Dropdown`（连同既有 `Knob`/`Slider`/`Label`/`Button` 共 6 控件）、声明式 `Column`/`Row`（含 6 个布局 proptest）、`ParamBinder`+`ParamHost` 两向绑定（facade 以 `ViewContextHost` 适配 `ViewContext`），fixture 换真控件后**已无逐控件回调代码**并接入打包矩阵 | [run #77](https://github.com/aizcutei/sunmao/actions/runs/33965946234)（commit `aec872f`）三 job success，每 job **26 步零非成功**，artifacts 3 份。已下载三平台日志核实新 fixture 真被宿主执行：每平台 `SunMao Widgets GL` 出现 10 次、两格式各自 `Testing:` 一次，全 run **零失败套件**。本地打包 30→**32 套件**、600→**640 断言** | — （M2 完成；进入 M3） |
 | M3 text rendering 与输入 | 字体栅格化/度量、clipboard、IME/国际键盘、cursor/focus | **完成**：2026-09-09 审计重新打开的三平台真实国际输入项现已补齐，Windows 最终由 `d533e54` / run `34446209752` 三平台完整成功、原始输入日志及三份产物校验验收。字体、剪贴板、焦点与参数按键证据仍有效。`GlyphSource`/`Font`（字形缓存）+ fontdue `TtfFont`；`Clipboard`/`SystemClipboard` 与焦点控件 Ctrl/Cmd+C·V；`TextInput` 由 `Key::Character` 产生（跳过 `is_composing` 预编辑）仅证明适配器逻辑字符转换，不能替代三平台原生国际键盘/IME 验收；`Stack` 焦点模型 + 四个控件的键盘处理；VST3 `IPlugView::onKeyDown`/`onKeyUp` 由 stub 改为真实转发；GL `draw_text` 由空实现改为按覆盖率绘制（同覆盖率合并成行）| [run #84](https://github.com/aizcutei/sunmao/actions/runs/33976552655)（commit `8f959ba`）三 job success、每 job 26 步零非成功、artifacts 3 份。**关键证据不是 job 成功而是断言真的跑了**：三平台各 `GUI key verified` 1 次（VST3，`Gain moved 0 -> 1`）＋格式跳过 1 次（CLAP）。run #82 曾三平台全绿但该断言 0 次执行（fixture 不在 GUI 矩阵里），补入矩阵后才成立 | X11 已由 `90bf6de` / run `34255696871` 三平台全绿、实际输入日志及三份产物校验验收；macOS 已由 `e14e5b3` / run `34361057036` 三平台全绿、原生 NSView 输入日志及三份产物校验验收；Windows 已由 `d533e54` / [run 34446209752](https://github.com/aizcutei/sunmao/actions/runs/34446209752) 三平台完整成功、原始输入日志及三份产物校验验收；进入 M5 总审计 |
 | M4 可视化与 accessibility | `VizChannel`、`SpectrumAnalyzer`/meter、accessibility 树、floating CLAP editor | **transient 已完成（2026-09-11）**：`gui_set_transient` 与 `suggest_title` 已贯通 CLAP、core、baseview 三平台窗口；run #34590881685 在 Linux X11/Wayland、macOS、Windows 全部验证通过。消费 Phase 3 `MeterHandle` 的 `MeterSource` 与 fixture peak/RMS 显示已由 `89b0d18` / [run 34451013385](https://github.com/aizcutei/sunmao/actions/runs/34451013385) 独立三平台完整成功、实际属性/doc-test/零分配端到端日志与三份产物 SHA-256/ZIP CRC 验收。既有 accessibility/floating/spectrum 验收证据保留（[run #100](https://github.com/aizcutei/sunmao/actions/runs/33999399095)）。已落地：`sunmao_core::viz` 三缓冲 `VizChannel`（audio 侧 publish 零 alloc，含跨真实线程的撕裂读检测）、`SpectrumAnalyzer`（峰值即起、落差衰减、NaN/越界收敛）、`accessibility_tree` + `AccessibleNode`/`AccessibleRole`（角色由 `ParameterWidget::accessible_role` **声明**而非从显示文本推断）、CLAP `suggest_title` 由静默 stub 改为真实转发。fixture 已从 crate 内 `SpectrumPublisher` 换成 `VizChannel`+`SpectrumAnalyzer` | [run #86](https://github.com/aizcutei/sunmao/actions/runs/33980911401)（commit `1ddc210`）三 job success，每 job **26 步零非成功**，artifacts 3 份可下载（macOS 53.0MB / Windows 78.3MB / Linux 971.2MB）。已下载三平台 job 日志核实新断言**真的执行且通过**：`the_editor_describes_itself_to_assistive_technology ... ok`、accessibility proptest 套件、`VizChannel` 跨线程撕裂读测试各 1 次/平台，`GUI scale negotiated` 由 16 增至 **18** 次（widgets fixture 入 GUI 矩阵后 9 插件 × 2 格式），三平台**零 FAILED 套件**。⚠️ **但其中的跨线程测试当时是 flaky 的**：run #87 在 Linux 上以 `the consumer never saw a frame` 失败，根因是该测试固定轮询 50000 次、断言依赖线程调度而非通道行为（详见 progress.md）。已改为轮询至生产者置位再做收尾 take。**#86 对其余确定性断言的验收不受影响，但"跨线程行为已三平台验证"这一条要等修复版取绿才成立** | — （M4 全部范围已交付并各自取得三平台绿：`VizChannel`/`SpectrumAnalyzer` #86、floating editor #90、accessibility 三平台桥接 #94/#100、`MeterSource` run 34451013385、`gui_set_transient` + `suggest_title` run 34590881685） |
-| M5 Wayland 与总验收 | Wayland、GUI 侧兼容策略、proptest/文档收尾 | **各专项已验收；总审计已完成，待审计提交自身取绿**：EGL 已验收；浮动窗口分派与帧循环已编译通过，真实 GL 编辑器运行验收已通过 #116，真实鼠标输入与像素更新已通过 #119；键盘/xkbcommon、修饰键与被动焦点已由 #120 hosted 验收；cursor 通用协议、隐藏与原生双窗口重入的真实像素验收已由 8dee3e8 三平台 hosted 验证；主动 focus 已由 7ed7be0 三平台 hosted 验收；output scaling 已由 aa8694e 三平台 hosted 验收，三份产物已下载校验；facade gui-wayland 已由 910f522 三平台 hosted 验收，实际运行日志与三份产物校验完成 | [run #119](https://github.com/aizcutei/sunmao/actions/runs/34216552175)（`7e78eb3`）三平台 success，三份产物已下载且校验通过；[run #120](https://github.com/aizcutei/sunmao/actions/runs/34219433180)（`aa9d25e`）三平台 success，真实鼠标/键盘日志已核实，三份产物已下载且 SHA-256/ZIP CRC 校验通过；[光标验收](https://github.com/aizcutei/sunmao/actions/runs/34226222440)（8dee3e8）三平台 success，真实光标日志已核实，三份产物已下载且 SHA-256/ZIP CRC 校验通过 | output scaling 已通过 [aa8694e 三平台 hosted](https://github.com/aizcutei/sunmao/actions/runs/34242729268) 与产物校验；facade gui-wayland 已通过 [910f522 三平台 hosted](https://github.com/aizcutei/sunmao/actions/runs/34248163394)、实际日志与产物校验；最终兼容/文档及真实输入路径审计已于 2026-09-13 完成（`docs/phase4/audit.md` 逐项，抓出 `AccessibleRole` 缺 `#[non_exhaustive]` 一处真缺陷并更正六处过期陈述）；剩余唯一动作是让审计提交自身取得三平台绿 |
+| M5 Wayland 与总验收 | Wayland、GUI 侧兼容策略、proptest/文档收尾 | **完成**（run 34746764198 / `28cba05` 三平台全绿）：EGL 已验收；浮动窗口分派与帧循环已编译通过，真实 GL 编辑器运行验收已通过 #116，真实鼠标输入与像素更新已通过 #119；键盘/xkbcommon、修饰键与被动焦点已由 #120 hosted 验收；cursor 通用协议、隐藏与原生双窗口重入的真实像素验收已由 8dee3e8 三平台 hosted 验证；主动 focus 已由 7ed7be0 三平台 hosted 验收；output scaling 已由 aa8694e 三平台 hosted 验收，三份产物已下载校验；facade gui-wayland 已由 910f522 三平台 hosted 验收，实际运行日志与三份产物校验完成 | [run #119](https://github.com/aizcutei/sunmao/actions/runs/34216552175)（`7e78eb3`）三平台 success，三份产物已下载且校验通过；[run #120](https://github.com/aizcutei/sunmao/actions/runs/34219433180)（`aa9d25e`）三平台 success，真实鼠标/键盘日志已核实，三份产物已下载且 SHA-256/ZIP CRC 校验通过；[光标验收](https://github.com/aizcutei/sunmao/actions/runs/34226222440)（8dee3e8）三平台 success，真实光标日志已核实，三份产物已下载且 SHA-256/ZIP CRC 校验通过 | output scaling 已通过 [aa8694e 三平台 hosted](https://github.com/aizcutei/sunmao/actions/runs/34242729268) 与产物校验；facade gui-wayland 已通过 [910f522 三平台 hosted](https://github.com/aizcutei/sunmao/actions/runs/34248163394)、实际日志与产物校验；最终兼容/文档及真实输入路径审计已于 2026-09-13 完成（`docs/phase4/audit.md` 逐项，抓出 `AccessibleRole` 缺 `#[non_exhaustive]` 一处真缺陷并更正九处过期陈述），审计提交自身亦已取得三平台绿 —— M5 及 Phase 4 完成 |
 
 ## 完成规则
 
 Phase 4 完成的唯一判定：同一 commit 三平台 hosted native jobs 全绿 + artifacts 可下载
 + 本文件 Milestone 矩阵 M0–M5 全部标记完成。本地结果任何情况下都不构成完成证据。
 
-### 当前判定：**M5 总审计已完成；等待审计提交本身取得三平台绿**
+### 当前判定：**Phase 4 完成**（run 34746764198 / `28cba05`）
 
 三平台 hosted 全绿 + artifacts 可下载这两条长期满足（最近一次：`9c6db07` /
 [run 34593059626](https://github.com/aizcutei/sunmao/actions/runs/34593059626)）。
@@ -85,7 +85,25 @@ M0–M4 与 M5 各专项均已各自取得三平台验收，逐项证据见 `doc
 它只在别人依赖那条承诺时才炸。已补属性并用一对 doc-test 机械守卫。
 同轮更正了六处"文档说没做、代码里其实做了"的陈述（含一条对外可见的模块 rustdoc）。
 
-**按完成规则，本次审计提交自身还需取得三平台绿**，因此此刻 Phase 4 仍不标记完成。
+**审计提交自身已取得三平台绿**：[run 34746764198](https://github.com/aizcutei/sunmao/actions/runs/34746764198)
+（commit `28cba05`）三平台 job 全部 success，每平台 **34 步零非成功**（跳过项均为平台不适用者），
+三份 artifacts 已下载并通过 SHA-256（与 API digest 逐位一致）与 ZIP CRC 校验。
+
+**这一轮的证据不止于 job 结论。** 本文件反复强调"全绿不等于断言跑过"，因此对本次审计
+**新加的守卫**做了直接核实：三平台原始日志里，`AccessibleRole` 的两条 doc-test
+**各实际执行两次**（默认构建一次、`accessibility` feature 构建一次）——
+
+```
+test sunmao/gui/src/accessibility.rs - accessibility::AccessibleRole (line 46) - compile fail ... ok
+test sunmao/gui/src/accessibility.rs - accessibility::AccessibleRole (line 29) ... ok
+```
+
+而且**整个 phase 的平台标记在这一个 commit 上全部重现**，不是分散在历史 run 里：
+Linux 的 `WAYLAND EGL/TOPLEVEL/EDITOR/POINTER/KEYBOARD/CURSOR/FOCUS/SCALE/FACADE VERIFIED`
+与 `X11 KEYBOARD VERIFIED`、Windows 的 `UIA VERIFIED: slider + combo box + check box among
+11 elements` 与 `WINDOWS KEYBOARD VERIFIED`、macOS 的 `MACOS KEYBOARD VERIFIED`；
+`the_editor_describes_itself_to_assistive_technology ... ok` 三平台各两次。
+三平台测试合计 **144 / 142 / 162 套件、833 / 811 / 882 passed、0 failed**。
 
 | Milestone | 验收 run |
 |---|---|
@@ -94,7 +112,7 @@ M0–M4 与 M5 各专项均已各自取得三平台验收，逐项证据见 `doc
 | M2 布局与主题 | #77 |
 | M3 text rendering 与输入 | #84 |
 | M4 可视化与 accessibility（含 floating editor、三平台 a11y 桥接、Windows UIA 往返） | #86 / #90 / #94 / #100 |
-| M5 GUI 兼容策略、proptest/Wayland/总验收 | #88 / #102 / #106 |
+| M5 GUI 兼容策略、proptest/Wayland/总验收 | #88 / #102 / #106；Wayland 各专项见下；总审计 run 34746764198 |
 
 run #110 的三平台 jobs 全部 success，三个 artifacts 已下载且 SHA-256、ZIP CRC 校验通过。
 run #114（`ea89eab`）新增 Linux 浮动窗口分派和帧循环，三平台编译通过；
@@ -118,7 +136,7 @@ output scaling 已由 [aa8694e 三平台 hosted](https://github.com/aizcutei/sun
 Sway 动态整数/分数比例、跨屏/移除、3x resize 与显式覆盖的 EGL 尺寸/边缘像素通过；
 Weston core 2x fallback 与 48px 光标图像/24-unit viewport 的真实像素断言通过。
 同提交三份 artifacts 已下载，SHA-256 与 ZIP CRC 均通过。
-facade feature 传递已由 910f522 验收：三平台完整 jobs 成功，Linux 实际输出 WAYLAND FACADE VERIFIED，三份产物 SHA-256/ZIP CRC 校验通过。X11 原生国际键盘已由 `90bf6de` / [run 34255696871](https://github.com/aizcutei/sunmao/actions/runs/34255696871) 验收：三平台完整 jobs 成功、三份产物 SHA-256/ZIP CRC 通过；Linux 隔离 Xvfb 实测 German、Shift、AltGr、实时布局切换、compose 和 focus reset，日志输出 `X11 KEYBOARD VERIFIED`，1 passed / 0 failed / 0 ignored。此证据不包含 XIM/CJK 预编辑。macOS 原生国际键盘已由 `e14e5b3` / [run 34361057036](https://github.com/aizcutei/sunmao/actions/runs/34361057036) 验收：三平台完整 jobs success（每平台 33 steps，无失败/取消），macOS 原始日志第 3107 行实际输出 `MACOS KEYBOARD VERIFIED`，第 3159 行按键生命周期属性测试通过；三份 artifacts 已完整下载且 SHA-256/ZIP CRC 全部通过。该路径覆盖 Option 字符、dead-key compose、焦点重置及按键释放，不宣称完整 CJK IME。Windows 真实国际输入已由 `d533e54` / [run 34446209752](https://github.com/aizcutei/sunmao/actions/runs/34446209752) 验收：三平台完整 jobs success，每平台 34 steps，零失败/取消；Windows 原始日志第 2878 行实际输出 `WINDOWS KEYBOARD VERIFIED`，覆盖德语 z/ü、Shift Ü 与系统 dead-key é。三份产物已下载且 SHA-256/ZIP CRC 全通过。harness 在真实 Win32 窗口线程提交物理扫描码对应的按键消息，由系统 TranslateMessage 生成字符，不直接提供 WM_CHAR/Unicode；这不是硬件 SendInput 或完整 CJK IME 验收。最终兼容/文档总审计已于 2026-09-13 完成（结果见 `docs/phase4/audit.md`，本页「当前判定」一节记录它抓出的那处真缺陷）；按完成规则，审计提交本身尚未取得三平台绿，因此 Phase 4 此刻仍不标记完成。
+facade feature 传递已由 910f522 验收：三平台完整 jobs 成功，Linux 实际输出 WAYLAND FACADE VERIFIED，三份产物 SHA-256/ZIP CRC 校验通过。X11 原生国际键盘已由 `90bf6de` / [run 34255696871](https://github.com/aizcutei/sunmao/actions/runs/34255696871) 验收：三平台完整 jobs 成功、三份产物 SHA-256/ZIP CRC 通过；Linux 隔离 Xvfb 实测 German、Shift、AltGr、实时布局切换、compose 和 focus reset，日志输出 `X11 KEYBOARD VERIFIED`，1 passed / 0 failed / 0 ignored。此证据不包含 XIM/CJK 预编辑。macOS 原生国际键盘已由 `e14e5b3` / [run 34361057036](https://github.com/aizcutei/sunmao/actions/runs/34361057036) 验收：三平台完整 jobs success（每平台 33 steps，无失败/取消），macOS 原始日志第 3107 行实际输出 `MACOS KEYBOARD VERIFIED`，第 3159 行按键生命周期属性测试通过；三份 artifacts 已完整下载且 SHA-256/ZIP CRC 全部通过。该路径覆盖 Option 字符、dead-key compose、焦点重置及按键释放，不宣称完整 CJK IME。Windows 真实国际输入已由 `d533e54` / [run 34446209752](https://github.com/aizcutei/sunmao/actions/runs/34446209752) 验收：三平台完整 jobs success，每平台 34 steps，零失败/取消；Windows 原始日志第 2878 行实际输出 `WINDOWS KEYBOARD VERIFIED`，覆盖德语 z/ü、Shift Ü 与系统 dead-key é。三份产物已下载且 SHA-256/ZIP CRC 全通过。harness 在真实 Win32 窗口线程提交物理扫描码对应的按键消息，由系统 TranslateMessage 生成字符，不直接提供 WM_CHAR/Unicode；这不是硬件 SendInput 或完整 CJK IME 验收。最终兼容/文档总审计已于 2026-09-13 完成（结果见 `docs/phase4/audit.md`，本页「当前判定」一节记录它抓出的那处真缺陷），审计提交本身也已由 run 34746764198 取得三平台绿，Phase 4 就此完成。
 
 **两次判断被自己推翻，都记在这里而不是抹掉**：floating editor 与 accessibility
 平台桥接都曾被我判为"受阻、规模大于 M4 其余全部"，两次都是**读了函数名而没读函数**
