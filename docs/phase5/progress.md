@@ -395,3 +395,29 @@
 - Unresolved: 把 validator 步骤挪到 GUI 打包之后以覆盖 16 个——单独立项，挪顺序要重新取三平台绿。
   **M4 仍未完成**：Steinberg VST3 validator 未接入（需在 CI 上 CMake 构建 VST3 SDK）。
   此前各项独立立项未变。
+### 2026-09-14 — Steinberg VST3 validator：构建可行性实测 + 三项归因（尚未接入 CI）
+
+- Command/platform: 本地 macOS ARM64。浅克隆 `vst3sdk`（247 MB）后用
+  `-DSMTG_ENABLE_VSTGUI_SUPPORT=OFF -DSMTG_ADD_VSTGUI=OFF -DSMTG_CREATE_PLUGIN_LINK=OFF
+  -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=ON`
+  配置，`cmake --build build --target validator` 成功产出 `build/bin/Release/validator`。
+  **确认它可以在 CI 上构建**，只是没有预编译产物；确切命令已写进 status.md 供下轮直接用。
+- Result: 对 `SunMao Gain.vst3` 跑出 **45 tests passed, 2 tests failed** 外加一条非计分警告，逐条归因：
+  **(1) `Missing mandatory IProcessContextRequirements extension!` —— 我们的缺陷。**
+  VST3 3.7 要求 audio processor 实现它；`vst3_sys/src/vst/mod.rs:35` 早有 IID 转录，
+  但 `vst3_rs` 没实现该接口。纯缺失，无争议。
+  **(2) `Parameter 001 (id=-1648886327): Invalid Id!!!` —— validator 比规范严，但仍得服从。**
+  上游 `scanparameters.cpp:125` 把 `paramInfo.id` 赋给 `int32` 再判 `< 0`，
+  而 `vsttypes.h:104` 是 `typedef uint32 ParamID;`、保留值只有 `kNoParamId = 0xFFFFFFFF`——
+  **validator 因此拒绝了规范允许的一半 ID 空间**。我们的 `Polarity` 是 2646080969，按 int32 即负数。
+  已引上游原文。但结论仍是要改：它是 VST3 分发的事实门槛。
+  **牵涉兼容性**：数值 ID 会写进 state，压到 31 位会让既有 state 的 ID 对不上，
+  与 class 串那条同属「会使既有工程/preset 失效」，**须由仓库所有者决定**，本轮不自行改。
+  **(3) `Failed to connect the component with the controller with result code '-1'!` —— 未归因。**
+  非计分警告，但我们自己的 runner 宿主能连上（Phase 2 起就有 connect/disconnect 测试），
+  说明是 validator 的连接方式与我们实现之间的差异。留作下一轮第一件事。
+- Evidence/artifact: /tmp/v3g.log（本地 validator 完整输出）。**本轮没有把该步骤加进 CI**——
+  归因清楚之前先接一个必然变红的 blocking 步骤没有意义，而其中一项的修法需要所有者拍板。
+- Unresolved: **M4 仍未完成**。下一轮顺序：先补 `IProcessContextRequirements`（无争议、无兼容代价），
+  再查第 3 条 connect，最后就 param ID 的 31 位问题向所有者取得决定；之后才接 CI 并取三平台绿。
+  M5 未开始。此前各项独立立项未变。

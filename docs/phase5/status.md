@@ -360,7 +360,62 @@ SunMaoSine / SunMaoTemplateInstrument / SunMaoTempoDelay / SunMaoWidgetsGL
 **把 validator 步骤挪到 GUI 打包之后以覆盖 16 个，单独立项**——挪动步骤顺序要重新取三平台绿，
 不在本轮顺手做。
 
-### 未接入：Steinberg VST3 validator
+### Steinberg VST3 validator：已确认可在 CI 构建，并已抓到三项（尚未接入 CI）
+
+**构建可行性已实测**（macOS ARM64 本地）。它没有预编译产物，但只需浅克隆 + 关掉 VSTGUI：
+
+```sh
+git clone --depth 1 --recurse-submodules --shallow-submodules \
+    https://github.com/steinbergmedia/vst3sdk.git       # 247 MB
+cmake -B build -DCMAKE_BUILD_TYPE=Release \
+      -DSMTG_ENABLE_VSTGUI_SUPPORT=OFF -DSMTG_ADD_VSTGUI=OFF \
+      -DSMTG_CREATE_PLUGIN_LINK=OFF \
+      -DSMTG_ENABLE_VST3_PLUGIN_EXAMPLES=OFF \
+      -DSMTG_ENABLE_VST3_HOSTING_EXAMPLES=ON
+cmake --build build --target validator -j 8             # → build/bin/Release/validator
+```
+
+对 `SunMao Gain.vst3` 的结果：**45 tests passed, 2 tests failed**，外加一条非计分警告。逐条归因：
+
+#### 1. `Missing mandatory IProcessContextRequirements extension!` —— **我们的缺陷**
+
+VST3 3.7 要求 audio processor 实现 `IProcessContextRequirements`，宿主据此知道插件需要
+transport 的哪些字段。`vst3_sys/src/vst/mod.rs:35` **早就有这个 IID 的转录**，
+但 `vst3_rs` 没有实现该接口。这一条毫无争议，是纯缺失。
+
+#### 2. `Parameter 001 (id=-1648886327): Invalid Id!!!` —— **validator 比规范更严，但必须服从**
+
+上游 `public.sdk/source/vst/testsuite/general/scanparameters.cpp:125` 原文：
+
+```cpp
+int32 paramId = paramInfo.id;
+if (paramId < 0)
+{
+    addErrorMessage (testResult,
+                     printf ("=>Parameter %03d (id=%d): Invalid Id!!!", i, paramId));
+    return false;
+}
+```
+
+而 `pluginterfaces/vst/vsttypes.h:104` 声明的是 `typedef uint32 ParamID;`，
+保留值只有 `kNoParamId = 0xFFFFFFFF`。**也就是说 validator 把 `uint32` 赋给 `int32`
+再判负，等于拒绝了规范允许的一半 ID 空间**（≥ 2^31 的都被判无效）。
+我们的 `Polarity` 是 `2646080969`，按 int32 读就是 `-1648886327`。
+
+**严格说这是 validator 的期待与规范不符**（已引上游原文）。**但结论仍然是我们要改**：
+Steinberg 的 validator 是 VST3 分发的事实门槛，过不了就发不出去，真实宿主也可能做同样假设。
+
+**但改动牵涉兼容性**：`stable_param_id` 产出的数值 ID **会写进 state**，
+把它压到 31 位会让既有 state 里的 ID 对不上。这与 class 串那条同属「改动会使既有工程/preset 失效」，
+**须由仓库所有者决定**，本轮不自行修改。
+
+#### 3. `Failed to connect the component with the controller with result code '-1'!` —— 待查
+
+非计分警告，但 `IConnectionPoint::connect` 返回 -1 意味着宿主侧的连接建立失败了。
+我们自己的 runner 宿主是能连上的（Phase 2 起就有 connect/disconnect 测试），
+**所以这条是 validator 的连接方式与我们的实现之间的差异，尚未归因**，留作下一轮第一件事。
+
+
 
 M4 的范围包含它，本轮**没做**。它不像 clap-validator 那样提供预编译产物，需要在 CI 上
 用 CMake 构建 VST3 SDK（含子模块）后才能拿到 `validator` 可执行文件，三平台各一份。
