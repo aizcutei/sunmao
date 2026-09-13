@@ -167,3 +167,31 @@
   另外两平台能否在 1e-6 内对上，要等 CI 给答案——比对会打印 worst deviation，
   所以万一对不上，一轮就能拿到该设多少的依据。三项独立立项未修：VST3 class 串跨平台不一致、
   VST3/CLAP 参数回读精度、VST3 离散参数回读未量化。Phase 4 继承的四条遗留未动。
+### 2026-09-13 — M2 三平台验收完成
+
+- Command/platform: [run 34766022434](https://github.com/aizcutei/sunmao/actions/runs/34766022434) / `c059e41`；
+  三平台 job 全部 success，每平台 **37 步零非成功**。三份 job 原始日志已下载并剔除脚本回显后逐条核实。
+  （M1 的验收记录提交 `5f48ac2` 亦已由 run 34764944510 三平台 success，分支保持全绿。）
+- Result: M2 标记完成。三平台数字完全一致：`REGRESSION MATCHED GOLDEN` 各 2 次（两格式各 147 项比对）、
+  `cross-format audio identical across all block records`、`REGRESSION GOLDENS VERIFIED`、
+  `STATE DECODE FUZZ VERIFIED: 200000 cases from seed 20816` 各 1 次，
+  两个反向用例（扰动 golden、未来版本 trace）各被拒 1 次。
+  **本轮最值得记的一个数字：goldens 是在 macOS ARM64 上生成的，而 Linux x86_64 与 Windows x86_64
+  的 worst deviation 都是 `0e0`。** 不是"落在 1e-6 容差内"，是**逐位相同**——跨三平台、跨两种架构。
+  **但不要把这条读成"SunMao 的 DSP 一律跨平台逐位一致"**：本 fixture 是纯乘法增益，
+  没有超越函数、没有可能被不同编译器合并成 FMA 的表达式。显式容差仍然是正确的契约，
+  等 DSP 更重的 fixture 进来时它才会真正派上用场；今天只是它恰好没被用到。
+- Evidence/artifact: 三份 artifacts 可下载（Linux 1,000,654,355 / Windows 78,753,789 /
+  macOS 54,209,946 bytes）；Windows 一份已实际下载，`unzip -t` 通过，SHA-256 `f36237e604a24860…`。
+  新加的 `host-session`/`regression`/fuzz 日志确已在包内（20 个文件，含真实的 `.vstpreset` 与 `.state`）。
+  **因此 M1 的 class 串发现从"日志证据"升级成了"产物证据"**：从 Windows 包里取出真实的
+  `gain.vst3.preset`，按上游布局解出 `class : 4D6E75536F6178464761696E21212121`
+  （十六进制还原成字节是 `MnuSoaxFGain!!!!`），而 macOS/Linux 的同名文件里是
+  `53756E4D616F46784761696E21212121`（`SunMaoFxGain!!!!`）——**两个平台产出的 `.vstpreset`
+  带着不同的 class ID，打开文件就能看到**。顺带核对容器布局本身：list 偏移 `48 + 52 = 100`、
+  总长 `100 + 4 + 4 + 20 = 128`，与 `vstpresetfile.cpp` 的写入顺序逐字段吻合。
+- Unresolved: 三项独立立项仍未修，优先级已排好：**(1) VST3 对 stepped 参数回读未量化**——
+  M2 首跑抓到的，无迁移代价、改法清楚，下一轮就修，goldens 的 diff 将是修复的证据；
+  (2) VST3/CLAP 参数回读精度（同一根因）；(3) VST3 class 串跨平台不一致——**改动会变更所有既有插件的身份、
+  使已发布的工程与 preset 失效，与 `main` 合并同属须由仓库所有者拍板的事，本 phase 不自行决定**。
+  Phase 4 继承的四条遗留未动。下一步 **M3：性能与泄漏检测**。
