@@ -906,15 +906,18 @@ jobs:
             grep -q "worst deviation" "$work/SunMaoGain.$format.log"
           done
 
-          # The same plugin through two formats must produce the same audio.
-          # Only the `block` lines carry audio; the `final` lines are known to
-          # disagree for stepped parameters (see tools/regression_goldens/README.md).
-          if ! diff <(grep '^block ' "$work/SunMaoGain.vst3.trace") \
-                    <(grep '^block ' "$work/SunMaoGain.clap.trace"); then
-            echo "VST3 and CLAP produced different audio for the same seed" >&2
+          # The same plugin through two formats must produce the same run --
+          # every record, not just the audio. This used to be true only of the
+          # `block` lines, because VST3 reported the raw value for a stepped
+          # parameter while CLAP reported the quantised one. That is fixed, so
+          # the assertion is now the strong one: the two traces differ in
+          # nothing but the line naming the format.
+          if ! diff <(grep -v '^format ' "$work/SunMaoGain.vst3.trace") \
+                    <(grep -v '^format ' "$work/SunMaoGain.clap.trace"); then
+            echo "VST3 and CLAP disagree about the same seeded run" >&2
             exit 1
           fi
-          echo "cross-format audio identical across all block records"
+          echo "cross-format traces identical in every record but the format line"
 
           # A golden that cannot fail is decoration. Perturb one block's peak
           # and require the comparison to notice.
@@ -954,7 +957,7 @@ jobs:
           grep -q "trace version 2" "$work/future.log"
           echo "future-version trace rejected as it must be"
 
-          echo "REGRESSION GOLDENS VERIFIED: VST3 + CLAP matched, cross-format audio identical"
+          echo "REGRESSION GOLDENS VERIFIED: VST3 + CLAP matched, cross-format runs identical"
 
       - name: Fuzz the state decoders (bounded)
         shell: bash

@@ -195,3 +195,39 @@
   (2) VST3/CLAP 参数回读精度（同一根因）；(3) VST3 class 串跨平台不一致——**改动会变更所有既有插件的身份、
   使已发布的工程与 preset 失效，与 `main` 合并同属须由仓库所有者拍板的事，本 phase 不自行决定**。
   Phase 4 继承的四条遗留未动。下一步 **M3：性能与泄漏检测**。
+### 2026-09-14 — 修复：VST3 对离散参数的回读返回未量化的值（M2 抓到的缺陷）
+
+- Command/platform: 本地 macOS ARM64。`cargo metadata --locked`、`cargo fmt --all -- --check`、
+  `git diff --check`、`RUSTFLAGS=-Awarnings cargo test --locked` 全部 exit 0（/tmp/p5m3-test.log，
+  **722 passed / 0 failed**）；`tools/package_examples.sh --debug --test` exit 0（32 套件 / 640 断言，与基线一致）。
+  新 CI 步骤脚本体本机跑通。
+- Result: **先写失败的测试，再改代码。** `vst3_rs` 加一个会量化的测试替身
+  （`set_param` 存 `value >= 0.5`，正是 `sunmao_core::BoolParam` 的行为），断言
+  `set_param_normalized(0.8)` 之后 `get_param_normalized` 必须是 1.0——**改之前它如期失败**
+  （`left: 0.8, right: 1.0`）。
+  **自底向上改了两层**：`vst3_rs` 的 wrapper 在 `plugin.set_param` 之后立刻 `plugin.get_param`，
+  把**采纳值**而非请求值写进 `ParameterBridge`；`backend_vst3::get_param` 改读 `self.params`
+  （插件真身）而不是 bridge——否则这条链是循环的，量化永远观察不到。
+  **这不是新发明的约定**：编辑器的 `Vst3ParamsViewContext::set_param` 本来就是"应用→回读→发布采纳值"，
+  只是 `Plugin::set_param` 那条路径没照做。
+  **bridge 的七个写入点逐个核对**，只改了有插件实例的四个，外加 process 开头"从 bridge 同步进插件"那次的写回。
+  不带 GUI 的 `ControllerWrapper` **没有插件实例**（源码注释本来就写明），无从量化，
+  只能先写原值、由 processor 在下一块写回采纳值——**收敛需要一个块，如实延迟，不是静默丢值**。
+  写回在音频线程：`ParameterBridge::set` 是原子 swap，且**仅在值真的改变时**才递增 generation，
+  所以零分配零加锁，也不会把同步触发成每块循环（两块内收敛）。
+  **顺带修好一个说谎的测试替身**：`HostGuiTestPlugin::set_param` 是空实现、`get_param` 恒返回 0.0。
+  旧契约下 wrapper 回显请求值，所以这条从来没被发现；新契约下它立刻暴露——
+  一个默默丢弃状态的替身，不能替插件出现在参数管线的测试里。已改为真的存值。
+  它所在的测试其实考的是 connect/disconnect，参数值只是标记物，改后语义不变。
+- Evidence/artifact: **证据是 golden 的 diff 本身**——重新打包后重新生成，
+  `SunMaoGain.vst3.trace` **只变了两行**（两个 stepped 参数 `8.017…e-1`/`7.871…e-1` → `1.0e0`），
+  CLAP 的 golden **一字未动**（它本来就是对的），**没有任何 `block` 记录变化、连续参数也没动**。
+  修复后两份 trace **只差 `format` 一行**，于是把 CI 的跨格式断言从"`block` 行相同"
+  升级成"除 `format` 外逐行相同"——这是 M2 建回归床的意义第一次兑现：
+  一次行为修改的范围，由 golden 逐行说清楚，而不是靠我口述。
+  两个新测试都做过反向验证：把 `get_param` 改回读 bridge，两者立刻变红，还原后转绿。
+  逐套件比对确认只有 `vst3_rs`（66→67）与 `sunmao_backend_vst3`（28→29）两套变化。
+- Unresolved: 须取得同 commit 三平台 hosted 全绿。仍未修两项：连续参数的 f32/f64 精度差
+  （同一根因，但两格式都不算错，宿主的 `expect` 以显式容差应对）、
+  **VST3 class 串跨平台不一致（须由仓库所有者拍板，会变更所有既有插件身份）**。
+  Phase 4 继承的四条遗留未动。下一步 **M3：性能与泄漏检测**。

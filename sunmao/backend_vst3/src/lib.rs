@@ -602,16 +602,19 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
             .collect()
     }
 
+    /// Report what this plugin instance actually holds.
+    ///
+    /// Deliberately not the shared bridge: the wrapper asks this right after
+    /// handing a value over, precisely so the bridge can record the value the
+    /// plugin settled on. Reading the bridge here would make that circular and
+    /// the quantisation would never be observed.
     fn get_param(&self, id: u32) -> f64 {
-        if self
-            .param_descriptors
+        self.param_descriptors
             .iter()
-            .any(|descriptor| descriptor.numeric_id == id)
-        {
-            self.shared_params.get(id)
-        } else {
-            0.0
-        }
+            .find(|descriptor| descriptor.numeric_id == id)
+            .and_then(|descriptor| self.params.get_normalized(descriptor.id))
+            .map(f64::from)
+            .unwrap_or(0.0)
     }
 
     fn set_param(&mut self, id: u32, value: f64) {
@@ -622,7 +625,14 @@ impl<P: SunmaoPlugin> Plugin for SunmaoVst3Wrapper<P> {
         {
             let v = value as f32;
             self.params.set_normalized(descriptor.id, v);
-            self.shared_params.set(id, value);
+            // Mirror the applied value, the way the editor's `ViewContext`
+            // already does. A discrete parameter quantises, so storing the
+            // request would publish a value the plugin is not using.
+            let applied = self
+                .params
+                .get_normalized(descriptor.id)
+                .unwrap_or(v.clamp(0.0, 1.0));
+            self.shared_params.set(id, f64::from(applied));
         }
     }
 
@@ -1870,6 +1880,38 @@ mod tests {
     fn explicit_class_id_is_preserved() {
         let actual = <SunmaoVst3Wrapper<ExplicitIdPlugin> as Plugin>::class_id();
         assert_eq!(actual, (*b"ExplicitVst3ID!!").map(|byte| byte as i8));
+    }
+
+    /// A discrete parameter must read back the value it snapped to.
+    ///
+    /// Found by the Phase 5 regression host: the same automation produced
+    /// byte-identical audio through VST3 and CLAP while the two formats
+    /// disagreed about what the parameter *was*. The audio proved the plugin
+    /// had quantised; only the VST3 readback had not. `Bypass` has one step
+    /// and `Voices` four, so both the two-value and the many-value case are
+    /// covered here rather than only the boolean.
+    #[test]
+    fn a_discrete_parameter_reads_back_the_value_it_snapped_to() {
+        let declared = <SunmaoVst3Wrapper<MetadataPlugin> as Plugin>::params();
+        let host = HostHandle::detached(&declared);
+        let mut plugin = <SunmaoVst3Wrapper<MetadataPlugin> as Plugin>::new(host);
+        let bypass = sunmao_core::stable_param_id("bypass");
+        let voices = sunmao_core::stable_param_id("voices");
+        let mix = sunmao_core::stable_param_id("mix");
+
+        // One step: anything at or above the midpoint is "on".
+        plugin.set_param(bypass, 0.8);
+        assert_eq!(plugin.get_param(bypass), 1.0);
+        plugin.set_param(bypass, 0.2);
+        assert_eq!(plugin.get_param(bypass), 0.0);
+
+        // Four steps: 0.3 lands on step 1 of 4.
+        plugin.set_param(voices, 0.3);
+        assert_eq!(plugin.get_param(voices), 0.25);
+
+        // A continuous parameter is untouched by any of this.
+        plugin.set_param(mix, 0.3);
+        assert!((plugin.get_param(mix) - 0.3).abs() < 1e-6);
     }
 
     #[test]

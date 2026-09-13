@@ -344,6 +344,17 @@ impl HostHandle {
         }
     }
 
+    /// A handle that is not attached to any host.
+    ///
+    /// This is the state a plugin is genuinely in between construction and the
+    /// host calling `setComponentHandler`: it owns a parameter bridge, and
+    /// every host-directed call (`begin_edit`, `perform_edit`, `restart`, …)
+    /// reports failure because there is nobody to tell. Useful for exercising
+    /// a plugin's own parameter behaviour without standing up a host.
+    pub fn detached(params: &[crate::ParamInfo]) -> Self {
+        Self::new(Arc::new(ParameterBridge::new(params)))
+    }
+
     /// Parameter bridge for this processor or controller instance.
     pub fn parameter_bridge(&self) -> Arc<ParameterBridge> {
         self.inner.parameter_bridge.clone()

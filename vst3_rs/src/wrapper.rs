@@ -1416,8 +1416,19 @@ impl<P: Plugin> ProcessorWrapper<P> {
         if shared_generation != (*obj).parameter_generation {
             for param in &(*obj).params {
                 plugin.set_param(param.id, (*obj).parameter_bridge.get(param.id));
+                // Correct the bridge to what the plugin actually took. The
+                // plain `ControllerWrapper` has no plugin instance, so a value
+                // it published could not be quantised when it was written;
+                // this is where that gets settled. `set` is an atomic store
+                // that only bumps the generation when the value really
+                // changed, so this converges on the next block instead of
+                // re-triggering the sync forever, and stays allocation-free
+                // and lock-free on the audio thread.
+                (*obj)
+                    .parameter_bridge
+                    .set(param.id, plugin.get_param(param.id));
             }
-            (*obj).parameter_generation = shared_generation;
+            (*obj).parameter_generation = (*obj).parameter_bridge.generation();
         }
 
         (*obj).final_parameter_values.fill(None);
@@ -1521,7 +1532,12 @@ impl<P: Plugin> ProcessorWrapper<P> {
             {
                 if let Some(value) = value {
                     plugin.set_param(parameter.id, value);
-                    (*obj).parameter_bridge.set(parameter.id, value);
+                    // Publish what the plugin now holds, not what arrived: a
+                    // discrete parameter quantises, and echoing the request
+                    // back would report a value nothing is using.
+                    (*obj)
+                        .parameter_bridge
+                        .set(parameter.id, plugin.get_param(parameter.id));
                 }
             }
             return kResultOk;
@@ -1630,7 +1646,10 @@ impl<P: Plugin> ProcessorWrapper<P> {
         {
             if let Some(value) = value {
                 plugin.set_param(parameter.id, value);
-                (*obj).parameter_bridge.set(parameter.id, value);
+                // Same reason as the silent-block path above.
+                (*obj)
+                    .parameter_bridge
+                    .set(parameter.id, plugin.get_param(parameter.id));
             }
         }
 
@@ -2917,11 +2936,18 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
                 &(*obj).params,
                 |id, value| {
                     let value = sanitize_normalized(value, (*obj).parameter_bridge.get(id));
-                    if let Some(plugin) = (*obj).plugin.as_mut() {
-                        plugin.set_param(id, value);
-                    }
-                    // Publish only after the user callback returns normally.
-                    (*obj).parameter_bridge.set(id, value);
+                    // Publish only after the user callback returns normally,
+                    // and publish what the plugin took rather than what the
+                    // state file said, so a discrete parameter reads back the
+                    // value it is actually using.
+                    let applied = match (*obj).plugin.as_mut() {
+                        Some(plugin) => {
+                            plugin.set_param(id, value);
+                            plugin.get_param(id)
+                        }
+                        None => value,
+                    };
+                    (*obj).parameter_bridge.set(id, applied);
                 },
                 &mut loaded_version,
             );
@@ -3074,12 +3100,18 @@ impl<P: GuiPlugin> GuiControllerWrapper<P> {
             let obj = this as *mut Self;
             if (&(*obj).params).iter().any(|param| param.id == id) {
                 let value = sanitize_normalized(value, (*obj).parameter_bridge.get(id));
-                if let Some(plugin) = (*obj).plugin.as_mut() {
-                    plugin.set_param(id as u32, value);
-                }
                 // Keep the controller/processor bridge consistent with the
-                // user object when the callback succeeds.
-                (*obj).parameter_bridge.set(id, value);
+                // user object when the callback succeeds -- consistent with
+                // what it *holds*, which for a discrete parameter is not what
+                // it was handed.
+                let applied = match (*obj).plugin.as_mut() {
+                    Some(plugin) => {
+                        plugin.set_param(id as u32, value);
+                        plugin.get_param(id as u32)
+                    }
+                    None => value,
+                };
+                (*obj).parameter_bridge.set(id, applied);
                 return kResultOk;
             }
             kInvalidArgument
@@ -3964,6 +3996,16 @@ mod tests {
         }
     }
 
+    /// Last value handed to `HostGuiTestPlugin::set_param`.
+    ///
+    /// The double used to drop writes and report 0.0 for every read. That was
+    /// invisible while the wrapper echoed the host's request into the bridge,
+    /// and becomes visible now that the bridge records what the plugin holds:
+    /// a plugin that ignores a write genuinely does still hold its old value.
+    /// A test double that silently discards state cannot stand in for a plugin
+    /// in a test about parameter plumbing, so it keeps the value.
+    static HOST_GUI_TEST_PARAM: AtomicU64 = AtomicU64::new(0);
+
     struct HostGuiTestPlugin;
 
     impl Plugin for HostGuiTestPlugin {
@@ -3980,10 +4022,12 @@ mod tests {
         }
 
         fn get_param(&self, _id: u32) -> f64 {
-            0.0
+            f64::from_bits(HOST_GUI_TEST_PARAM.load(Ordering::SeqCst))
         }
 
-        fn set_param(&mut self, _id: u32, _value: f64) {}
+        fn set_param(&mut self, _id: u32, value: f64) {
+            HOST_GUI_TEST_PARAM.store(value.to_bits(), Ordering::SeqCst);
+        }
 
         fn process(&mut self, _ctx: &mut ProcessContext) -> crate::ProcessResult {
             Ok(())
@@ -6462,6 +6506,91 @@ mod tests {
         }
 
         fn gui_destroy(&mut self) {}
+    }
+
+    static QUANTIZING_PARAM_VALUE: AtomicU64 = AtomicU64::new(0);
+
+    /// A plugin whose parameter is *discrete*, so the value it ends up holding
+    /// is not the value it was handed.
+    ///
+    /// Every real stepped parameter behaves this way — `sunmao_core`'s
+    /// `BoolParam` stores `normalized >= 0.5` — and it is the case where
+    /// echoing the host's request back to the host is wrong rather than merely
+    /// imprecise.
+    struct QuantizingParamPlugin;
+
+    impl Plugin for QuantizingParamPlugin {
+        fn info() -> crate::PluginInfo {
+            crate::PluginInfo::default()
+        }
+
+        fn new(_host: HostHandle) -> Self {
+            Self
+        }
+
+        fn params() -> Vec<ParamInfo> {
+            vec![ParamInfo::new(93, "Bypass").step_count(1)]
+        }
+
+        fn get_param(&self, _id: u32) -> f64 {
+            f64::from_bits(QUANTIZING_PARAM_VALUE.load(Ordering::SeqCst))
+        }
+
+        fn set_param(&mut self, _id: u32, value: f64) {
+            let quantized = if value >= 0.5 { 1.0f64 } else { 0.0f64 };
+            QUANTIZING_PARAM_VALUE.store(quantized.to_bits(), Ordering::SeqCst);
+        }
+
+        fn process(&mut self, _ctx: &mut ProcessContext) -> ProcessResult {
+            Ok(())
+        }
+    }
+
+    impl GuiPlugin for QuantizingParamPlugin {
+        fn gui_size() -> GuiSize {
+            GuiSize::new(320, 200)
+        }
+
+        fn gui_create(&mut self, _parent: RawWindowHandle) -> bool {
+            true
+        }
+
+        fn gui_destroy(&mut self) {}
+    }
+
+    /// The host has to be told the value the plugin is *using*, not the value
+    /// it asked for.
+    ///
+    /// A DAW reading back a bypass switch it just set to 0.8 and being told
+    /// "0.8" is being told something untrue: the plugin is bypassed, and its
+    /// audio path says so. Found by the Phase 5 regression host, which produced
+    /// byte-identical audio through both formats while the two disagreed about
+    /// what the parameter was.
+    #[test]
+    fn a_discrete_parameter_reads_back_the_value_the_plugin_applied() {
+        unsafe {
+            QUANTIZING_PARAM_VALUE.store(0.0_f64.to_bits(), Ordering::SeqCst);
+            let controller = GuiControllerWrapper::<QuantizingParamPlugin>::new();
+            let set_param = (*(*controller).vtbl).set_param_normalized;
+            let get_param = (*(*controller).vtbl).get_param_normalized;
+
+            assert_eq!(set_param(controller.cast(), 93, 0.8), kResultOk);
+            assert_eq!(
+                f64::from_bits(QUANTIZING_PARAM_VALUE.load(Ordering::SeqCst)),
+                1.0,
+                "the plugin should have quantised the request"
+            );
+            assert_eq!(
+                get_param(controller.cast(), 93),
+                1.0,
+                "the host was told a value the plugin is not using"
+            );
+
+            assert_eq!(set_param(controller.cast(), 93, 0.2), kResultOk);
+            assert_eq!(get_param(controller.cast(), 93), 0.0);
+
+            GuiControllerWrapper::<QuantizingParamPlugin>::release(controller.cast());
+        }
     }
 
     #[test]

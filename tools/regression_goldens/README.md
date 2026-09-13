@@ -46,22 +46,23 @@ A golden changes only when behaviour was **deliberately** changed. Regenerate
 with `--write`, and make the diff part of the commit that changed the
 behaviour — the diff is the evidence for what moved.
 
-## A known difference these traces currently record
+## What the two format traces say about each other
 
-`SunMaoGain.vst3.trace` and `SunMaoGain.clap.trace` have **identical `block`
-lines** — the same plugin through two formats produces the same audio, and CI
-asserts that mechanically. Their `final` lines disagree for the two *stepped*
-parameters:
+`SunMaoGain.vst3.trace` and `SunMaoGain.clap.trace` are identical in **every
+record but the `format` line**, and CI asserts exactly that. The same plugin
+driven by the same seed through two plugin formats produces the same audio and
+ends on the same parameter values.
+
+That was not true when these goldens were first written. VST3 then reported the
+raw value the host had sent for the two *stepped* parameters while CLAP
+reported the value the plugin had snapped to:
 
 ```
-vst3:  final 2646080969 8.01757812500000000e-1
-clap:  final 2646080969 1.00000000000000000e0
+-final 2646080969 8.01757812500000000e-1     (VST3, the request)
++final 2646080969 1.00000000000000000e0      (both, the applied value)
 ```
 
-That is not a rounding difference. VST3's `getParamNormalized` returns the raw
-value the host wrote, while CLAP's `get_value` returns the value the plugin is
-actually using, and a stepped parameter quantises. The identical audio proves
-the plugin processed with the quantised value in both cases, so it is the VST3
-readback that is wrong. Recorded in `docs/phase5/status.md` as its own item; the
-goldens deliberately capture today's behaviour so that fixing it shows up as a
-diff here.
+The audio records were byte-identical even then, which is what proved the
+plugin had quantised and only the VST3 readback had not. The fix is recorded in
+`docs/phase5/progress.md`; the two-line diff above is what it looked like here,
+and it is the reason these files are worth checking in.
