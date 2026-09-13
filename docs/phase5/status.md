@@ -125,7 +125,7 @@ backends" 两个 blocking 步骤里被当作宿主调用。
 | M1 交互式 standalone host | 加载已打包 `.vst3`/`.clap`、枚举参数与 bus、改参数、存取 state/preset、开关编辑器；既有非交互 CI 用法原样不变 | **完成**（三平台 hosted 全绿）：新增 `host` 子命令（行式命令语言，人可交互、管道可脚本化），`preset.rs` 按上游转录实现 `.vstpreset` 容器，`HostPlugin::class_id` 补上 VST3 class ID，CLAP 宿主不再对未知参数 ID 报成功。既有六个子命令未改行为（四处重复的扫描分派抽成 `scan_plugin_path`，分支逐字相同） | [run 34763956140](https://github.com/aizcutei/sunmao/actions/runs/34763956140)（commit `ac41dff`）三 job success，每 job **35 步零非成功**（新步骤 "Drive the interactive host over VST3 + CLAP" 三平台各 success），三份 artifacts 可下载（Linux 1,000,635,643 / Windows 78,737,182 / macOS 54,191,174 bytes；macOS 一份已下载，`unzip -t` 报 No errors detected，SHA-256 `2c01b112…1fa10`）。**三平台原始日志已下载并逐条 grep，且把 GitHub 回显的脚本正文（ANSI `36;1m` 前缀）剔除后计数**：每平台真实输出 `HOST COMMAND SURFACE VERIFIED` **1** 次、`rejected as it must be` **10** 次（十个反向用例逐个非零退出）、`HOST SESSION VERIFIED` **4** 次（两格式各一段 18 命令会话 + 两格式各一段 5 命令编辑器会话）、`editor opened`/`editor closed` 各 **4** 次 | — （M1 完成；两项新发现各自独立立项，见下）|
 | M2 批量 regression host | 确定性批跑（固定种子/buffer/块划分）、音频与参数轨迹、golden 对拍 + 显式浮点容差、有界 fuzz 进 CI | **完成**（三平台 hosted 全绿）：`regress` 子命令与 `regress.rs`；goldens 入库 `tools/regression_goldens/`；两个新 blocking 步骤（golden 对拍、有界 fuzz）。块划分刻意不均匀且首尾钉死在 max/1 | [run 34766022434](https://github.com/aizcutei/sunmao/actions/runs/34766022434)（commit `c059e41`）三 job success，每 job **37 步零非成功**。三平台原始日志剔除脚本回显后逐条核实，**三平台数字完全一致**：`REGRESSION MATCHED GOLDEN` 各 2 次（两格式，各 147 项比对），**worst deviation 三平台均为 `0e0`**，`cross-format audio identical across all block records`、`REGRESSION GOLDENS VERIFIED`、`STATE DECODE FUZZ VERIFIED: 200000 cases` 各 1 次，`perturbed golden rejected`／`future-version trace rejected` 各 1 次。三份 artifacts 可下载（Linux 1,000,654,355 / Windows 78,753,789 / macOS 54,209,946 bytes；Windows 一份已下载，`unzip -t` 通过，SHA-256 `f36237e604a24860…`），且新增的 `host-session`/`regression`/fuzz 日志确已在包内 | — （M2 完成；进入 M3）|
 | M3 性能与泄漏检测 | RT 安全检测扩到 GUI 线程与宿主回调；泄漏检测；基准与阈值写入本文件 | **完成**（三平台 hosted 全绿）：`stress` 子命令 + `rss.rs` + `stress.rs`；`clap.params.flush` 音频线程零分配断言。**只覆盖 RT 安全三项里的「分配」**，加锁与系统调用如实未做 | [run 34773295928](https://github.com/aizcutei/sunmao/actions/runs/34773295928)（commit `1d40eef`）三 job success，每 job **38 步零非成功**。三平台日志剔除脚本回显后核实：`injected leak detected as it must be` 与 `injected editor leak detected as it must be` **各平台各 1 次**（两条守卫都在真硬件上真的变红过），`STRESS LIFECYCLES VERIFIED` 各 1 次 | — （M3 完成；进入 M4）。**但 Linux 的编辑器差分留了一个未归因的数字，见下** |
-| M4 外部 validator | `clap-validator` + Steinberg VST3 validator 三平台 blocking；失败项逐条归因 | **CLAP 侧本地完成，待三平台验收；VST3 validator 未接入**：新增 blocking 步骤 "Validate CLAP plugins with clap-validator"（0.4.1，三平台各取官方预编译包），对**全部 16 个**打包 `.clap` 逐个验证 | 本地：接入前 3 个失败，归因后修掉 2 个真缺陷，现 **16/16 全部 0 failed**（每个 44 tests run） | 取三平台绿；日志须 grep 到 `CLAP VALIDATOR VERIFIED` 与每个插件的 `, 0 failed,` |
+| M4 外部 validator | `clap-validator` + Steinberg VST3 validator 三平台 blocking；失败项逐条归因 | **CLAP 侧本地完成，待三平台验收；VST3 validator 未接入**：新增 blocking 步骤 "Validate CLAP plugins with clap-validator"（0.4.1，三平台各取官方预编译包），对 `target/phase1-artifacts/*.clap` 逐个验证（CI 上是 **8 个**，见下方更正） | 三平台各 **8/8 全部 0 failed**；本地对 16 个也全部 0 failed | 取三平台绿；日志须 grep 到 `CLAP VALIDATOR VERIFIED` 与每个插件的 `, 0 failed,` |
 | M5 DAW smoke 与兼容性报告 | 可脚本化 DAW 三平台加载/处理/存工程/重开；机器可读兼容性报告 artifact | 未开始 | — | — |
 
 ## M1 抓到的两项新发现（各自独立立项）
@@ -340,6 +340,25 @@ CLAP 要求插件在 state 加载后调用 `clap_host_params::rescan(CLAP_PARAM_
 报错原文就写着 "This is a bug in the validator"：它想创建的临时文件已经存在。
 这是前一条测试失败后留下的残留文件导致的连锁反应；把第 2 项修掉之后，这一条自动消失。
 **不是我们的缺陷，也不需要为它改任何代码。**
+
+### 更正：CI 实际验证的是 8 个，不是 16 个
+
+提交信息与本文件最初都写的是「每个打包的 `.clap`」，并以本地 16 个全过为据。
+**三平台日志核实后发现 CI 上只有 8 个**：
+
+```
+SunMaoGain / SunMaoMeter / SunMaoOsDistortion / SunMaoSidechainComp
+SunMaoSine / SunMaoTemplateInstrument / SunMaoTempoDelay / SunMaoWidgetsGL
+```
+
+原因是 validator 步骤插在「Package and exercise native GUI backends」**之前**，
+而 GainGL / GainWGPU / GainWebView / SineGL 等 GUI 后端变体是那一步才打包的，
+跑 validator 的时候它们还不存在。本地 `build_new/` 里 16 个都在，所以本地看不出差别。
+
+**8 个已覆盖全部三类 fixture**（效果、合成器、GUI），也包含本轮修掉次正规数的 `OsDistortion`，
+所以结论本身不受影响；但「每个打包的 `.clap`」这句话对 CI 不成立，故更正。
+**把 validator 步骤挪到 GUI 打包之后以覆盖 16 个，单独立项**——挪动步骤顺序要重新取三平台绿，
+不在本轮顺手做。
 
 ### 未接入：Steinberg VST3 validator
 

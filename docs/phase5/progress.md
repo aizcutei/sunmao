@@ -377,3 +377,21 @@
 - Unresolved: 修复版须重新取三平台绿。**这次是断言写错方向的好例子**：
   我断言的是「日志里必须出现这句话」而不是「退出码为 0」，所以它**变红了**而不是默默放行——
   如果只看退出码，validator 的 0 退出会让这一步一直绿，而我永远不会知道断言从没匹配过。
+### 2026-09-14 — clap-validator 三平台绿，并更正一处我自己写错的覆盖面
+
+- Command/platform: [run 34776785134](https://github.com/aizcutei/sunmao/actions/runs/34776785134) / `0481fb6`；
+  三平台 job 全部 success，每平台 **39 步零非成功**。三份日志已下载核实。
+- Result: 改用 `--json` 判据后三平台全绿。日志核实：每平台 `executed, 0 failed` **8 行**、
+  `clap-validator rejected a non-plugin as it must` 与 `CLAP VALIDATOR VERIFIED` 各 1 次，
+  `executed, N failed`（N>0）**0 行**。
+- Evidence/artifact: **顺带发现我自己把覆盖面写大了。** 提交信息与 status.md 原本写「全部 16 个打包 `.clap`」，
+  依据是本地 `build_new/` 的 16 个全过；**但三平台日志里只有 8 个**——
+  validator 步骤插在「Package and exercise native GUI backends」**之前**，
+  GainGL / GainWGPU / GainWebView / SineGL 等 GUI 变体那时还没被打包出来。
+  本地目录里 16 个都在，所以本地跑永远看不出这个差别。已在 status.md 更正并列出实际的 8 个。
+  8 个覆盖了效果 / 合成器 / GUI 三类，也包含本轮修过的 `OsDistortion`，结论不受影响，
+  但「每个」这句话对 CI 不成立。**这正是「下载原始日志逐条 grep」而不是只看 job 结论的价值**：
+  这次绿的是对的，写错的是我的描述。
+- Unresolved: 把 validator 步骤挪到 GUI 打包之后以覆盖 16 个——单独立项，挪顺序要重新取三平台绿。
+  **M4 仍未完成**：Steinberg VST3 validator 未接入（需在 CI 上 CMake 构建 VST3 SDK）。
+  此前各项独立立项未变。
