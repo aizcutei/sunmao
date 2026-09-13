@@ -2179,3 +2179,26 @@
 - Change: 修复 Wayland worker 中 `connection` 与 `toplevel` 移动后的借用错误；原生 floating owner/title 接线覆盖 X11、Wayland 降级、macOS child window、Windows owner。
 - Result: Linux/macOS/Windows 三平台 Phase 4 fixtures、Wayland/X11、国际键盘与全部 blocking steps success；macOS/Windows/Linux artifacts 可由 Actions 下载并校验。M4 transient 缺口关闭，进入最终文档审计。
 - Unresolved: 完成规则要求的最终文档矩阵与 artifact 证据归档。
+
+### 2026-09-13 — Phase 4 最终审计：抓出一处真缺陷并更正过期陈述
+
+- Command/platform: 本地 macOS。`cargo metadata --locked` exit 0、`cargo fmt --all -- --check` exit 0、
+  `git diff --check` exit 0、`RUSTFLAGS=-Awarnings cargo test --locked` exit 0
+  （/tmp/sunmao-gate-test.log，135 套件 / 676 passed / 0 failed）。未触打包/示例，故未跑 package_examples.sh。
+- Change: 逐项总审计 `docs/phase4/audit.md`（原始要求 × 核对方式 × 判断），抓出**文档承诺与编译器互相矛盾**
+  一处——`docs/phase3/compatibility.md` §2bis.3 承诺"新增 `AccessibleRole` 变体不算破坏性"，而该枚举
+  当时没有 `#[non_exhaustive]`，下游任何穷尽 `match` 都会被新变体打断。已补该属性，并用一对 doc-test
+  机械守卫（带 `_` 分支须编译通过、穷尽 `match` 须 `compile_fail`）；crate 内 role→AccessKit 映射保持穷尽，
+  新增 role 仍必须先决定辅助技术读作什么。同轮更正九处"文档说没做、代码里其实做了"的过期陈述：
+  `accessibility.rs` 模块 rustdoc（对外可见）、`semantics.md` 的 accessibility 行与 Wayland 行、
+  `compatibility.md` §2bis.3/§2bis.4、`roadmap.md` 的"唯一未交付 Wayland"、`status.md` 的 fixture 段 /
+  M4 小节标题 / M5 矩阵行 / Wayland 受阻链 / 完成规则段末尾。
+- Result: **守卫做了反向验证**——本地临时摘掉 `#[non_exhaustive]`，那条 `compile_fail` doc-test 立即
+  `FAILED`，还原后重新 `ok`，因此它不是永远为真的装饰。`#[non_exhaustive]` 对现有下游无破坏：全仓
+  对 `AccessibleRole` 的穷尽 `match` 只有 crate 内的 `accesskit_role`，集成测试 `accessibility_property.rs`
+  只做构造与比较。模块 rustdoc 对 `accesskit_update` 改为不加 doc 链接并注明它在 off-by-default 的
+  `accessibility` feature 后面（默认构建里不存在，加链接会是死链）。§2bis.1 的受保护名字逐个在
+  `sunmao::prelude` 核对存在，§2bis.2 引用的机械守卫逐个 grep 到（4 条 `host_sync_never_echoes_back_to_the_host`）。
+- Unresolved: 按完成规则，**本审计提交自身仍需取得同 commit 三平台 hosted 全绿 + artifacts 可下载**，
+  在那之前 Phase 4 不标记完成。已知遗留（Tab 停在非交互控件、`vst3_rs` 控制器包装冗余、
+  Windows WGPU 收尾段错误、`main` 落后）按 audit.md 所列各自单独立项。

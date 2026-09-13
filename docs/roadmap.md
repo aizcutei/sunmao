@@ -27,7 +27,7 @@ API 与 state 的兼容策略见 [`docs/phase3/compatibility.md`](phase3/compati
 验收状态与证据见 `docs/phase3/status.md`。"新插件样板 ≤50 行"已达标（effect 42 行、
 instrument 49 行，由 `sunmao/tests/template_size.rs` 机械强制）。
 
-## Phase 4：GUI 组件库与平台完善（M0–M4 完成；M5 除 Wayland 外完成）
+## Phase 4：GUI 组件库与平台完善（M0–M5 各专项已验收；总审计提交待取三平台绿）
 
 完善布局、主题、text rendering、accessibility、clipboard、IME/国际键盘、cursor/focus、scale negotiation、floating CLAP editor；明确 renderer 资源和线程归属，在 X11 生命周期稳定后加入 Wayland。
 
@@ -40,10 +40,17 @@ scale/DPI 协商、`Column`/`Row` 声明式布局与六控件与 `ParamBinder` �
 UI Automation 往返断言：`gain`→Slider、`mode`→ComboBox、`bypass`→CheckBox）、
 `docs/phase3/compatibility.md` §2bis GUI 兼容策略。
 
-**唯一未交付：Wayland 原生。** baseview 没有 Wayland 后端（`src/lib.rs` 只有 `mod x11`，
-全树零 Wayland 引用），交付 = 一个完整后端（`wl_surface`/`xdg_shell`/EGL/`wl_seat`+
-xkbcommon/`wl_output`）＋ CI 装无头 compositor，且**只有 CLAP 受益**（VST3 无 Wayland
-平台类型，一律走 XWayland）。现状不是"不能在 Wayland 上用"：X11 路径经 XWayland 照常工作。
+**Wayland 原生已交付**（本条此前写的是"唯一未交付：baseview 没有 Wayland 后端，全树零
+Wayland 引用"，已不成立）：`baseview/src/wayland/` 现有 `toplevel`/`egl`/`pointer`/
+`keyboard`/`cursor`/`activation`/`scaling`/`dispatch`/`probe`，CI 也已装上无头 compositor
+（Sway 与 Weston，按被测协议分别使用）。各专项独立三平台验收：真实 GL 编辑器 #116、
+鼠标 #119、键盘/xkbcommon/compose/repeat #120、cursor 与双窗口重入 `8dee3e8`、
+主动 focus `7ed7be0`、output scaling `aa8694e`、facade feature 传递 `910f522`。
+**仍然只有 CLAP 受益**——VST3 规范里没有 Wayland 平台类型，一律走 XWayland；
+现状从来不是"不能在 Wayland 上用"，X11 路径经 XWayland 照常工作。
+
+**Wayland 侧如实降级**：`set_transient` 在 Wayland 上拒绝（没有标准的 cross-client
+parent handle），不假装成功。
 
 ## Phase 5：完整测试宿主与外部兼容
 

@@ -197,9 +197,16 @@ GUI 有一条别的轴没有的性质：**它的"行为"一部分不由 SunMao �
 
 ### 2bis.3 accessibility 的兼容规则
 
-`AccessibleRole` 是 `#[non_exhaustive]` 的候选：**新增 role 变体不算破坏性**（桥接层
-应当有 fallback），但**改变某个控件已声明的 role 算破坏性**——屏幕阅读器用户会据此
+`AccessibleRole` **已标注 `#[non_exhaustive]`**：**新增 role 变体不算破坏性**（桥接层
+必须有 fallback 分支），但**改变某个控件已声明的 role 算破坏性**——屏幕阅读器用户会据此
 学会怎么操作它，把下拉改叫滑块等于换掉交互契约。
+
+这条从"候选"改成"已落地"是 Phase 4 M5 审计的结果：此前该枚举并没有 `#[non_exhaustive]`，
+于是文档承诺"新增变体兼容"而**编译器会反驳它**——任何下游的穷尽 `match` 都会被新变体打断。
+现由 `AccessibleRole` 上的一对 doc-test 机械守卫：带 `_` 分支的 `match` 必须编译通过，
+不带 `_` 的穷尽 `match` 必须 `compile_fail`。后者是关键——属性若被摘掉，那条 doc-test
+会因为"本该编译失败却成功了"而变红。crate 内部的 role→AccessKit 映射仍保持穷尽，
+这样新增 role 时无法绕过"辅助技术该把它读作什么"这个决定。
 
 `accessible_role()` 必须**声明**，不得从 `display_value()` 推断。这条不只是风格：
 选项恰好是 `"1"`/`"2"` 的下拉会被任何基于文本的推断读成滑块。由
@@ -212,8 +219,13 @@ GUI 有一条别的轴没有的性质：**它的"行为"一部分不由 SunMao �
 - 宿主是否调用 `set_scale`（CLAP 上游明确说 cocoa/uikit **不该**调用，见
   `clap_sys::ext::gui` 的常量文档）；
 - 宿主是否转发键盘（VST3 经 `IPlugView::onKeyDown`，CLAP 无宿主转发通道）；
-- 浮动窗口与 Wayland 原生嵌入（见 `docs/phase4/status.md` 的受阻项）；
-- 平台 accessibility 桥接是否存在（当前三平台都不存在）。
+- 宿主是否使用浮动窗口（CLAP 的 `is_api_supported(_, true)` 如实上报，宿主仍可选择嵌入），
+  以及 Wayland 原生嵌入——**VST3 规范里没有 Wayland 平台类型**，故 VST3 在 Wayland 桌面上
+  一律经 XWayland，这不由 SunMao 决定（见 `docs/phase4/status.md`）；
+- 平台 accessibility 桥接**存在但只读**：三平台适配器（`accesskit_windows`/`_macos`/`_unix`）
+  已接进 baseview 的窗口生命周期，屏幕阅读器能读出控件树；**`ActionHandler` 不执行任何
+  action**，因此辅助技术改不了参数值。这是如实降级而非静默失败（AccessKit 的 trait 要求
+  不支持的 action 必须无动作）。是否真有辅助技术连上仍由宿主与用户的系统决定。
 
 **规则：能力不可用时一律如实回 `false`/降级，绝不出现"查询说支持、实际做不到"。**
 这是 Phase 2 起就贯穿的规则，GUI 侧同样适用。

@@ -6,7 +6,11 @@
 //!
 //! The tree is built here, renderer- and platform-agnostic, because the shape
 //! is the same for all three and it is the part worth testing. The per-platform
-//! bridging is not implemented yet — see `docs/phase4/status.md`.
+//! bridging goes through AccessKit — see `accesskit_update` (behind the
+//! off-by-default `accessibility` feature, so this is deliberately not a doc
+//! link: it does not exist in a default build) and the `accesskit_windows` /
+//! `accesskit_macos` / `accesskit_unix` adapters wired into baseview's window
+//! lifecycle.
 
 use crate::{Stack, Widget};
 
@@ -14,7 +18,50 @@ use crate::{Stack, Widget};
 ///
 /// Deliberately small: these are the roles the widget set actually has, and
 /// each maps onto a real control type in all three platform APIs.
+///
+/// `#[non_exhaustive]` is what makes the compatibility promise in
+/// `docs/phase3/compatibility.md` §2bis.3 — "adding a role variant is not a
+/// breaking change" — actually true. Without it, every downstream `match` is
+/// exhaustive and a new variant breaks all of them, so the promise would be
+/// one the compiler contradicts. A bridge must therefore carry a fallback arm,
+/// which is exactly the behaviour that policy asks of it:
+///
+/// ```
+/// use sunmao_gui::AccessibleRole;
+/// fn announce(role: AccessibleRole) -> &'static str {
+///     match role {
+///         AccessibleRole::Slider => "slider",
+///         AccessibleRole::CheckBox => "check box",
+///         // Roles added in a compatible release land here rather than
+///         // failing to compile.
+///         _ => "control",
+///     }
+/// }
+/// assert_eq!(announce(AccessibleRole::ComboBox), "control");
+/// ```
+///
+/// Matching without that arm is rejected, which is what keeps the guarantee
+/// from silently regressing if the attribute is ever dropped:
+///
+/// ```compile_fail
+/// use sunmao_gui::AccessibleRole;
+/// fn announce(role: AccessibleRole) -> &'static str {
+///     match role {
+///         AccessibleRole::Slider => "slider",
+///         AccessibleRole::CheckBox => "check box",
+///         AccessibleRole::ComboBox => "combo box",
+///         AccessibleRole::Button => "button",
+///         AccessibleRole::Label => "label",
+///         AccessibleRole::Graphic => "graphic",
+///         AccessibleRole::Group => "group",
+///     }
+/// }
+/// ```
+///
+/// The mapping inside this crate stays exhaustive on purpose, so a new role
+/// cannot be added without deciding what assistive technology should call it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AccessibleRole {
     /// A continuous value, such as a knob or slider.
     Slider,
