@@ -308,3 +308,20 @@
   macOS 1.5–3 KiB、Linux 3–4 KiB、Windows 0–0.3 KiB per iteration，全部远低于 64 KiB 预算。
 - Unresolved: 修复版须重新取三平台绿。M3 仍只覆盖 RT 安全三项里的「分配」，加锁与系统调用如实未做。
   三项独立立项未变。
+### 2026-09-14 — M3 三平台验收完成（附一个绿着但未归因的数字）
+
+- Command/platform: [run 34773295928](https://github.com/aizcutei/sunmao/actions/runs/34773295928) / `1d40eef`；
+  三平台 job 全部 success，每平台 **38 步零非成功**。三份 job 日志已下载并剔除脚本回显后核实。
+- Result: M3 标记完成。**两条守卫都在三平台真硬件上真的变红过**：
+  `injected leak detected as it must be` 与 `injected editor leak detected as it must be` 各平台各 1 次，
+  `STRESS LIFECYCLES VERIFIED` 各 1 次。这一点比 job 结论重要——上一版那条反向用例在 Windows 上
+  正是「绿着但什么都没断言」。
+- Evidence/artifact: 三平台 editor-excess（均在 1 MiB 预算内）：
+  macOS 4.00 / 7.00 KiB per iteration，Windows 20.75 / 0 B，**Linux 145.75 / 66.25 KiB**。
+  **Linux 高出另外两平台一个数量级，而且这是在「只看后半段」之后测的**，
+  说明它不是填满就停的缓存，后半段仍在按次付。**现有仪器无法归因**：
+  可能是 X11/GL 编辑器路径的慢泄漏，也可能是 `LIBGL_ALWAYS_SOFTWARE=1` 下 llvmpipe 每 context 不还。
+  已写进 status.md 单独一节，并明确：**这一行的绿只代表「在 1 MiB 粗筛下没被拦下」，
+  不代表 Linux 编辑器无泄漏。** 归因需要真 GPU 或 valgrind/heaptrack，单独立项。
+- Unresolved: 新增独立立项：Linux 编辑器差分 ~146 KiB/iteration 未归因。
+  M3 仍只覆盖 RT 安全三项里的「分配」。此前三项独立立项未变。下一步 **M4：外部 validator**。

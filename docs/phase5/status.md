@@ -124,7 +124,7 @@ backends" 两个 blocking 步骤里被当作宿主调用。
 | M0 脚手架与基线 | 建 `docs/phase5/{status,progress}.md`；清点 runner 能力与缺口；记录本地 gate 基线 | **完成**（三平台 hosted 全绿）：文档、能力清单与两条实测基线落地 | [run 34761153409](https://github.com/aizcutei/sunmao/actions/runs/34761153409)（commit `9cce371`）三 job success，每 job **34 步零非成功**（跳过项分别为 5/9/11，均为平台不适用者），三份 artifacts 可下载（Linux 1,000,635,181 / Windows 78,735,698 / macOS 54,190,684 bytes；macOS 一份已下载，`unzip -t` 报 No errors detected）。**该 commit 是纯文档提交，没有新增断言**，故 CI 对它能提供的证据仅限“Phase 1–4 既有 34 步仍 blocking 且绿” | — （M0 完成；进入 M1）|
 | M1 交互式 standalone host | 加载已打包 `.vst3`/`.clap`、枚举参数与 bus、改参数、存取 state/preset、开关编辑器；既有非交互 CI 用法原样不变 | **完成**（三平台 hosted 全绿）：新增 `host` 子命令（行式命令语言，人可交互、管道可脚本化），`preset.rs` 按上游转录实现 `.vstpreset` 容器，`HostPlugin::class_id` 补上 VST3 class ID，CLAP 宿主不再对未知参数 ID 报成功。既有六个子命令未改行为（四处重复的扫描分派抽成 `scan_plugin_path`，分支逐字相同） | [run 34763956140](https://github.com/aizcutei/sunmao/actions/runs/34763956140)（commit `ac41dff`）三 job success，每 job **35 步零非成功**（新步骤 "Drive the interactive host over VST3 + CLAP" 三平台各 success），三份 artifacts 可下载（Linux 1,000,635,643 / Windows 78,737,182 / macOS 54,191,174 bytes；macOS 一份已下载，`unzip -t` 报 No errors detected，SHA-256 `2c01b112…1fa10`）。**三平台原始日志已下载并逐条 grep，且把 GitHub 回显的脚本正文（ANSI `36;1m` 前缀）剔除后计数**：每平台真实输出 `HOST COMMAND SURFACE VERIFIED` **1** 次、`rejected as it must be` **10** 次（十个反向用例逐个非零退出）、`HOST SESSION VERIFIED` **4** 次（两格式各一段 18 命令会话 + 两格式各一段 5 命令编辑器会话）、`editor opened`/`editor closed` 各 **4** 次 | — （M1 完成；两项新发现各自独立立项，见下）|
 | M2 批量 regression host | 确定性批跑（固定种子/buffer/块划分）、音频与参数轨迹、golden 对拍 + 显式浮点容差、有界 fuzz 进 CI | **完成**（三平台 hosted 全绿）：`regress` 子命令与 `regress.rs`；goldens 入库 `tools/regression_goldens/`；两个新 blocking 步骤（golden 对拍、有界 fuzz）。块划分刻意不均匀且首尾钉死在 max/1 | [run 34766022434](https://github.com/aizcutei/sunmao/actions/runs/34766022434)（commit `c059e41`）三 job success，每 job **37 步零非成功**。三平台原始日志剔除脚本回显后逐条核实，**三平台数字完全一致**：`REGRESSION MATCHED GOLDEN` 各 2 次（两格式，各 147 项比对），**worst deviation 三平台均为 `0e0`**，`cross-format audio identical across all block records`、`REGRESSION GOLDENS VERIFIED`、`STATE DECODE FUZZ VERIFIED: 200000 cases` 各 1 次，`perturbed golden rejected`／`future-version trace rejected` 各 1 次。三份 artifacts 可下载（Linux 1,000,654,355 / Windows 78,753,789 / macOS 54,209,946 bytes；Windows 一份已下载，`unzip -t` 通过，SHA-256 `f36237e604a24860…`），且新增的 `host-session`/`regression`/fuzz 日志确已在包内 | — （M2 完成；进入 M3）|
-| M3 性能与泄漏检测 | RT 安全检测扩到 GUI 线程与宿主回调；泄漏检测；基准与阈值写入本文件 | **本地完成，待三平台验收**：新增 `stress` 子命令、`rss.rs`（三平台常驻内存读取）与 `stress.rs`（重复生命周期）；`clap.params.flush` 的音频线程零分配断言补进 `clap_rs`。**RT 安全里的加锁与系统调用两项未做**，见下方说明 | 本地：runner 单测 88 → 116；`clap_rs` +1。实测 scan-instantiate-destroy **1.5–3 KiB/iteration**（预算 64 KiB）、editor-excess **0–32 KiB / 24 iterations**（预算 64 KiB/iteration）；零预算反向用例必然变红 | 取三平台绿；日志须 grep 到 `STRESS LIFECYCLES VERIFIED` 与 `editor-excess:` |
+| M3 性能与泄漏检测 | RT 安全检测扩到 GUI 线程与宿主回调；泄漏检测；基准与阈值写入本文件 | **完成**（三平台 hosted 全绿）：`stress` 子命令 + `rss.rs` + `stress.rs`；`clap.params.flush` 音频线程零分配断言。**只覆盖 RT 安全三项里的「分配」**，加锁与系统调用如实未做 | [run 34773295928](https://github.com/aizcutei/sunmao/actions/runs/34773295928)（commit `1d40eef`）三 job success，每 job **38 步零非成功**。三平台日志剔除脚本回显后核实：`injected leak detected as it must be` 与 `injected editor leak detected as it must be` **各平台各 1 次**（两条守卫都在真硬件上真的变红过），`STRESS LIFECYCLES VERIFIED` 各 1 次 | — （M3 完成；进入 M4）。**但 Linux 的编辑器差分留了一个未归因的数字，见下** |
 | M4 外部 validator | `clap-validator` + Steinberg VST3 validator 三平台 blocking；失败项逐条归因 | 未开始 | — | — |
 | M5 DAW smoke 与兼容性报告 | 可脚本化 DAW 三平台加载/处理/存工程/重开；机器可读兼容性报告 artifact | 未开始 | — | — |
 
@@ -264,6 +264,27 @@ CI 的跨格式断言因此从"`block` 行相同"升级成了"除 `format` 外�
 它抓得住会终结一次会话的那类泄漏，抓不住精细的。真正精确的仪器是 instantiate 循环
 （实测个位数 KiB 对 64 KiB 预算）。两条守卫现在都由注入式自检在每次 CI 运行里证明能变红。
 
+### 一个绿着但没归因的数字：Linux 编辑器差分 ~146 KiB/iteration
+
+run 34773295928 三平台的 editor-excess（都在 1 MiB 预算内，所以是绿的）：
+
+| 平台 | VST3 | CLAP |
+|---|---|---|
+| macOS ARM64 | 4.00 KiB/iteration | 7.00 KiB/iteration |
+| Windows x86_64 | 20.75 KiB/iteration | 0 B/iteration |
+| **Linux x86_64** | **145.75 KiB/iteration** | **66.25 KiB/iteration** |
+
+**Linux 明显比另外两个平台高一个数量级，而且这是在「只看后半段」之后测的**——
+也就是说它**不是填满就停的缓存**，后半段仍在按次付。改判据的初衷正是把缓存排除掉，
+它没有被排除掉，所以这个数字是真的持续增长。
+
+**但现有仪器无法归因**：可能是 X11/GL 编辑器路径真有慢泄漏，也可能是
+`LIBGL_ALWAYS_SOFTWARE=1` 的 llvmpipe 每个 context 确实不还。差分只能告诉我们
+「开编辑器比只开窗口多花这么多」，分不清多花的是谁花的。
+
+**因此不要把这一行的绿读成「Linux 编辑器无泄漏」**——它只表示「在 1 MiB/iteration 的粗筛下没被拦下」。
+归因需要在 Linux 上换一台真 GPU 或换 valgrind/heaptrack 之类的工具单独做，**单独立项**。
+
 ### 本轮**没有**做的：加锁与系统调用检测
 
 M3 的原始范围写的是「分配/加锁/系统调用」。本轮只做了**分配**那一项，另两项如实记为未做：
@@ -292,4 +313,4 @@ audio 线程的加锁和系统调用已经有守卫了。
 Phase 5 完成的唯一判定：同一 commit 三平台 hosted native jobs 全绿 + artifacts 可下载
 + 本文件 Milestone 矩阵 M0–M5 全部标记完成。本地结果任何情况下都不构成完成证据。
 
-### 当前判定：**Phase 5 进行中（M0、M1、M2 完成，下一步 M3）**
+### 当前判定：**Phase 5 进行中（M0–M3 完成，下一步 M4）**
