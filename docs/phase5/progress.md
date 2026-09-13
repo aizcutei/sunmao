@@ -279,3 +279,32 @@
   不是本轮能连同验收一起交付的量级）——status.md 的 M3 行不写成笼统的「完成」，
   免得下一个人以为音频线程的加锁/系统调用已经有守卫。
   三项独立立项未变。下一步 **M4：外部 validator**。
+### 2026-09-14 — M3 首次三平台运行变红，两项都是检查本身的问题
+
+- Command/platform: [run 34771860193](https://github.com/aizcutei/sunmao/actions/runs/34771860193) / `396f64d`；
+  macOS success，**Linux 与 Windows 在新步骤 "Detect leaks over repeated plugin and editor lifecycles" 失败**，
+  两边失败原因还不一样。三份 job 日志已下载。修复后本地 gate 重跑全过。
+- Result: **两条都不是产品缺陷，都是我把检查设计错了。**
+  **Windows：反向用例是空的。** 原本靠「把预算设成 0」证明检测器会变红。Windows 上
+  `scan-instantiate-destroy` 跑 64 次迭代常驻内存**一个字节都没动**（`grew 0 B`），
+  于是 `growth(0) <= allowed(0)` 成立、判 Stable、退出 0——**这条反向用例在 Windows 上
+  什么都没断言，还一直是绿的**。这正是本仓反复强调的那类错觉，只不过这次出现在守卫自己身上。
+  改成 `--inject-leak-bytes`：每次迭代真的泄漏并**逐页触摸**指定字节（只分配不触摸只占地址空间，
+  常驻内存未必涨，那样在 Windows 上会重蹈覆辙）。现在不依赖被测对象恰好有增长，三平台都确定。
+  **Linux：全程总量分不清「缓存填满」与「真泄漏」。** Linux 报 editor-excess
+  `3.20 MiB / 24 次 = 136 KiB/iteration`，而只开窗口的循环是 0 B。软件 GL（`LIBGL_ALWAYS_SOFTWARE=1`）
+  每建一次 context 占一点不还，但那是**填满就停**；泄漏是**每次都付**。看全程总量区分不了。
+  改为**只判每个循环的后半段**——缓存到那时已填完，还在按次付的才是真没还。
+  单测里加了同总量不同分布的对照（前半 48 MiB/后半 0 = 缓存，前后各 24 MiB = 泄漏），要求前者放行后者抓出。
+  **顺带把编辑器预算改诚实。** 同机同插件在 24/48/64 三种迭代数下测出 12 KiB、150 KiB、0 KiB per iteration
+  ——两条独立 RSS 轨迹相减会继承两条的噪声，几百 KiB 以下与抖动不可区分。
+  于是编辑器差分预算定为 **1 MiB/iteration 并明说它是粗筛**；真正精确的是 instantiate 循环
+  （个位数 KiB 对 64 KiB）。**宁可把仪器的精度写小，也不假装它很准。**
+- Evidence/artifact: 两条守卫现在都由注入式自检在**每次 CI 运行**里证明能变红：
+  instantiate 注入 256 KiB/iteration 必须报 `STRESS LEAK DETECTED: scan-instantiate-destroy`；
+  编辑器注入 2 MiB/iteration（只记在开编辑器的那一半）必须报 `STRESS LEAK DETECTED: editor-excess`，
+  本地实测 1.99 MiB/iteration 对 1 MiB 预算、如期变红。干净运行本地 editor-excess
+  0 B 与 6 KiB/iteration（32 次迭代），余量百倍以上。三平台 instantiate 实测：
+  macOS 1.5–3 KiB、Linux 3–4 KiB、Windows 0–0.3 KiB per iteration，全部远低于 64 KiB 预算。
+- Unresolved: 修复版须重新取三平台绿。M3 仍只覆盖 RT 安全三项里的「分配」，加锁与系统调用如实未做。
+  三项独立立项未变。

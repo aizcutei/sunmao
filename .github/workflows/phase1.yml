@@ -989,28 +989,51 @@ jobs:
           # tools/sunmao_unittest_runner/src/stress.rs for the measurements that
           # forced that design.
           for format in vst3 clap; do
-            "${gui_stress[@]}" stress --editor --iterations 24 --warmup 8 "$gui.$format" 2>&1 \
+            "${gui_stress[@]}" stress --editor --iterations 32 --warmup 8 "$gui.$format" 2>&1 \
               | tee "$work/editor.$format.log"
             grep -q "STRESS VERIFIED" "$work/editor.$format.log"
-            grep -q "^window-open-close: 24 iterations" "$work/editor.$format.log"
-            grep -q "^editor-open-close: 24 iterations" "$work/editor.$format.log"
+            grep -q "^window-open-close: 32 iterations" "$work/editor.$format.log"
+            grep -q "^editor-open-close: 32 iterations" "$work/editor.$format.log"
             grep -q "^editor-excess: " "$work/editor.$format.log"
+            # The judgement is made on the second half of each loop, so the
+            # line has to say which iterations it used.
+            grep -q "beyond the window lifecycle over the last" "$work/editor.$format.log"
           done
 
-          # Both budgets have to be able to fail. A zero budget must turn the
-          # loop that just passed into a reported leak.
+          # The detector has to be able to fail, and proving that needs a leak
+          # that is really there. A zero budget was the first attempt and it was
+          # wrong: Windows reported resident size not moving at all across 64
+          # iterations, so "growth <= 0" held and the negative case asserted
+          # nothing while passing. Leaking 256 KiB per iteration on purpose is
+          # the version that holds on every platform.
           set +e
-          "$runner" stress --instance-budget 0 --iterations 16 "$gain.vst3" \
+          "$runner" stress --inject-leak-bytes 262144 --iterations 16 "$gain.vst3" \
             > "$work/negative.instance.log" 2>&1
           status=$?
           set -e
           if [ "$status" -eq 0 ]; then
-            echo "a zero instance budget was accepted; the leak guard cannot fail" >&2
+            echo "an injected 256 KiB/iteration leak was not detected" >&2
             cat "$work/negative.instance.log" >&2
             exit 1
           fi
           grep -q "STRESS LEAK DETECTED: scan-instantiate-destroy" "$work/negative.instance.log"
-          echo "zero instance budget rejected as it must be"
+          echo "injected leak detected as it must be"
+
+          # The editor differential has to be able to fail too, and it is the
+          # looser of the two budgets, so proving it matters more rather than
+          # less. 2 MiB per iteration charged to the editor half only.
+          set +e
+          "${gui_stress[@]}" stress --editor --inject-leak-bytes 2097152 \
+            --iterations 16 --warmup 4 "$gui.vst3" > "$work/negative.editor.log" 2>&1
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "an injected 2 MiB/iteration editor leak was not detected" >&2
+            cat "$work/negative.editor.log" >&2
+            exit 1
+          fi
+          grep -q "STRESS LEAK DETECTED: editor-excess" "$work/negative.editor.log"
+          echo "injected editor leak detected as it must be"
 
           echo "STRESS LIFECYCLES VERIFIED: instantiate and editor loops within budget on VST3 + CLAP"
 

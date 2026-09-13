@@ -95,16 +95,37 @@ pub const INSTANCE_BUDGET_BYTES: u64 = 64 * 1024;
 /// loop dispatches the events that actually complete the teardown. The
 /// instrument moves the number by 2.5x depending on how it is held.
 ///
-/// Running the same window lifecycle with and without the editor cancels all
-/// of that, because both loops pay it identically. What survives the
-/// subtraction is what the editor itself failed to give back.
-pub const EDITOR_EXCESS_BUDGET_BYTES: u64 = 64 * 1024;
+/// Running the same window lifecycle with and without the editor cancels most
+/// of that, because both loops pay it. What survives the subtraction is what
+/// the editor itself failed to give back.
+///
+/// **It is a gross-leak net, not a precise one, and the budget says so.**
+/// Differencing two separately measured resident-size trajectories inherits the
+/// noise of both. The same plugin on the same machine, measured at three run
+/// lengths, produced 12 KiB, 150 KiB and 0 KiB per iteration -- so anything
+/// below a few hundred KiB per iteration is indistinguishable from jitter, and
+/// a tighter budget would buy flakiness rather than sensitivity. At 1 MiB per
+/// iteration this still catches the class of leak that ends a session, and
+/// `--inject-leak-bytes` proves on every CI run that it catches one.
+///
+/// The instantiate loop is the precise instrument here; see
+/// [`INSTANCE_BUDGET_BYTES`], whose measured values are single-digit KiB
+/// against a 64 KiB budget.
+pub const EDITOR_EXCESS_BUDGET_BYTES: u64 = 1024 * 1024;
 
 /// One completed stress measurement.
+///
+/// Three readings, not two. The split lets the *second half* be judged on its
+/// own, which is what separates a cache from a leak: a cache fills and stops,
+/// so its second half is much cheaper than its first, while a leak costs the
+/// same every iteration forever. Judging the whole run instead charges a plugin
+/// for warm-up that was already over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Measurement {
     pub iterations: u32,
     pub baseline: Option<u64>,
+    /// Reading taken halfway through the measured iterations.
+    pub midpoint: Option<u64>,
     pub after: Option<u64>,
     pub budget_per_iteration: u64,
 }
@@ -126,6 +147,19 @@ impl Measurement {
         }
     }
 
+    /// Iterations covered by the second half.
+    pub fn tail_iterations(&self) -> u32 {
+        self.iterations - self.iterations / 2
+    }
+
+    /// Growth over the second half of the measured run.
+    pub fn tail_growth(&self) -> Option<u64> {
+        match (self.midpoint, self.after) {
+            (Some(midpoint), Some(after)) => Some(after.saturating_sub(midpoint)),
+            _ => None,
+        }
+    }
+
     /// One line a person can read and a CI step can grep.
     ///
     /// The budget and verdict are only shown for a loop that is actually
@@ -143,14 +177,22 @@ impl Measurement {
             }
             _ => "unmeasured".to_string(),
         };
+        let tail = match self.tail_growth() {
+            Some(tail) if self.tail_iterations() > 0 => format!(
+                "second half {} ({}/iteration)",
+                rss::human_bytes(tail),
+                rss::human_bytes(tail / u64::from(self.tail_iterations()))
+            ),
+            _ => "second half unmeasured".to_string(),
+        };
         if self.budget_per_iteration == u64::MAX {
             format!(
-                "{label}: {} iterations, grew {growth} ({per_iteration}/iteration, not judged on its own)",
+                "{label}: {} iterations, grew {growth} ({per_iteration}/iteration), {tail}, not judged on its own",
                 self.iterations
             )
         } else {
             format!(
-                "{label}: {} iterations, grew {growth} ({per_iteration}/iteration, budget {}/iteration) -> {:?}",
+                "{label}: {} iterations, grew {growth} ({per_iteration}/iteration, budget {}/iteration), {tail} -> {:?}",
                 self.iterations,
                 rss::human_bytes(self.budget_per_iteration),
                 self.verdict()
@@ -170,13 +212,19 @@ pub fn editor_excess(
     with_editor: &Measurement,
     budget_per_iteration: u64,
 ) -> Option<(u64, bool)> {
-    let (Some(without), Some(with)) = (window_only.growth(), with_editor.growth()) else {
+    // The second half of each run, not the whole of it. By then every cache
+    // that was going to fill has filled, so what is still being paid per
+    // iteration is what is genuinely not coming back. Linux CI made this
+    // necessary: a software GL stack charged 136 KiB/iteration across a full
+    // run while the bare-window loop charged nothing, and judging the whole run
+    // could not tell that apart from a real leak.
+    let (Some(without), Some(with)) = (window_only.tail_growth(), with_editor.tail_growth()) else {
         return None;
     };
     // Saturating: an editor run that grew *less* than the bare window run costs
     // nothing, and must not bank the difference as credit.
     let excess = with.saturating_sub(without);
-    let iterations = with_editor.iterations;
+    let iterations = with_editor.tail_iterations();
     if iterations == 0 {
         return None;
     }
@@ -198,13 +246,19 @@ pub fn measure(
         with_iteration_scope(|| body(index))?;
     }
     let baseline = rss::resident_bytes();
-    for index in 0..iterations {
+    let half = iterations / 2;
+    for index in 0..half {
+        with_iteration_scope(|| body(warmup + index))?;
+    }
+    let midpoint = rss::resident_bytes();
+    for index in half..iterations {
         with_iteration_scope(|| body(warmup + index))?;
     }
     let after = rss::resident_bytes();
     Ok(Measurement {
         iterations,
         baseline,
+        midpoint,
         after,
         budget_per_iteration,
     })
@@ -218,6 +272,7 @@ pub fn cmd_stress(args: &[String]) -> bool {
     let mut window_only = false;
     let mut path = None;
     let mut instance_budget = INSTANCE_BUDGET_BYTES;
+    let mut inject_leak_bytes = 0usize;
     // Absolute cap inside each GUI loop is deliberately generous; the
     // judgement is made on the differential below.
     let editor_budget = u64::MAX;
@@ -266,6 +321,24 @@ pub fn cmd_stress(args: &[String]) -> bool {
                     }
                 }
             }
+            // Proving the detector can fail needs a leak that is actually
+            // there. A zero budget looked like enough until Windows CI showed
+            // resident size not moving at all over 64 iterations, which made
+            // "growth <= 0" true and the negative case vacuous. Leaking on
+            // purpose is the only version of this that holds on every platform.
+            "--inject-leak-bytes" => {
+                index += 1;
+                match args
+                    .get(index)
+                    .and_then(|value| value.parse::<usize>().ok())
+                {
+                    Some(value) => inject_leak_bytes = value,
+                    None => {
+                        eprintln!("--inject-leak-bytes needs a byte count");
+                        return false;
+                    }
+                }
+            }
             "--editor" => editor = true,
             // Attribution, not decoration: when the editor loop grows, the
             // first question is whether the plugin's editor or the host's own
@@ -287,7 +360,7 @@ pub fn cmd_stress(args: &[String]) -> bool {
     let Some(path) = path else {
         eprintln!(
             "Usage: sunmao_unittest_runner stress [--iterations N] [--warmup N] [--editor]\n\
-             \x20                                 [--instance-budget BYTES] [--editor-excess-budget BYTES] <plugin_path>"
+             \x20                                 [--instance-budget BYTES] [--editor-excess-budget BYTES] [--inject-leak-bytes N] <plugin_path>"
         );
         return false;
     };
@@ -308,6 +381,15 @@ pub fn cmd_stress(args: &[String]) -> bool {
 
     // Scan, instantiate, initialize, process one block, destroy.
     let scan_measurement = match measure(warmup, iterations, instance_budget, |_| {
+        if inject_leak_bytes > 0 {
+            // Deliberately leaked, and touched so the pages are actually
+            // resident rather than merely reserved.
+            let mut leak = vec![0u8; inject_leak_bytes];
+            for byte in leak.iter_mut().step_by(4096) {
+                *byte = 1;
+            }
+            std::mem::forget(leak);
+        }
         let found = crate::scan_plugin_path(&path).ok_or("scan failed")?;
         if found.is_empty() {
             return Err("scan found no plugins".into());
@@ -356,6 +438,15 @@ pub fn cmd_stress(args: &[String]) -> bool {
             measure(warmup, iterations, editor_budget, |_| {
                 let window =
                     crate::gui_window::PluginGuiWindow::new(&title, 400.0, 300.0, Box::new(|| {}))?;
+                if open_editor && inject_leak_bytes > 0 {
+                    // Charged to the editor half only, so the differential sees
+                    // it. This is what proves the editor guard can fail.
+                    let mut leak = vec![0u8; inject_leak_bytes];
+                    for byte in leak.iter_mut().step_by(4096) {
+                        *byte = 1;
+                    }
+                    std::mem::forget(leak);
+                }
                 if open_editor {
                     plugin.open_gui(&window)?;
                     // The editor is parented into this window, so it has to be
@@ -433,10 +524,11 @@ pub fn cmd_stress(args: &[String]) -> bool {
                 ok = false;
             }
             Some((excess, within_budget)) => {
+                let tail_iterations = editor_measurement.tail_iterations().max(1);
                 println!(
-                    "editor-excess: {} beyond the window lifecycle over {iterations} iterations ({}/iteration, budget {}/iteration)",
+                    "editor-excess: {} beyond the window lifecycle over the last {tail_iterations} of {iterations} iterations ({}/iteration, budget {}/iteration)",
                     rss::human_bytes(excess),
-                    rss::human_bytes(excess / u64::from(iterations.max(1))),
+                    rss::human_bytes(excess / u64::from(tail_iterations)),
                     rss::human_bytes(editor_excess_budget)
                 );
                 if !within_budget {
@@ -506,6 +598,7 @@ mod tests {
         let measurement = Measurement {
             iterations: 64,
             baseline: Some(1_000_000),
+            midpoint: Some(1_000_000),
             after: Some(1_000_000),
             budget_per_iteration: INSTANCE_BUDGET_BYTES,
         };
@@ -520,6 +613,7 @@ mod tests {
         let measurement = Measurement {
             iterations: 64,
             baseline: None,
+            midpoint: None,
             after: None,
             budget_per_iteration: INSTANCE_BUDGET_BYTES,
         };
@@ -529,13 +623,58 @@ mod tests {
 
     /// The budgets are a contract with the CI step, so a change to them should
     /// be a deliberate edit here rather than a silent drift.
+    /// A run whose growth is split evenly between the two halves.
     fn measurement(growth: u64, iterations: u32) -> Measurement {
+        halves(growth / 2, growth - growth / 2, iterations)
+    }
+
+    /// A run with the two halves stated separately.
+    fn halves(first: u64, second: u64, iterations: u32) -> Measurement {
         Measurement {
             iterations,
             baseline: Some(1_000_000),
-            after: Some(1_000_000 + growth),
+            midpoint: Some(1_000_000 + first),
+            after: Some(1_000_000 + first + second),
             budget_per_iteration: u64::MAX,
         }
+    }
+
+    /// The distinction the second-half rule exists to make.
+    ///
+    /// A cache fills and stops; a leak costs the same forever. Both can grow by
+    /// the same total over a whole run, so a rule that looks at the total
+    /// cannot tell them apart -- which is exactly what Linux CI produced: a
+    /// software GL stack charging 136 KiB/iteration across a full run while the
+    /// bare-window loop charged nothing.
+    #[test]
+    fn a_cache_that_fills_is_not_a_leak_but_a_steady_cost_is() {
+        let window = halves(0, 0, 24);
+
+        // Filled 48 MiB warming up, then nothing. Same total as the leak below.
+        let caching = halves(48 * 1024 * 1024, 0, 24);
+        assert_eq!(
+            editor_excess(&window, &caching, EDITOR_EXCESS_BUDGET_BYTES),
+            Some((0, true)),
+            "a cache that stopped growing must not be reported as a leak"
+        );
+
+        // The same total, still being paid in the second half.
+        let leaking = halves(24 * 1024 * 1024, 24 * 1024 * 1024, 24);
+        let (excess, within) =
+            editor_excess(&window, &leaking, EDITOR_EXCESS_BUDGET_BYTES).expect("measured");
+        assert_eq!(excess, 24 * 1024 * 1024);
+        assert!(!within, "2 MiB/iteration in the second half must fail");
+    }
+
+    #[test]
+    fn a_run_with_no_midpoint_reading_concludes_nothing() {
+        let window = halves(0, 0, 24);
+        let broken = Measurement {
+            midpoint: None,
+            ..halves(0, 0, 24)
+        };
+        assert_eq!(editor_excess(&window, &broken, 0), None);
+        assert_eq!(editor_excess(&broken, &window, 0), None);
     }
 
     /// The differential is the whole point: the platform noise both loops pay
@@ -552,35 +691,47 @@ mod tests {
         );
     }
 
-    /// And it must still be able to fail.
+    /// And it must still be able to fail, with the shared noise as large as it
+    /// likes.
     #[test]
     fn an_editor_that_keeps_memory_is_caught_through_the_noise() {
-        let window = measurement(21 * 1024 * 1024, 32);
-        // 4 MiB more than the bare window loop over 32 iterations is 128 KiB
-        // per iteration, twice the budget.
-        let editor = measurement(21 * 1024 * 1024 + 4 * 1024 * 1024, 32);
+        // Both loops pay 10 MiB in each half; only the editor keeps paying an
+        // extra 32 MiB across its 16-iteration second half, which is 2 MiB per
+        // iteration -- twice the budget.
+        let window = halves(10 * 1024 * 1024, 10 * 1024 * 1024, 32);
+        let editor = halves(10 * 1024 * 1024, 42 * 1024 * 1024, 32);
         let (excess, within) =
             editor_excess(&window, &editor, EDITOR_EXCESS_BUDGET_BYTES).expect("measured");
-        assert_eq!(excess, 4 * 1024 * 1024);
+        assert_eq!(excess, 32 * 1024 * 1024);
         assert!(
             !within,
-            "128 KiB/iteration must not pass a 64 KiB/iteration budget"
+            "2 MiB/iteration must not pass a 1 MiB/iteration budget"
         );
     }
 
     #[test]
     fn the_differential_budget_boundary_is_inclusive() {
-        let window = measurement(0, 32);
-        let exactly = measurement(EDITOR_EXCESS_BUDGET_BYTES * 32, 32);
+        // 32 iterations means a 16-iteration second half.
+        let window = halves(0, 0, 32);
+        let exactly = halves(0, EDITOR_EXCESS_BUDGET_BYTES * 16, 32);
         assert_eq!(
             editor_excess(&window, &exactly, EDITOR_EXCESS_BUDGET_BYTES).map(|r| r.1),
             Some(true)
         );
-        let one_over = measurement(EDITOR_EXCESS_BUDGET_BYTES * 32 + 1, 32);
+        let one_over = halves(0, EDITOR_EXCESS_BUDGET_BYTES * 16 + 1, 32);
         assert_eq!(
             editor_excess(&window, &one_over, EDITOR_EXCESS_BUDGET_BYTES).map(|r| r.1),
             Some(false)
         );
+    }
+
+    /// An odd iteration count must not lose the extra iteration or divide by a
+    /// half that does not exist.
+    #[test]
+    fn an_odd_iteration_count_splits_without_losing_one() {
+        let measurement = halves(0, 0, 25);
+        assert_eq!(measurement.tail_iterations(), 13);
+        assert_eq!(halves(0, 0, 1).tail_iterations(), 1);
     }
 
     /// An editor loop that grew less than the bare window loop has not earned
@@ -598,6 +749,7 @@ mod tests {
         let unmeasured = Measurement {
             iterations: 32,
             baseline: None,
+            midpoint: None,
             after: None,
             budget_per_iteration: u64::MAX,
         };
@@ -618,6 +770,10 @@ mod tests {
     #[test]
     fn the_budgets_are_the_documented_ones() {
         assert_eq!(INSTANCE_BUDGET_BYTES, 64 * 1024);
-        assert_eq!(EDITOR_EXCESS_BUDGET_BYTES, 64 * 1024);
+        assert_eq!(EDITOR_EXCESS_BUDGET_BYTES, 1024 * 1024);
+        assert!(
+            EDITOR_EXCESS_BUDGET_BYTES > INSTANCE_BUDGET_BYTES,
+            "the editor differential is a gross-leak net and its budget reflects that"
+        );
     }
 }
