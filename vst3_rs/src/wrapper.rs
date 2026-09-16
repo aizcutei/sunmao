@@ -269,6 +269,9 @@ pub struct ProcessorWrapper<P: Plugin> {
     vtbl_component: *const ComponentVtbl,
     vtbl_audio: *const AudioProcessorVtbl,
     vtbl_connection: *const ConnectionPointVtbl,
+    /// `IProcessContextRequirements`. Mandatory since VST3 3.7 -- the host uses
+    /// it to skip computing `ProcessContext` fields nobody reads.
+    vtbl_context_requirements: *const IProcessContextRequirementsVtbl,
     ref_count: AtomicI32,
     controller_cid: TUID,
     plugin: Option<P>,
@@ -290,6 +293,7 @@ pub struct ProcessorWrapper<P: Plugin> {
     _component_vtbl_storage: Box<ComponentVtbl>,
     _audio_vtbl_storage: Box<AudioProcessorVtbl>,
     _connection_vtbl_storage: Box<ConnectionPointVtbl>,
+    _context_requirements_vtbl_storage: Box<IProcessContextRequirementsVtbl>,
 }
 
 #[repr(C)]
@@ -355,9 +359,11 @@ impl<P: Plugin> ProcessorWrapper<P> {
         let component_vtbl_storage = Box::new(Self::make_component_vtbl());
         let audio_vtbl_storage = Box::new(Self::make_audio_vtbl());
         let connection_vtbl_storage = Box::new(Self::make_connection_vtbl());
+        let context_requirements_vtbl_storage = Box::new(Self::make_context_requirements_vtbl());
         let vtbl_component = &*component_vtbl_storage;
         let vtbl_audio = &*audio_vtbl_storage;
         let vtbl_connection = &*connection_vtbl_storage;
+        let vtbl_context_requirements = &*context_requirements_vtbl_storage;
 
         let params = P::params();
         let audio_config = P::audio_config();
@@ -381,6 +387,7 @@ impl<P: Plugin> ProcessorWrapper<P> {
             vtbl_component,
             vtbl_audio,
             vtbl_connection,
+            vtbl_context_requirements,
             ref_count: AtomicI32::new(1),
             controller_cid,
             plugin: Some(plugin),
@@ -397,6 +404,7 @@ impl<P: Plugin> ProcessorWrapper<P> {
             parameter_generation: 0,
             input_bus_channels,
             output_bus_channels,
+            _context_requirements_vtbl_storage: context_requirements_vtbl_storage,
             _component_vtbl_storage: component_vtbl_storage,
             _audio_vtbl_storage: audio_vtbl_storage,
             _connection_vtbl_storage: connection_vtbl_storage,
@@ -463,6 +471,73 @@ impl<P: Plugin> ProcessorWrapper<P> {
         (this as *mut u8).sub(2 * std::mem::size_of::<*const c_void>()) as *mut Self
     }
 
+    /// Recover `Self` from the fourth vtable pointer.
+    ///
+    /// Like the others this is field-offset arithmetic, so it is only correct
+    /// while `vtbl_context_requirements` stays the fourth pointer in the
+    /// `repr(C)` layout. `processor_vtable_offsets_match_the_declared_layout`
+    /// asserts exactly that.
+    unsafe fn from_context_requirements(this: *mut c_void) -> *mut Self {
+        (this as *mut u8).sub(3 * std::mem::size_of::<*const c_void>()) as *mut Self
+    }
+
+    fn make_context_requirements_vtbl() -> IProcessContextRequirementsVtbl {
+        IProcessContextRequirementsVtbl {
+            base: IUnknownVtbl {
+                query_interface: Self::context_requirements_query_interface,
+                add_ref: Self::context_requirements_add_ref,
+                release: Self::context_requirements_release,
+            },
+            get_process_context_requirements: Self::get_process_context_requirements,
+        }
+    }
+
+    unsafe extern "system" fn context_requirements_query_interface(
+        this: *mut c_void,
+        iid: *const TUID,
+        obj: *mut *mut c_void,
+    ) -> tresult {
+        if this.is_null() {
+            return kInvalidArgument;
+        }
+        unsafe {
+            Self::component_query_interface(Self::from_context_requirements(this).cast(), iid, obj)
+        }
+    }
+
+    unsafe extern "system" fn context_requirements_add_ref(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
+        unsafe { Self::component_add_ref(Self::from_context_requirements(this).cast()) }
+    }
+
+    unsafe extern "system" fn context_requirements_release(this: *mut c_void) -> uint32 {
+        if this.is_null() {
+            return 0;
+        }
+        unsafe { Self::component_release(Self::from_context_requirements(this).cast()) }
+    }
+
+    /// Which `ProcessContext` fields this framework actually reads.
+    ///
+    /// Deliberately not every flag: the point of the interface is to let the
+    /// host skip work, so asking for everything would make implementing it
+    /// pointless. These are the fields `sunmao_core`'s `ProcessContext`
+    /// exposes (see `docs/phase2/semantics.md`); the omitted ones -- system
+    /// time, samples-to-next-clock, chord and frame rate -- have no accessor
+    /// and so cannot be read by any plugin built on it.
+    unsafe extern "system" fn get_process_context_requirements(_this: *mut c_void) -> u32 {
+        use vst3_sys::vst::iaudioprocessor::ProcessContextRequirementsFlags as Need;
+        Need::kNeedContinousTimeSamples
+            | Need::kNeedProjectTimeMusic
+            | Need::kNeedBarPositionMusic
+            | Need::kNeedCycleMusic
+            | Need::kNeedTempo
+            | Need::kNeedTimeSignature
+            | Need::kNeedTransportState
+    }
+
     // Component interface
     unsafe extern "system" fn component_query_interface(
         this: *mut c_void,
@@ -491,6 +566,11 @@ impl<P: Plugin> ProcessorWrapper<P> {
         if iid_equal(iid, &vst_iid::IConnectionPoint) {
             Self::component_add_ref(this);
             *obj = &(*base).vtbl_connection as *const _ as *mut c_void;
+            return kResultOk;
+        }
+        if iid_equal(iid, &vst_iid::IProcessContextRequirements) {
+            Self::component_add_ref(this);
+            *obj = &(*base).vtbl_context_requirements as *const _ as *mut c_void;
             return kResultOk;
         }
         *obj = std::ptr::null_mut();
@@ -549,6 +629,14 @@ impl<P: Plugin> ProcessorWrapper<P> {
         if iid_equal(iid, &vst_iid::IConnectionPoint) {
             Self::audio_add_ref(this);
             *obj = &(*base).vtbl_connection as *const _ as *mut c_void;
+            return kResultOk;
+        }
+        // Hosts also query through IAudioProcessor, as Steinberg's
+        // processcontextrequirements.cpp does. All interface entry points
+        // must expose the same object and share its reference count.
+        if iid_equal(iid, &vst_iid::IProcessContextRequirements) {
+            Self::audio_add_ref(this);
+            *obj = &(*base).vtbl_context_requirements as *const _ as *mut c_void;
             return kResultOk;
         }
         *obj = std::ptr::null_mut();
@@ -6569,14 +6657,117 @@ mod tests {
         fn gui_destroy(&mut self) {}
     }
 
+    /// The four vtable pointers are recovered by subtracting a fixed number of
+    /// pointer widths, so their order in the `repr(C)` layout is load-bearing.
+    /// Reordering them would still compile and would hand the host a pointer
+    /// into the middle of the struct.
+    #[test]
+    fn processor_vtable_offsets_match_the_declared_layout() {
+        type W = ProcessorWrapper<BridgeTestPlugin>;
+        let wrapper = W::new([0; 16]);
+        unsafe {
+            let base = wrapper as *mut u8;
+            let pointer = std::mem::size_of::<*const c_void>();
+            assert_eq!(
+                (&(*wrapper).vtbl_component) as *const _ as *mut u8,
+                base,
+                "vtbl_component must be first"
+            );
+            assert_eq!(
+                (&(*wrapper).vtbl_audio) as *const _ as *mut u8,
+                base.add(pointer)
+            );
+            assert_eq!(
+                (&(*wrapper).vtbl_connection) as *const _ as *mut u8,
+                base.add(2 * pointer)
+            );
+            assert_eq!(
+                (&(*wrapper).vtbl_context_requirements) as *const _ as *mut u8,
+                base.add(3 * pointer)
+            );
+            // And each recovery function must invert its own offset.
+            assert_eq!(W::from_component(wrapper.cast()), wrapper);
+            let audio = (&(*wrapper).vtbl_audio) as *const _ as *mut c_void;
+            assert_eq!(W::from_audio(audio), wrapper);
+            let connection = (&(*wrapper).vtbl_connection) as *const _ as *mut c_void;
+            assert_eq!(W::from_connection(connection), wrapper);
+            let requirements = (&(*wrapper).vtbl_context_requirements) as *const _ as *mut c_void;
+            assert_eq!(W::from_context_requirements(requirements), wrapper);
+            W::component_release(wrapper.cast());
+        }
+    }
+
+    /// Query through real vtables, including the audio entry used by the
+    /// Steinberg validator. Every interface must reach every other one.
+    #[test]
+    fn the_processor_declares_the_context_fields_it_reads() {
+        type W = ProcessorWrapper<BridgeTestPlugin>;
+        let wrapper = W::new([0; 16]);
+        unsafe {
+            let component = wrapper.cast::<c_void>();
+            let component_vtbl = *(component as *const *const IUnknownVtbl);
+            let mut pointers = [std::ptr::null_mut(); 4];
+            let interfaces = [
+                vst_iid::IComponent,
+                vst_iid::IAudioProcessor,
+                vst_iid::IConnectionPoint,
+                vst_iid::IProcessContextRequirements,
+            ];
+            for (id, ptr) in interfaces.iter().zip(&mut pointers) {
+                assert_eq!(
+                    ((*component_vtbl).query_interface)(component, id, ptr),
+                    kResultOk
+                );
+                assert!(!ptr.is_null());
+            }
+            assert_eq!(((*component_vtbl).release)(component), 4);
+            for source in pointers {
+                let unknown = *(source as *const *const IUnknownVtbl);
+                for (id, expected) in interfaces.iter().zip(pointers) {
+                    let mut result = std::ptr::null_mut();
+                    assert_eq!(
+                        ((*unknown).query_interface)(source, id, &mut result),
+                        kResultOk
+                    );
+                    assert_eq!(result, expected);
+                    let returned = *(result as *const *const IUnknownVtbl);
+                    assert_eq!(((*returned).release)(result), 4);
+                }
+                let mut identity = std::ptr::null_mut();
+                assert_eq!(
+                    ((*unknown).query_interface)(source, &iid::IUnknown, &mut identity),
+                    kResultOk
+                );
+                assert_eq!(identity, component, "IUnknown identity must be shared");
+                assert_eq!(((*component_vtbl).release)(identity), 4);
+                let mut absent = component;
+                assert_eq!(
+                    ((*unknown).query_interface)(source, &[0; 16], &mut absent),
+                    kNoInterface
+                );
+                assert!(absent.is_null(), "failed queries must clear the output");
+            }
+            let requirements = pointers[3];
+            let vtbl = *(requirements as *const *const IProcessContextRequirementsVtbl);
+            // Literal mask from ivstaudioprocessor.h, independently of the
+            // binding constants: continuous time, music/bar/cycle positions,
+            // tempo, time signature and transport state; no unread fields.
+            assert_eq!(
+                ((*vtbl).get_process_context_requirements)(requirements),
+                0x4de
+            );
+            assert_eq!(((*vtbl).base.add_ref)(requirements), 5);
+            assert_eq!(((*vtbl).base.release)(requirements), 4);
+            for (index, ptr) in pointers.into_iter().enumerate() {
+                let unknown = *(ptr as *const *const IUnknownVtbl);
+                // The final release deliberately goes through the new vtable.
+                assert_eq!(((*unknown).release)(ptr), (3 - index) as u32);
+            }
+        }
+    }
+
     /// The host has to be told the value the plugin is *using*, not the value
-    /// it asked for.
-    ///
-    /// A DAW reading back a bypass switch it just set to 0.8 and being told
-    /// "0.8" is being told something untrue: the plugin is bypassed, and its
-    /// audio path says so. Found by the Phase 5 regression host, which produced
-    /// byte-identical audio through both formats while the two disagreed about
-    /// what the parameter was.
+    /// it asked for. A bypass switch set to 0.8 processes as 1.0.
     #[test]
     fn a_discrete_parameter_reads_back_the_value_the_plugin_applied() {
         unsafe {

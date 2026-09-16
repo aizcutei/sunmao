@@ -1,6 +1,6 @@
 # Phase 5 状态
 
-更新时间：2026-09-13
+更新时间：2026-09-16
 
 ## 目标与边界
 
@@ -124,8 +124,8 @@ backends" 两个 blocking 步骤里被当作宿主调用。
 | M0 脚手架与基线 | 建 `docs/phase5/{status,progress}.md`；清点 runner 能力与缺口；记录本地 gate 基线 | **完成**（三平台 hosted 全绿）：文档、能力清单与两条实测基线落地 | [run 34761153409](https://github.com/aizcutei/sunmao/actions/runs/34761153409)（commit `9cce371`）三 job success，每 job **34 步零非成功**（跳过项分别为 5/9/11，均为平台不适用者），三份 artifacts 可下载（Linux 1,000,635,181 / Windows 78,735,698 / macOS 54,190,684 bytes；macOS 一份已下载，`unzip -t` 报 No errors detected）。**该 commit 是纯文档提交，没有新增断言**，故 CI 对它能提供的证据仅限“Phase 1–4 既有 34 步仍 blocking 且绿” | — （M0 完成；进入 M1）|
 | M1 交互式 standalone host | 加载已打包 `.vst3`/`.clap`、枚举参数与 bus、改参数、存取 state/preset、开关编辑器；既有非交互 CI 用法原样不变 | **完成**（三平台 hosted 全绿）：新增 `host` 子命令（行式命令语言，人可交互、管道可脚本化），`preset.rs` 按上游转录实现 `.vstpreset` 容器，`HostPlugin::class_id` 补上 VST3 class ID，CLAP 宿主不再对未知参数 ID 报成功。既有六个子命令未改行为（四处重复的扫描分派抽成 `scan_plugin_path`，分支逐字相同） | [run 34763956140](https://github.com/aizcutei/sunmao/actions/runs/34763956140)（commit `ac41dff`）三 job success，每 job **35 步零非成功**（新步骤 "Drive the interactive host over VST3 + CLAP" 三平台各 success），三份 artifacts 可下载（Linux 1,000,635,643 / Windows 78,737,182 / macOS 54,191,174 bytes；macOS 一份已下载，`unzip -t` 报 No errors detected，SHA-256 `2c01b112…1fa10`）。**三平台原始日志已下载并逐条 grep，且把 GitHub 回显的脚本正文（ANSI `36;1m` 前缀）剔除后计数**：每平台真实输出 `HOST COMMAND SURFACE VERIFIED` **1** 次、`rejected as it must be` **10** 次（十个反向用例逐个非零退出）、`HOST SESSION VERIFIED` **4** 次（两格式各一段 18 命令会话 + 两格式各一段 5 命令编辑器会话）、`editor opened`/`editor closed` 各 **4** 次 | — （M1 完成；两项新发现各自独立立项，见下）|
 | M2 批量 regression host | 确定性批跑（固定种子/buffer/块划分）、音频与参数轨迹、golden 对拍 + 显式浮点容差、有界 fuzz 进 CI | **完成**（三平台 hosted 全绿）：`regress` 子命令与 `regress.rs`；goldens 入库 `tools/regression_goldens/`；两个新 blocking 步骤（golden 对拍、有界 fuzz）。块划分刻意不均匀且首尾钉死在 max/1 | [run 34766022434](https://github.com/aizcutei/sunmao/actions/runs/34766022434)（commit `c059e41`）三 job success，每 job **37 步零非成功**。三平台原始日志剔除脚本回显后逐条核实，**三平台数字完全一致**：`REGRESSION MATCHED GOLDEN` 各 2 次（两格式，各 147 项比对），**worst deviation 三平台均为 `0e0`**，`cross-format audio identical across all block records`、`REGRESSION GOLDENS VERIFIED`、`STATE DECODE FUZZ VERIFIED: 200000 cases` 各 1 次，`perturbed golden rejected`／`future-version trace rejected` 各 1 次。三份 artifacts 可下载（Linux 1,000,654,355 / Windows 78,753,789 / macOS 54,209,946 bytes；Windows 一份已下载，`unzip -t` 通过，SHA-256 `f36237e604a24860…`），且新增的 `host-session`/`regression`/fuzz 日志确已在包内 | — （M2 完成；进入 M3）|
-| M3 性能与泄漏检测 | RT 安全检测扩到 GUI 线程与宿主回调；泄漏检测；基准与阈值写入本文件 | **完成**（三平台 hosted 全绿）：`stress` 子命令 + `rss.rs` + `stress.rs`；`clap.params.flush` 音频线程零分配断言。**只覆盖 RT 安全三项里的「分配」**，加锁与系统调用如实未做 | [run 34773295928](https://github.com/aizcutei/sunmao/actions/runs/34773295928)（commit `1d40eef`）三 job success，每 job **38 步零非成功**。三平台日志剔除脚本回显后核实：`injected leak detected as it must be` 与 `injected editor leak detected as it must be` **各平台各 1 次**（两条守卫都在真硬件上真的变红过），`STRESS LIFECYCLES VERIFIED` 各 1 次 | — （M3 完成；进入 M4）。**但 Linux 的编辑器差分留了一个未归因的数字，见下** |
-| M4 外部 validator | `clap-validator` + Steinberg VST3 validator 三平台 blocking；失败项逐条归因 | **CLAP 侧本地完成，待三平台验收；VST3 validator 未接入**：新增 blocking 步骤 "Validate CLAP plugins with clap-validator"（0.4.1，三平台各取官方预编译包），对 `target/phase1-artifacts/*.clap` 逐个验证（CI 上是 **8 个**，见下方更正） | 三平台各 **8/8 全部 0 failed**；本地对 16 个也全部 0 failed | 取三平台绿；日志须 grep 到 `CLAP VALIDATOR VERIFIED` 与每个插件的 `, 0 failed,` |
+| M3 性能与泄漏检测 | RT 安全检测扩到 GUI 线程与宿主回调；泄漏检测；基准与阈值写入本文件 | **部分完成，重新打开**：已有泄漏与分配子集三平台 hosted 验收；`stress` 子命令 + `rss.rs` + `stress.rs`；`clap.params.flush` 音频线程零分配断言。**只覆盖 RT 安全三项里的「分配」**，加锁与系统调用如实未做 | [run 34773295928](https://github.com/aizcutei/sunmao/actions/runs/34773295928)（commit `1d40eef`）三 job success，每 job **38 步零非成功**。三平台日志剔除脚本回显后核实：`injected leak detected as it must be` 与 `injected editor leak detected as it must be` **各平台各 1 次**（两条守卫都在真硬件上真的变红过），`STRESS LIFECYCLES VERIFIED` 各 1 次 | 补齐加锁/系统调用检测、GUI 与宿主回调覆盖、性能阈值；先收口交接中已在工作树的 M4 接口修复。Linux 编辑器增长仍未归因 |
+| M4 外部 validator | `clap-validator` + Steinberg VST3 validator 三平台 blocking；失败项逐条归因 | **部分完成：CLAP 已三平台验收；VST3 validator 未接入**：新增 blocking 步骤 "Validate CLAP plugins with clap-validator"（0.4.1，三平台各取官方预编译包），对 `target/phase1-artifacts/*.clap` 逐个验证（CI 上是 **8 个**，见下方更正） | 三平台各 **8/8 全部 0 failed**；本地对 16 个也全部 0 failed | CLAP 证据：run 34776785134 / `0481fb6` 的实际 JSON 判据 `executed, 0 failed` 与 `CLAP VALIDATOR VERIFIED`。当前收口 VST3 context requirements；随后先补 M3 缺口 |
 | M5 DAW smoke 与兼容性报告 | 可脚本化 DAW 三平台加载/处理/存工程/重开；机器可读兼容性报告 artifact | 未开始 | — | — |
 
 ## M1 抓到的两项新发现（各自独立立项）
@@ -295,8 +295,7 @@ M3 的原始范围写的是「分配/加锁/系统调用」。本轮只做了**�
 - **系统调用**：三平台各需一套完全不同的机制（Linux seccomp/ptrace、macOS dtrace、Windows ETW），
   这不是本轮能连同验收一起交付的量级。
 
-写在这里而不是含糊带过，是因为 status.md 的 M3 行若只说「完成」，下一个人会以为
-audio 线程的加锁和系统调用已经有守卫了。
+2026-09-16 更正：以上未完成项属于原始 M3 要求，不能以实现量级或路径“按设计无锁”为由豁免。矩阵重新标为部分完成；还需补 GUI/宿主回调覆盖与性能阈值。已验收的泄漏与分配子集仍保留原证据。
 
 ## M4：clap-validator 抓到的三项，逐条归因
 
@@ -383,31 +382,35 @@ VST3 3.7 要求 audio processor 实现 `IProcessContextRequirements`，宿主据
 transport 的哪些字段。`vst3_sys/src/vst/mod.rs:35` **早就有这个 IID 的转录**，
 但 `vst3_rs` 没有实现该接口。这一条毫无争议，是纯缺失。
 
-#### 2. `Parameter 001 (id=-1648886327): Invalid Id!!!` —— **validator 比规范更严，但必须服从**
+2026-09-16 实现已补齐，**待本轮 hosted 验收**：`vst3_sys` 转录 vtable/flags；
+`ProcessorWrapper` 增加第四个 vtable，四个接口的 query 路径保持可互达与共享引用计数。
+仅声明 `vst3_rs::ProcessContext` 实际消费的七项（mask `0x4de`）。CLAP 没有同类需求查询，
+transport 原有字段映射与缺失行为不变，差异及测试名已写入 `semantics.md`。
+新增三条守卫分别核对上游 ABI、wrapper 字段偏移，以及真实接口查询/引用计数/需求值；
+`IProcessContextRequirements` 上游 IID 和 flags 用字面量验证，避免测试照抄绑定错误。
+本地实测：完整 gate **135 套件 / 751 passed / 0 failed / 4 ignored**（仅 `_rs` 67→69、
+`_sys` 2→3；其余套件不变），打包 **32 套件 / 640 passed**。四种临时缺陷（flag、偏移、
+audio 查询入口、transport 需求位）都让对应守卫 exit 101，随后恢复源码并通过完整 gate。
+新打包 Gain 的 Steinberg validator 为 **46 passed / 1 failed**：context requirements 成功，
+余下失败仍为参数 ID；连接警告仍在，因此不能据此标记 M4 完成。
 
-上游 `public.sdk/source/vst/testsuite/general/scanparameters.cpp:125` 原文：
+#### 2. `Parameter 001 (id=-1648886327): Invalid Id!!!` —— **我们的缺陷；更正旧归因**
+
+2026-09-16 重读同一 SDK checkout 后，更正此前“validator 拒绝规范允许的 ID”的判断。
+上游 [`vsttypes.h:92–106`](https://github.com/steinbergmedia/vst3_pluginterfaces/blob/4f547e8e102b47de4a8b8aaf343c73b700786372/vst/vsttypes.h#L92)
+原文不仅有 `typedef uint32 ParamID`，紧接着明确规定：
 
 ```cpp
-int32 paramId = paramInfo.id;
-if (paramId < 0)
-{
-    addErrorMessage (testResult,
-                     printf ("=>Parameter %03d (id=%d): Invalid Id!!!", i, paramId));
-    return false;
-}
+typedef uint32 ParamID; // parameter identifier: value in range [0, 0x7FFFFFFF].
+// The range [0x80000000, 0xFFFFFFFF], is reserved for host application.
+static const ParamID kMaxParamId = 0x7FFFFFFF;
 ```
 
-而 `pluginterfaces/vst/vsttypes.h:104` 声明的是 `typedef uint32 ParamID;`，
-保留值只有 `kNoParamId = 0xFFFFFFFF`。**也就是说 validator 把 `uint32` 赋给 `int32`
-再判负，等于拒绝了规范允许的一半 ID 空间**（≥ 2^31 的都被判无效）。
-我们的 `Polarity` 是 `2646080969`，按 int32 读就是 `-1648886327`。
-
-**严格说这是 validator 的期待与规范不符**（已引上游原文）。**但结论仍然是我们要改**：
-Steinberg 的 validator 是 VST3 分发的事实门槛，过不了就发不出去，真实宿主也可能做同样假设。
-
-**但改动牵涉兼容性**：`stable_param_id` 产出的数值 ID **会写进 state**，
-把它压到 31 位会让既有 state 里的 ID 对不上。这与 class 串那条同属「改动会使既有工程/preset 失效」，
-**须由仓库所有者决定**，本轮不自行修改。
+此前只读了 typedef 与 `kNoParamId`，漏读范围注释与 `kMaxParamId`，归因不成立。
+`Polarity = 2646080969` 确实违反 VST3 规范，validator 的拒绝是正确的。
+**不能直接截断 `stable_param_id`**：该哈希也是两格式 state 的键，直接改会丢失旧值。
+需设计宿主 ID 映射与旧 state/automation 兼容路径，以迁移测试证明旧版本接受、未来版本拒绝，
+并保留 CLAP 的合法 ID 行为。本轮仅修 context requirements，ID 修复另轮处理。
 
 #### 3. `Failed to connect the component with the controller with result code '-1'!` —— 待查
 
@@ -436,4 +439,4 @@ M4 的范围包含它，本轮**没做**。它不像 clap-validator 那样提供
 Phase 5 完成的唯一判定：同一 commit 三平台 hosted native jobs 全绿 + artifacts 可下载
 + 本文件 Milestone 矩阵 M0–M5 全部标记完成。本地结果任何情况下都不构成完成证据。
 
-### 当前判定：**Phase 5 进行中（M0–M3 完成，下一步 M4）**
+### 当前判定：**Phase 5 进行中（M0–M2 完成；M3 范围未完成，M4 部分完成，M5 未开始）**

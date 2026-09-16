@@ -421,3 +421,28 @@
 - Unresolved: **M4 仍未完成**。下一轮顺序：先补 `IProcessContextRequirements`（无争议、无兼容代价），
   再查第 3 条 connect，最后就 param ID 的 31 位问题向所有者取得决定；之后才接 CI 并取三平台绿。
   M5 未开始。此前各项独立立项未变。
+
+### 2026-09-16 — M4：补齐 VST3 process-context 声明，纠正交接中的验收与归因
+
+- Command/platform: 本地 macOS ARM64，基于 `447fbc8` 的交接工作树继续本轮接口修复。
+  对照 VST3 SDK 3.8.1、pluginterfaces `4f547e8e102b47de4a8b8aaf343c73b700786372` 的
+  `ivstaudioprocessor.h` 核对 vtable、IID 与全部 flags，再审查 `vst3_rs::ProcessContext` 的消费字段。
+  `cargo metadata --locked`、`cargo fmt --all -- --check`、`git diff --check`、
+  `RUSTFLAGS=-Awarnings cargo test --locked`、`tools/package_examples.sh --debug --test` 全部 exit 0。
+- Result: `ProcessorWrapper` 的第四个 vtable 实现 `IProcessContextRequirements`，四个接口入口互相可查询，
+  共享 IUnknown identity 与引用计数；声明实际使用的七项 transport 字段（`0x4de`）。
+  CLAP 无需求查询接口，既有 transport 传递行为保留；差异与两格式测试名写入 `semantics.md`。
+  本地 **135 套件 / 751 passed / 0 failed / 4 ignored**；与 `/tmp/m4-test.log` 的 748 对比，
+  仅 `vst3_rs` 67→69、`vst3_sys` 2→3，其他套件逐项相同。打包仍为 **32 套件 / 640 passed**。
+- Evidence/artifact: 本地原始日志在 `/tmp/sunmao-p5-codex/context/`：`test.log`、`package.log`、
+  `unit.log`、`suite-delta.json`。`reverse-{upstream-flag,interface-offset,audio-query,required-transport}.log`
+  记录四种临时缺陷都使指定测试真实执行并 FAILED（cargo exit 101），恢复后完整 gate 绿。
+  `validator.log` 对新打包 Gain 实测 **46 passed / 1 failed**、exit 255：七个字段实际输出且
+  `[ProcessContext Requirements]` 成功，唯一计分失败仍是参数 ID。`nm-check.log` 核对 32 个
+  VST3/CLAP 产物与 runner，共 33 个二进制无默认 gate 禁止的 AU 符号。以上只作开发证据；
+  本轮提交须等 hosted 三平台、原始断言与 artifact 下载校验。
+- Unresolved: **M3 重新打开**：加锁/系统调用检测、GUI 与宿主回调覆盖、性能阈值尚未完成，
+  不能把已有泄漏/分配子集的三平台绿当成整个 milestone 完成。先验收本轮交接中的接口修复，
+  下一轮回到 M3 缺口。**更正参数 ID 归因**：上游 `vsttypes.h:92–106` 明确把高半区保留给宿主，
+  此前“validator 比规范严格”的结论漏读了范围说明；这是我们的缺陷。保留 state 哈希契约，
+  后续设计兼容映射与迁移测试，不能直接截断既有 ID。VST3 connect 警告仍未归因，M4/M5 未完成。
