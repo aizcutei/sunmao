@@ -768,6 +768,86 @@ mod tests {
 
     impl GuiHandler for PanickingInitPlugin {}
 
+    struct DenormalProcessor(bool);
+
+    impl AudioProcessor for DenormalProcessor {
+        fn process(&mut self, _process: ProcessContext) -> clap_process_status {
+            assert_eq!(audio_fp::test_support::arithmetic_probe(), [0, 0]);
+            if self.0 {
+                panic!("intentional process panic after floating-point arithmetic");
+            }
+            self.0 = true;
+            CLAP_PROCESS_CONTINUE
+        }
+        fn set_parameter(&mut self, _id: u32, _value: f64) {}
+    }
+
+    struct DenormalPlugin;
+
+    impl Plugin for DenormalPlugin {
+        type AudioProcessor = DenormalProcessor;
+        fn new(_host: crate::plugin::HostHandle) -> Self {
+            Self
+        }
+        fn activate(&mut self, _: f64, _: u32, _: u32) -> Option<Self::AudioProcessor> {
+            Some(DenormalProcessor(false))
+        }
+        fn get_parameter(&self, _: u32) -> f64 {
+            0.0
+        }
+        fn set_parameter(&mut self, _: u32, _: f64) {}
+    }
+
+    #[test]
+    fn process_flushes_denormals_and_restores_the_host_environment() {
+        use audio_fp::test_support::{in_ieee_mode, snapshot};
+        unsafe {
+            let plugin = PluginEntry::create_plugin::<DenormalPlugin>(ptr::null(), ptr::null());
+            assert!(((*plugin).init.unwrap())(plugin));
+            assert!(((*plugin).activate.unwrap())(plugin, 48_000.0, 1, 1));
+            assert!(((*plugin).start_processing.unwrap())(plugin));
+            let process = clap_sys::process::clap_process_t {
+                steady_time: 0,
+                frames_count: 1,
+                transport: ptr::null(),
+                audio_inputs: ptr::null(),
+                audio_outputs: ptr::null_mut(),
+                audio_inputs_count: 0,
+                audio_outputs_count: 0,
+                in_events: ptr::null(),
+                out_events: ptr::null(),
+            };
+            in_ieee_mode(|| {
+                let before = snapshot();
+                let (status, calls) =
+                    count_allocator_calls(|| ((*plugin).process.unwrap())(plugin, &process));
+                assert_eq!(snapshot(), before);
+                assert_eq!(
+                    status, CLAP_PROCESS_CONTINUE,
+                    "the real DSP callback must run in FTZ mode"
+                );
+                assert_eq!(calls, 0, "the successful ABI path must not allocate");
+                assert_eq!(
+                    ((*plugin).process.unwrap())(plugin, &process),
+                    CLAP_PROCESS_ERROR
+                );
+                assert_eq!(
+                    snapshot(),
+                    before,
+                    "process panic must restore the host environment"
+                );
+                assert_eq!(
+                    ((*plugin).process.unwrap())(plugin, ptr::null()),
+                    CLAP_PROCESS_ERROR
+                );
+                assert_eq!(snapshot(), before, "early rejection must also restore it");
+            });
+            ((*plugin).stop_processing.unwrap())(plugin);
+            ((*plugin).deactivate.unwrap())(plugin);
+            ((*plugin).destroy.unwrap())(plugin);
+        }
+    }
+
     struct PanickingProcessor;
 
     static PANICKING_PROCESS_CALLS: AtomicUsize = AtomicUsize::new(0);

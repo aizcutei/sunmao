@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "audio_fp"
+version = "0.1.0"
+
+[[package]]
 name = "cache-padded"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12,6 +16,7 @@ checksum = "981520c98f422fcc584dc1a95c334e6953900b9106bc47a9839b81790009eb21"
 name = "clap_rs"
 version = "0.1.0"
 dependencies = [
+ "audio_fp",
  "clap_sys",
  "objc",
  "raw-window-handle",
@@ -98,6 +103,7 @@ dependencies = [
 name = "vst3_rs"
 version = "0.1.0"
 dependencies = [
+ "audio_fp",
  "objc",
  "raw-window-handle",
  "vst3_sys",

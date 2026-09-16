@@ -125,7 +125,7 @@ backends" 两个 blocking 步骤里被当作宿主调用。
 | M1 交互式 standalone host | 加载已打包 `.vst3`/`.clap`、枚举参数与 bus、改参数、存取 state/preset、开关编辑器；既有非交互 CI 用法原样不变 | **完成**（三平台 hosted 全绿）：新增 `host` 子命令（行式命令语言，人可交互、管道可脚本化），`preset.rs` 按上游转录实现 `.vstpreset` 容器，`HostPlugin::class_id` 补上 VST3 class ID，CLAP 宿主不再对未知参数 ID 报成功。既有六个子命令未改行为（四处重复的扫描分派抽成 `scan_plugin_path`，分支逐字相同） | [run 34763956140](https://github.com/aizcutei/sunmao/actions/runs/34763956140)（commit `ac41dff`）三 job success，每 job **35 步零非成功**（新步骤 "Drive the interactive host over VST3 + CLAP" 三平台各 success），三份 artifacts 可下载（Linux 1,000,635,643 / Windows 78,737,182 / macOS 54,191,174 bytes；macOS 一份已下载，`unzip -t` 报 No errors detected，SHA-256 `2c01b112…1fa10`）。**三平台原始日志已下载并逐条 grep，且把 GitHub 回显的脚本正文（ANSI `36;1m` 前缀）剔除后计数**：每平台真实输出 `HOST COMMAND SURFACE VERIFIED` **1** 次、`rejected as it must be` **10** 次（十个反向用例逐个非零退出）、`HOST SESSION VERIFIED` **4** 次（两格式各一段 18 命令会话 + 两格式各一段 5 命令编辑器会话）、`editor opened`/`editor closed` 各 **4** 次 | — （M1 完成；两项新发现各自独立立项，见下）|
 | M2 批量 regression host | 确定性批跑（固定种子/buffer/块划分）、音频与参数轨迹、golden 对拍 + 显式浮点容差、有界 fuzz 进 CI | **完成**（三平台 hosted 全绿）：`regress` 子命令与 `regress.rs`；goldens 入库 `tools/regression_goldens/`；两个新 blocking 步骤（golden 对拍、有界 fuzz）。块划分刻意不均匀且首尾钉死在 max/1 | [run 34766022434](https://github.com/aizcutei/sunmao/actions/runs/34766022434)（commit `c059e41`）三 job success，每 job **37 步零非成功**。三平台原始日志剔除脚本回显后逐条核实，**三平台数字完全一致**：`REGRESSION MATCHED GOLDEN` 各 2 次（两格式，各 147 项比对），**worst deviation 三平台均为 `0e0`**，`cross-format audio identical across all block records`、`REGRESSION GOLDENS VERIFIED`、`STATE DECODE FUZZ VERIFIED: 200000 cases` 各 1 次，`perturbed golden rejected`／`future-version trace rejected` 各 1 次。三份 artifacts 可下载（Linux 1,000,654,355 / Windows 78,753,789 / macOS 54,209,946 bytes；Windows 一份已下载，`unzip -t` 通过，SHA-256 `f36237e604a24860…`），且新增的 `host-session`/`regression`/fuzz 日志确已在包内 | — （M2 完成；进入 M3）|
 | M3 性能与泄漏检测 | RT 安全检测扩到 GUI 线程与宿主回调；泄漏检测；基准与阈值写入本文件 | **部分完成，重新打开**：已有泄漏与分配子集三平台 hosted 验收；`stress` 子命令 + `rss.rs` + `stress.rs`；`clap.params.flush` 音频线程零分配断言。**只覆盖 RT 安全三项里的「分配」**，加锁与系统调用如实未做 | [run 34773295928](https://github.com/aizcutei/sunmao/actions/runs/34773295928)（commit `1d40eef`）三 job success，每 job **38 步零非成功**。三平台日志剔除脚本回显后核实：`injected leak detected as it must be` 与 `injected editor leak detected as it must be` **各平台各 1 次**（两条守卫都在真硬件上真的变红过），`STRESS LIFECYCLES VERIFIED` 各 1 次 | 补齐加锁/系统调用检测、GUI 与宿主回调覆盖、性能阈值；先收口交接中已在工作树的 M4 接口修复。Linux 编辑器增长仍未归因 |
-| M4 外部 validator | `clap-validator` + Steinberg VST3 validator 三平台 blocking；失败项逐条归因 | **部分完成：CLAP 已三平台验收；VST3 validator 未接入**：新增 blocking 步骤 "Validate CLAP plugins with clap-validator"（0.4.1，三平台各取官方预编译包），对 `target/phase1-artifacts/*.clap` 逐个验证（CI 上是 **8 个**，见下方更正） | 三平台各 **8/8 全部 0 failed**；本地对 16 个也全部 0 failed | CLAP 证据：run 34776785134 / `0481fb6` 的实际 JSON 判据 `executed, 0 failed` 与 `CLAP VALIDATOR VERIFIED`。当前收口 VST3 context requirements；随后先补 M3 缺口 |
+| M4 外部 validator | `clap-validator` + Steinberg VST3 validator 三平台 blocking；失败项逐条归因 | **部分完成：CLAP 历史验收，本轮 Linux 次正规数检查回归；VST3 validator 未接入**：新增 blocking 步骤 "Validate CLAP plugins with clap-validator"（0.4.1，三平台各取官方预编译包），对 `target/phase1-artifacts/*.clap` 逐个验证（CI 上是 **8 个**，见下方更正） | 三平台各 **8/8 全部 0 failed**；本地对 16 个也全部 0 failed | CLAP 证据：run 34776785134 / `0481fb6` 的实际 JSON 判据 `executed, 0 failed` 与 `CLAP VALIDATOR VERIFIED`。当前修复次正规数处理并复验 context requirements；随后先补 M3 缺口 |
 | M5 DAW smoke 与兼容性报告 | 可脚本化 DAW 三平台加载/处理/存工程/重开；机器可读兼容性报告 artifact | 未开始 | — | — |
 
 ## M1 抓到的两项新发现（各自独立立项）
@@ -423,6 +423,32 @@ static const ParamID kMaxParamId = 0x7FFFFFFF;
 M4 的范围包含它，本轮**没做**。它不像 clap-validator 那样提供预编译产物，需要在 CI 上
 用 CMake 构建 VST3 SDK（含子模块）后才能拿到 `validator` 可执行文件，三平台各一份。
 这是下一轮的工作，**在它接入之前 M4 不能标记完成**。
+
+### 2026-09-16：Linux CLAP validator 发现次正规数处理成本，当前阻塞
+
+[run 35100290942](https://github.com/aizcutei/sunmao/actions/runs/35100290942) / `6243308`：
+macOS、Windows 完整 job success；Linux 在既有 CLAP validator 步骤失败，**该提交未三平台验收**。
+Linux 原始日志 19004–19019 行与下载的失败 artifact JSON 一致：
+Gain / Meter / OsDistortion / WidgetsGL 的 `process-audio-denormals` 报
+2.13 / 2.65 / 2.47 / 3.03 倍耗时，均为 warning，现有严格判据拒绝 warning。
+其他插件通过；新 context requirements 的三条测试已实际执行成功，但这不能替代完整 gate。
+
+上游判据见 [`processing.rs:134–240`](https://github.com/free-audio/clap-validator/blob/152b982/src/tests/plugin_instance/processing.rs#L134)：
+普通输入与次正规输入各运行 50 块，以整个测试循环时间比值 >2 发出 warning。
+该计时包括宿主生成输入与调度，有噪声；两格式 `_rs` 也确实没有配置回调浮点模式。
+本轮保留既有 warning blocking 判据，补统一作用域，从运行时算术和宿主环境恢复断言证明机制，
+再用原 validator 复验。仅示例输出调用 `flush_denormal` 不能消除运算过程中处理次正规输入的成本。
+
+实现：内部 `audio_fp` 保存线程 MXCSR 或 FPCR/FPSR，process 内启用 FTZ/DAZ 或 FZ，
+在正常/错误/panic 退出后恢复；两个 `_rs` 同时接入，不变更 state/参数 ID。
+寄存器位对照 Clang 的 `xmmintrin.h` / `emmintrin.h`（`0x8000` / `0x0040`）和
+Apple SDK `fenv.h`（`__fpcr_flush_to_zero = 0x01000000`）。`semantics.md` 记录作用域边界。
+本地完整 gate **137 套件 / 757 passed / 0 failed / 4 ignored**（新增内部模块 3 单测 + 1 doc-test，
+两 adapter 各 1 个 ABI 测试；其余逐套件不变）；打包 **32 套件 / 640 passed**。
+五项反向验证均 exit 101，release 模式 3 单测 + 1 doc-test 也通过。
+本地 16 个 CLAP 插件没有 warning/failed，两格式 golden 未变化，33 个二进制 AU 符号检查通过。
+**仍待 hosted 复验**：本地 Meter 的外部 timing 比值为 1.93（阈值 2），说明整个循环的计时仍可能有噪声；
+不能仅凭本地绿断言三平台性能问题已解决。
 
 ## 从 Phase 4 继承的已知遗留
 

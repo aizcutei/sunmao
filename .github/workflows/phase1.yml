@@ -163,6 +163,7 @@ jobs:
           set -euo pipefail
           mkdir -p target/phase1-artifacts
           packages=(
+            audio_fp
             clap_sys
             clap_rs
             vst3_sys

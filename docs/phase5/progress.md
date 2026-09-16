@@ -446,3 +446,31 @@
   下一轮回到 M3 缺口。**更正参数 ID 归因**：上游 `vsttypes.h:92–106` 明确把高半区保留给宿主，
   此前“validator 比规范严格”的结论漏读了范围说明；这是我们的缺陷。保留 state 哈希契约，
   后续设计兼容映射与迁移测试，不能直接截断既有 ID。VST3 connect 警告仍未归因，M4/M5 未完成。
+
+### 2026-09-16 — CI 复验的瓶颈：次正规数回调开销与宿主浮点环境恢复
+
+- Command/platform: `6243308` / [run 35100290942](https://github.com/aizcutei/sunmao/actions/runs/35100290942)
+  macOS、Windows 完整成功，Linux 仅在既有 clap-validator 步骤失败。下载 Linux 原始日志与
+  failure artifact JSON：Gain/Meter/OsDistortion/WidgetsGL 的 `process-audio-denormals` 分别报
+  2.13/2.65/2.47/3.03 倍耗时。新 VST3 context 的三个测试在原始日志 2258/2336/2340 行均实际 `ok`，
+  **但完整 gate 红，不能接受该提交**。重读 validator `152b982` 的 processing.rs 与底层定义后修复。
+- Result: 新增两 adapter 共用的内部 `audio_fp`：process 作用域启用 x86_64 MXCSR FTZ/DAZ 或
+  AArch64 FPCR FZ，正常/提前拒绝/panic 均恢复宿主的控制与状态寄存器；不改舍入与异常掩码。
+  `_sys` ABI 与 state 编解码未改，CLAP/VST3 同时接入。两格式的真实 process ABI 测试先在宿主侧
+  明确关闭 FTZ，再检查回调内运行时算术的**位模式**为零、成功路径 0 分配、返回后环境逐位相同。
+  保留 clap-validator 的 warning blocking 判据，未提高阈值或重试失败 run。
+- Evidence/artifact: 本地 macOS ARM64 五项 gate 命令全部 exit 0：**137 套件 / 757 passed / 0 failed /
+  4 ignored**；相对本轮前的 135/751，仅新增 `audio_fp` 的 3 单测 + 1 doc-test、`clap_rs` 59→60、
+  `vst3_rs` 69→70；其余逐套件不变。打包仍 **32 套件 / 640 passed**。日志在
+  `/tmp/sunmao-p5-codex/denormals/`：`test.log`、`package.log`、`suite-delta.json`；
+  `reverse-{ftz,restore-nested,restore-unwind,clap-abi,vst3-abi}.log` 五项临时缺陷均使指定测试真实 FAILED、
+  exit 101，源码恢复后完整 gate 绿。`release-fp.log` 的 3 单测 + 1 doc-test 通过；x86_64 汇编分支交叉
+  编译通过（实际硬件行为仍待 hosted）。更新根与 fuzz lockfile 后，固定 seed 20816 的 200000-case
+  fuzz exit 0。`validator-summary.log`：本地 **16 个 CLAP 插件全部零 warning/failed**，其中无输入的
+  5 个 instrument 如上游约定跳过 denormal 测试；Meter 的 timing 比值 1.93，阈值仍为 2。
+  两格式 golden 对拍通过，`nm-check.log` 的 33 个二进制无 AU 符号；VST3 validator 仍为 46/1，
+  余下参数 ID 失败未动。以上是开发证据，须新 commit 完整三平台成功与 artifact 下载验收。
+- Unresolved: 原 validator 的 timing 包含宿主生成输入与调度，仍可能有噪声；下一次 hosted
+  若再报性能异常，按具体日志继续归因，不放宽判据。M3 的加锁/系统调用、GUI/宿主回调覆盖和性能阈值
+  仍待补齐；本修复不把整个 M3 标为完成。M4 的 VST3 参数 ID 兼容映射、连接警告、完整 validator 接入，
+  以及 M5 DAW smoke 均未完成。context requirements 与本轮 FP 修复一起等待同 commit 三平台复验。

@@ -1,0 +1,9 @@
+[package]
+name = "audio_fp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Internal floating-point environment support for audio format adapters"
+
+[features]
+test-support = []

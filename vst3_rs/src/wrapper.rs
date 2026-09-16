@@ -1411,7 +1411,7 @@ impl<P: Plugin> ProcessorWrapper<P> {
 
     unsafe extern "system" fn audio_process(this: *mut c_void, data: *mut ProcessData) -> tresult {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-            Self::audio_process_unchecked(this, data)
+            audio_fp::with_denormals_flushed(|| Self::audio_process_unchecked(this, data))
         })) {
             Ok(result) => result,
             Err(_) => {
@@ -6522,6 +6522,95 @@ mod tests {
             );
             assert!(!(*processor).processing);
             ProcessorWrapper::<PanickingProcessVstPlugin>::component_release(component);
+        }
+    }
+
+    struct DenormalVstPlugin(bool);
+
+    impl Plugin for DenormalVstPlugin {
+        fn info() -> PluginInfo {
+            PluginInfo::default()
+        }
+        fn new(_host: HostHandle) -> Self {
+            Self(false)
+        }
+        fn audio_config() -> AudioConfig {
+            AudioConfig {
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                accepts_midi: false,
+            }
+        }
+        fn get_param(&self, _: u32) -> f64 {
+            0.0
+        }
+        fn set_param(&mut self, _: u32, _: f64) {}
+        fn process(&mut self, _: &mut ProcessContext) -> ProcessResult {
+            assert_eq!(audio_fp::test_support::arithmetic_probe(), [0, 0]);
+            if self.0 {
+                panic!("intentional process panic after floating-point arithmetic");
+            }
+            self.0 = true;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn process_flushes_denormals_and_restores_the_host_environment() {
+        use audio_fp::test_support::{in_ieee_mode, snapshot};
+        type W = ProcessorWrapper<DenormalVstPlugin>;
+        unsafe {
+            let processor = W::new([0; 16]);
+            let audio = std::ptr::addr_of_mut!((*processor).vtbl_audio).cast::<c_void>();
+            let audio_vtbl = *(audio as *const *const AudioProcessorVtbl);
+            let mut setup = ProcessSetup {
+                process_mode: ProcessModes::kRealtime,
+                symbolic_sample_size: SymbolicSampleSizes::kSample32,
+                max_samples_per_block: 1,
+                sample_rate: 48_000.0,
+            };
+            assert_eq!(
+                ((*audio_vtbl).setup_processing)(audio, &mut setup),
+                kResultOk
+            );
+            begin_test_processing(processor, audio);
+            let mut data = ProcessData {
+                process_mode: ProcessModes::kRealtime,
+                symbolic_sample_size: SymbolicSampleSizes::kSample32,
+                num_samples: 1,
+                num_inputs: 0,
+                num_outputs: 0,
+                inputs: std::ptr::null_mut(),
+                outputs: std::ptr::null_mut(),
+                input_parameter_changes: std::ptr::null_mut(),
+                output_parameter_changes: std::ptr::null_mut(),
+                input_events: std::ptr::null_mut(),
+                output_events: std::ptr::null_mut(),
+                process_context: std::ptr::null_mut(),
+            };
+            in_ieee_mode(|| {
+                let before = snapshot();
+                let (status, calls) =
+                    count_allocator_calls(|| ((*audio_vtbl).process)(audio, &mut data));
+                assert_eq!(snapshot(), before);
+                assert_eq!(
+                    status, kResultOk,
+                    "the real DSP callback must run in FTZ mode"
+                );
+                assert_eq!(calls, 0, "the successful ABI path must not allocate");
+                assert_eq!(((*audio_vtbl).process)(audio, &mut data), kInternalError);
+                assert_eq!(
+                    snapshot(),
+                    before,
+                    "process panic must restore the host environment"
+                );
+                assert_eq!(
+                    ((*audio_vtbl).process)(audio, std::ptr::null_mut()),
+                    kInvalidArgument
+                );
+                assert_eq!(snapshot(), before, "early rejection must also restore it");
+            });
+            W::component_release(processor.cast());
         }
     }
 

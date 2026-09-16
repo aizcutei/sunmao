@@ -622,7 +622,7 @@ pub unsafe extern "C" fn plugin_process<P: Plugin>(
     process: *const clap_process_t,
 ) -> clap_process_status {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-        plugin_process_unchecked::<P>(plugin, process)
+        audio_fp::with_denormals_flushed(|| plugin_process_unchecked::<P>(plugin, process))
     })) {
         Ok(status) => status,
         Err(_) => {

@@ -586,6 +586,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "audio_fp"
+version = "0.1.0"
+
+[[package]]
 name = "autocfg"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -962,6 +966,7 @@ dependencies = [
 name = "clap_rs"
 version = "0.1.0"
 dependencies = [
+ "audio_fp",
  "clap_sys",
  "objc",
  "proptest",
@@ -5621,6 +5626,7 @@ dependencies = [
 name = "vst3_rs"
 version = "0.1.0"
 dependencies = [
+ "audio_fp",
  "objc",
  "proptest",
  "raw-window-handle",

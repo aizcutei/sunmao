@@ -3,6 +3,7 @@
 # build or run it (unbounded fuzzing is local-only and non-blocking).
 exclude = ["fuzz"]
 members = [
+    "audio_fp",
     "au_sys",
     "au_cocoa_stubs",
     "au_rs",
